@@ -1,8 +1,13 @@
-"""Шаг 06 — обучающая таблица и временной сплит.
+"""Шаг 06 — обучающая таблица и временной сплит на три части.
 
 Сплит имитирует продакшен на дату отсечки: в обучении участвуют только заказы,
 исход которых был ИЗВЕСТЕН к этой дате. Это строже фиксированного зазора по
 дате покупки — заказ, купленный давно, но узнанный поздно, тоже исключается.
+
+Валидационное окно введено после внешнего ревью: в первой версии тест
+использовался для выбора окна обучения, кандидата, калибровки и порога, из-за
+чего итоговые метрики не были несмещёнными. Теперь все решения принимаются на
+валидации, тест оценивается один раз.
 
 Признаки берутся только из объявленных доступными в момент оформления.
 """
@@ -20,6 +25,7 @@ ARTIFACTS = PROJECT / "artifacts"
 
 PERIOD_START = dt.datetime(2017, 1, 1)
 PERIOD_STOP = dt.datetime(2018, 8, 21)
+VALID_START = dt.datetime(2018, 4, 1)
 TEST_START = dt.datetime(2018, 6, 1)
 NOT_INTENDED_FOR_DELIVERY = ["canceled", "unavailable"]
 
@@ -104,7 +110,12 @@ def build_table() -> pl.DataFrame:
         .join(payments_agg, on="order_id", how="inner")
         .join(customers, on="customer_id", how="inner")
         .with_columns(
-            (pl.col("order_estimated_delivery_date") - pl.col("order_purchase_timestamp"))
+            # По календарным дням — согласованно с определением таргета.
+            # Разность timestamp давала систематический сдвиг на сутки.
+            (
+                pl.col("order_estimated_delivery_date").dt.date()
+                - pl.col("order_purchase_timestamp").dt.date()
+            )
             .dt.total_days()
             .alias("promised_lead_days"),
             pl.col("order_purchase_timestamp").dt.month().alias("purchase_month"),
@@ -122,16 +133,20 @@ def main() -> int:
     table = build_table()
 
     # Обучение видит только то, что было известно к моменту отсечки.
-    train = table.filter(pl.col("label_known_at") < TEST_START)
+    train = table.filter(pl.col("label_known_at") < VALID_START)
+    valid = table.filter(
+        (pl.col("order_purchase_timestamp") >= VALID_START)
+        & (pl.col("order_purchase_timestamp") < TEST_START)
+    )
     test = table.filter(pl.col("order_purchase_timestamp") >= TEST_START)
 
-    dropped = table.height - train.height - test.height
+    dropped = table.height - train.height - valid.height - test.height
 
     report = ["# Шаг 06 — обучающая таблица и сплит", ""]
     report.append(f"Строк в таблице: {table.height:,}, признаков: {table.width}")
     report.append("")
     report += ["## Сплит", "", "| выборка | заказов | период покупки | доля опозданий |", "|---|---|---|---|"]
-    for name, part in (("train", train), ("test", test)):
+    for name, part in (("train", train), ("valid", valid), ("test", test)):
         lo = part["order_purchase_timestamp"].min()
         hi = part["order_purchase_timestamp"].max()
         report.append(
@@ -140,9 +155,14 @@ def main() -> int:
         )
     report.append("")
     report.append(
-        f"Не попало ни в одну выборку: {dropped:,} — заказы, купленные до отсечки, "
-        f"но с исходом, ставшим известным после неё. Использовать их в обучении "
-        f"значило бы знать будущее."
+        f"Не попало ни в одну выборку: {dropped:,} — заказы, купленные до отсечки "
+        f"валидации, но с исходом, ставшим известным после неё. Использовать их в "
+        f"обучении значило бы знать будущее."
+    )
+    report.append("")
+    report.append(
+        "Валидация служит для всех решений: окно обучения, кандидат, калибровка, "
+        "порог. Тест оценивается один раз."
     )
     report.append("")
 
@@ -157,6 +177,7 @@ def main() -> int:
         report.append(f"| {row['m']:%Y-%m} | {row['n']:,} | {row['rate']:.2%} |")
 
     train.write_parquet(ARTIFACTS / "train.parquet")
+    valid.write_parquet(ARTIFACTS / "valid.parquet")
     test.write_parquet(ARTIFACTS / "test.parquet")
     (ARTIFACTS / "06_split.md").write_text("\n".join(report), encoding="utf-8")
     print("\n".join(report))
