@@ -1,15 +1,19 @@
-"""Шаг 04 — момент решения и определение таргета.
+"""Шаг 04 — момент решения, таргет и момент узнавания метки.
 
-Задача: в момент оформления заказа предсказать, будет ли доставка позже
-обещанной даты. Момент решения — order_purchase_timestamp. Всё, что после,
-использовать нельзя.
+Переписан после внешнего ревью. Три исправления против первой версии:
 
-Трудность не в формуле таргета, а в том, что делать с заказами, у которых
-исход не наблюдаем.
+1. Опоздание сравнивается ПО КАЛЕНДАРНОЙ ДАТЕ. Обещанная дата хранится как
+   полночь, поэтому сравнение timestamp помечало опоздавшими все доставки
+   в обещанный день.
+2. Отменённые и недоступные заказы исключены из популяции: их не собирались
+   доставлять, и склейка с опозданиями меняет сам вопрос.
+3. Момент узнавания метки — не дата доставки. Если к концу обещанного дня
+   доставки нет, исход уже известен. От этого считается зазор для сплита.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 from pathlib import Path
 
 import polars as pl
@@ -18,7 +22,9 @@ PROJECT = Path(__file__).resolve().parent.parent
 PARQUET = PROJECT / "data" / "parquet"
 ARTIFACTS = PROJECT / "artifacts"
 
-DATA_END = None  # заполняется из данных
+PERIOD_START = dt.datetime(2017, 1, 1)
+PERIOD_STOP = dt.datetime(2018, 8, 21)
+NOT_INTENDED_FOR_DELIVERY = ["canceled", "unavailable"]
 
 
 def main() -> int:
@@ -34,70 +40,84 @@ def main() -> int:
         ]
     )
 
-    data_end = orders["order_purchase_timestamp"].max()
-    report = ["# Шаг 04 — момент решения и таргет", ""]
+    # Конец наблюдения — последнее ФАКТИЧЕСКОЕ событие, а не плановая дата.
+    snapshot = max(
+        orders["order_purchase_timestamp"].max(),
+        orders["order_delivered_customer_date"].max(),
+    )
+    snapshot_date = snapshot.date()
+
+    report = ["# Шаг 04 — момент решения, таргет, момент узнавания метки", ""]
     report.append(f"Момент решения: `order_purchase_timestamp`")
-    report.append(f"Конец наблюдения: {data_end}")
+    report.append(f"Конец наблюдения: {snapshot} (по фактическим событиям)")
     report.append("")
 
-    delivered = pl.col("order_delivered_customer_date").is_not_null()
-    late_delivered = pl.col("order_delivered_customer_date") > pl.col(
-        "order_estimated_delivery_date"
+    in_period = orders.filter(
+        (pl.col("order_purchase_timestamp") >= PERIOD_START)
+        & (pl.col("order_purchase_timestamp") < PERIOD_STOP)
     )
-    estimate_passed = pl.col("order_estimated_delivery_date") < data_end
+    population = in_period.filter(~pl.col("order_status").is_in(NOT_INTENDED_FOR_DELIVERY))
 
-    marked = orders.with_columns(
-        pl.when(delivered)
-        .then(pl.when(late_delivered).then(pl.lit("late")).otherwise(pl.lit("on_time")))
-        .when(estimate_passed)
-        .then(pl.lit("late_never_delivered"))
+    delivered_on = pl.col("order_delivered_customer_date").dt.date()
+    promised_on = pl.col("order_estimated_delivery_date").dt.date()
+    has_delivery = pl.col("order_delivered_customer_date").is_not_null()
+    promise_expired = promised_on < pl.lit(snapshot_date)
+
+    marked = population.with_columns(
+        pl.when(has_delivery & (delivered_on <= promised_on))
+        .then(pl.lit("on_time"))
+        .when(has_delivery)
+        .then(pl.lit("late_delivered"))
+        .when(promise_expired)
+        .then(pl.lit("late_not_delivered"))
         .otherwise(pl.lit("unobservable"))
-        .alias("outcome")
+        .alias("outcome"),
+        # Исход известен в момент доставки, если она вовремя;
+        # иначе — в конце обещанного дня, ждать фактической доставки не нужно.
+        pl.when(has_delivery & (delivered_on <= promised_on))
+        .then(pl.col("order_delivered_customer_date"))
+        .otherwise(pl.col("order_estimated_delivery_date").dt.offset_by("1d"))
+        .alias("label_known_at"),
     )
 
-    report += ["## Наблюдаемость исхода", "", "| исход | заказов | доля |", "|---|---|---|"]
+    report += ["## Исходы", "", "| исход | заказов | доля |", "|---|---|---|"]
     counts = marked.group_by("outcome").agg(pl.len().alias("n")).sort("n", descending=True)
     for row in counts.iter_rows(named=True):
         report.append(f"| {row['outcome']} | {row['n']:,} | {row['n'] / marked.height:.2%} |")
     report.append("")
 
-    report += ["## Что даёт наивная разметка", ""]
-    naive_positive = marked.filter(delivered & late_delivered).height
-    honest_positive = marked.filter(pl.col("outcome").str.starts_with("late")).height
-    report.append(f"- только доставленные, опоздание: {naive_positive:,}")
-    report.append(f"- плюс недоставленные с истёкшим сроком: {honest_positive:,}")
-    report.append(
-        f"- пропущено положительных при наивной разметке: "
-        f"{honest_positive - naive_positive:,} "
-        f"({(honest_positive - naive_positive) / honest_positive:.1%} от всех опозданий)"
+    usable = marked.filter(pl.col("outcome") != "unobservable").with_columns(
+        pl.col("outcome").str.starts_with("late").cast(pl.Int8).alias("is_late")
     )
+    rate = usable["is_late"].mean()
+
+    report += ["## Популяция", ""]
+    report.append(f"- всего заказов в файле: {orders.height:,}")
+    report.append(f"- в пригодном периоде {PERIOD_START:%Y-%m-%d} .. {PERIOD_STOP:%Y-%m-%d}: {in_period.height:,}")
+    report.append(
+        f"- после исключения {NOT_INTENDED_FOR_DELIVERY}: {population.height:,} "
+        f"(исключено {in_period.height - population.height:,})"
+    )
+    report.append(f"- обучающая популяция: {usable.height:,}")
+    report.append(f"- **доля опозданий: {rate:.2%}**")
     report.append("")
 
-    usable = marked.filter(pl.col("outcome") != "unobservable")
-    rate = usable.filter(pl.col("outcome").str.starts_with("late")).height / usable.height
-    report += ["## Итоговая популяция", ""]
-    report.append(f"- пригодных для обучения заказов: {usable.height:,}")
-    report.append(f"- исключено как ненаблюдаемые: {marked.height - usable.height:,}")
-    report.append(f"- доля положительного класса: {rate:.2%}")
-    report.append("")
-
-    report += ["## Задержка появления метки", ""]
+    report += ["## Задержка метки", ""]
     lag = (
-        marked.filter(delivered)
-        .select(
-            (
-                pl.col("order_delivered_customer_date") - pl.col("order_purchase_timestamp")
-            ).dt.total_days()
+        usable.select(
+            (pl.col("label_known_at") - pl.col("order_purchase_timestamp")).dt.total_days()
         )
         .to_series()
+        .drop_nulls()
     )
-    report.append(f"- медиана дней от заказа до доставки: {lag.median():.0f}")
-    report.append(f"- 95-й процентиль: {lag.quantile(0.95):.0f}")
-    report.append(f"- максимум: {lag.max():.0f}")
+    report.append(f"- медиана: {lag.median():.0f} дней")
+    report.append(f"- p95: {lag.quantile(0.95):.0f} дней")
+    report.append(f"- максимум: {lag.max():.0f} дней")
     report.append("")
     report.append(
-        "Метка становится известна в среднем через две недели после момента решения. "
-        "Это определяет минимальный зазор между обучающим и тестовым периодами."
+        "Считается от момента узнавания исхода, а не от фактической доставки. "
+        "Заказ, не приехавший к обещанной дате, известен как опоздавший сразу, "
+        "даже если фактически приедет через полгода."
     )
 
     target = ARTIFACTS / "04_decision_moment.md"
