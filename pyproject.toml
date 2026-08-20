@@ -1,0 +1,39 @@
+[project]
+name = "dsx"
+version = "0.0.1"
+description = "Личный переносимый инструментарий дата-сайентиста"
+requires-python = ">=3.11"
+dependencies = [
+    "polars>=1.0",
+    "duckdb>=1.0",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dsx"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+# Граница пакета: ядро не знает о проектах-экземплярах.
+# Дублируется тестом tests/test_import_boundary.py, который ловит и косвенные формы.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"projects".msg = "Ядро не импортирует проекты-экземпляры: зависимость только в обратную сторону."

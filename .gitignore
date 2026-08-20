@@ -1,0 +1,22 @@
+# Данные никогда не коммитятся: лицензии источников и правило рабочего места.
+data/
+projects/*/data/
+projects/*/artifacts/
+projects/*/report/*.html
+*.csv
+*.parquet
+
+# Непереносимая часть журнала: конкретика рабочего места.
+knowledge/local/
+
+# Трекинг экспериментов — локальный, в git не попадает.
+mlruns/
+mlartifacts/
+
+# Окружение и кэши
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.DS_Store
