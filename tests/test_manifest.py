@@ -111,3 +111,49 @@ def test_credentials_without_key_are_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(KaggleCredentialsMissing, match="username и key"):
         read_credentials(path)
+
+
+def test_derived_files_are_recorded(data_dir: Path, tmp_path: Path) -> None:
+    derived = tmp_path / "parquet"
+    derived.mkdir()
+    (derived / "orders.parquet").write_bytes(b"PAR1fake")
+
+    manifest = build_manifest(data_dir, derived_root=derived, **SOURCE_KW)
+
+    assert [f.name for f in manifest.derived] == ["orders.parquet"]
+    assert manifest.entry("orders.parquet") is not None
+
+
+def test_changed_derived_file_is_caught(data_dir: Path, tmp_path: Path) -> None:
+    derived = tmp_path / "parquet"
+    derived.mkdir()
+    target = derived / "orders.parquet"
+    target.write_bytes(b"PAR1fake")
+
+    manifest = build_manifest(data_dir, derived_root=derived, **SOURCE_KW)
+    target.write_bytes(b"PAR1other")
+
+    with pytest.raises(ChangedFiles) as excinfo:
+        verify(manifest, data_dir, derived)
+
+    assert excinfo.value.names == ["orders.parquet"]
+
+
+def test_derived_files_are_skipped_when_root_not_given(data_dir: Path, tmp_path: Path) -> None:
+    derived = tmp_path / "parquet"
+    derived.mkdir()
+    (derived / "orders.parquet").write_bytes(b"PAR1fake")
+    manifest = build_manifest(data_dir, derived_root=derived, **SOURCE_KW)
+
+    (derived / "orders.parquet").unlink()
+
+    verify(manifest, data_dir)
+
+    with pytest.raises(MissingFiles):
+        verify(manifest, data_dir, derived)
+
+
+def test_manifest_without_derived_defaults_to_empty(data_dir: Path) -> None:
+    manifest = build_manifest(data_dir, **SOURCE_KW)
+
+    assert manifest.derived == []

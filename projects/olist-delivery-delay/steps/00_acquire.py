@@ -31,7 +31,7 @@ MANIFEST = PROJECT / "manifest.yaml"
 
 
 def main() -> int:
-    if MANIFEST.is_file() and matches(read_manifest(MANIFEST), RAW):
+    if MANIFEST.is_file() and matches(read_manifest(MANIFEST), RAW, PARQUET):
         print(f"Данные на месте и совпадают с {MANIFEST.name}. Загрузка не нужна.")
         return 0
 
@@ -51,9 +51,18 @@ def main() -> int:
     for csv_file in csv_files:
         csv_to_parquet(csv_file, PARQUET / f"{csv_file.stem}.parquet")
 
-    manifest = build_manifest(RAW, source=f"kaggle:{SLUG}", license=LICENSE, url=URL)
+    manifest = build_manifest(
+        RAW,
+        source=f"kaggle:{SLUG}",
+        license=LICENSE,
+        url=URL,
+        derived_root=PARQUET,
+    )
     write_manifest(manifest, MANIFEST)
-    print(f"Манифест записан: {MANIFEST} ({len(manifest.files)} файлов)")
+    print(
+        f"Манифест записан: {MANIFEST} "
+        f"({len(manifest.files)} исходных, {len(manifest.derived)} производных)"
+    )
     return 0
 
 

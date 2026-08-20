@@ -1,0 +1,60 @@
+source: kaggle:olistbr/brazilian-ecommerce
+license: CC BY-NC-SA 4.0
+url: https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce
+retrieved_at: '2026-08-20'
+files:
+- name: olist_customers_dataset.csv
+  sha256: 983a422239e1712ded753b3bf9ecf47dc73f144d306029dcfa99e70a226883d2
+  bytes: 9033957
+- name: olist_geolocation_dataset.csv
+  sha256: b514f6fc991b9566aeba02aa5d67e2c3630f034b60a0e05aa0d082a3b66d88d6
+  bytes: 61273883
+- name: olist_order_items_dataset.csv
+  sha256: 0bc4d068c4fe38cbb01bd90e8746e3c613fe7b4baef75fab7b0e329701c3e279
+  bytes: 15438671
+- name: olist_order_payments_dataset.csv
+  sha256: 4f713964f2815dbbaa40b9488268c55aac3627bfce5aa96cf58d1f3616de3cc0
+  bytes: 5777138
+- name: olist_order_reviews_dataset.csv
+  sha256: 012b61c7593e34f51fa614efdf802b9c7056ce6aae5307ddb93236e7cfc797d7
+  bytes: 14451670
+- name: olist_orders_dataset.csv
+  sha256: 8df58ef3d2d7e9944010f7beecd9b75367f5588ec6e3c91cec19ae3345ef9ecf
+  bytes: 17654914
+- name: olist_products_dataset.csv
+  sha256: 3e6569628a17fbc75fd206ee357b59e20364b9afa90f5b6cd5b4d624c58aa9cc
+  bytes: 2379446
+- name: olist_sellers_dataset.csv
+  sha256: 1f643d2b950373b85735e7794b20986f528d7a000432e7c6f9bcbb44d0846a0e
+  bytes: 174703
+- name: product_category_name_translation.csv
+  sha256: a81f0d1f27b27e7293f761bc79e3ce8f348ee39c4b3ed3e49bde38f478586278
+  bytes: 2613
+derived:
+- name: olist_customers_dataset.parquet
+  sha256: 04b83094893a98a30693440d77878757c448ad4be7ef9a864cf45c7f71187d2a
+  bytes: 7817239
+- name: olist_geolocation_dataset.parquet
+  sha256: e42efd06ddc66d9e66ddc573d2bc3f44c7f9e229ff660e0d1ca5d090e2c818e7
+  bytes: 18418870
+- name: olist_order_items_dataset.parquet
+  sha256: a69e7477152e463d6dd28637f95a5f1c131519b2b8519db95bf58b811b1c3522
+  bytes: 10544823
+- name: olist_order_payments_dataset.parquet
+  sha256: d55b7b38274e779b72f722921bdd2a3291906e2598e96aa40420509a7d92f3bb
+  bytes: 4702971
+- name: olist_order_reviews_dataset.parquet
+  sha256: 6566d07956aa9c4fcdda85fb8aea8a5bf971864a2025a578e24ad89830e9f7bc
+  bytes: 12787868
+- name: olist_orders_dataset.parquet
+  sha256: 37a8c96dff6523a721b7c1160142f3b6df2f8a9ccf2cf9ce1069d842c589c8b3
+  bytes: 16361491
+- name: olist_products_dataset.parquet
+  sha256: 37a32be4758e4c076e7fe2fb8a7dbeb8c035eb09365853d7acfa18aab7eed96e
+  bytes: 1504702
+- name: olist_sellers_dataset.parquet
+  sha256: 74c9b14b27a980362016df48371f30f9e23220b96e58d1f2776356f9b710ed84
+  bytes: 150243
+- name: product_category_name_translation.parquet
+  sha256: 5000ad9bcd4fc2550ce6bef61cc6413168481697800429fa6af7237f467d958a
+  bytes: 3815

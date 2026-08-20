@@ -66,13 +66,38 @@ class SourceManifest(BaseModel):
     license: Annotated[str, Field(min_length=1)]
     url: Annotated[str, Field(min_length=1)]
     retrieved_at: dt.date
+
     files: list[FileEntry]
+    """Файлы, полученные из источника."""
+
+    derived: list[FileEntry] = Field(default_factory=list)
+    """Файлы, порождённые из источника локально (например, Parquet).
+
+    Учитываются наравне с исходными: производный артефакт, не покрытый
+    контрольной суммой, ломает воспроизводимость так же, как исходный.
+    """
 
     def entry(self, name: str) -> FileEntry | None:
-        for item in self.files:
+        for item in (*self.files, *self.derived):
             if item.name == name:
                 return item
         return None
+
+
+def entries_for(root: Path, patterns: tuple[str, ...] = ("*",)) -> list[FileEntry]:
+    """Записи по каталогу, упорядоченные по имени для стабильности манифеста."""
+    paths: set[Path] = set()
+    for pattern in patterns:
+        paths.update(p for p in root.rglob(pattern) if p.is_file())
+
+    return [
+        FileEntry(
+            name=str(path.relative_to(root)),
+            sha256=sha256_of(path),
+            bytes=path.stat().st_size,
+        )
+        for path in sorted(paths)
+    ]
 
 
 def build_manifest(
@@ -83,44 +108,38 @@ def build_manifest(
     url: str,
     patterns: tuple[str, ...] = ("*",),
     retrieved_at: dt.date | None = None,
+    derived_root: Path | None = None,
+    derived_patterns: tuple[str, ...] = ("*",),
 ) -> SourceManifest:
-    """Собрать манифест по каталогу.
-
-    Файлы упорядочены по имени, чтобы манифест был стабилен между прогонами.
-    """
-    paths: set[Path] = set()
-    for pattern in patterns:
-        paths.update(p for p in root.rglob(pattern) if p.is_file())
-
-    entries = [
-        FileEntry(
-            name=str(path.relative_to(root)),
-            sha256=sha256_of(path),
-            bytes=path.stat().st_size,
-        )
-        for path in sorted(paths)
-    ]
-
+    """Собрать манифест по каталогу источника и, если задан, по каталогу производных."""
     return SourceManifest(
         source=source,
         license=license,
         url=url,
         retrieved_at=retrieved_at or dt.date.today(),
-        files=entries,
+        files=entries_for(root, patterns),
+        derived=entries_for(derived_root, derived_patterns) if derived_root else [],
     )
 
 
-def verify(manifest: SourceManifest, root: Path) -> None:
-    """Проверить каталог против манифеста.
+def verify(manifest: SourceManifest, root: Path, derived_root: Path | None = None) -> None:
+    """Проверить каталоги против манифеста.
 
     Отсутствие файла и изменение файла — разные ошибки: первое означает
     неполную загрузку, второе — что данные под нами поменялись.
+
+    Производные файлы проверяются, только если указан derived_root: без него
+    их отсутствие означает «ещё не собраны», а не «потеряны».
     """
     missing: list[str] = []
     changed: list[str] = []
 
-    for item in manifest.files:
-        path = root / item.name
+    checks = [(item, root) for item in manifest.files]
+    if derived_root is not None:
+        checks += [(item, derived_root) for item in manifest.derived]
+
+    for item, base in checks:
+        path = base / item.name
         if not path.is_file():
             missing.append(item.name)
         elif sha256_of(path) != item.sha256:
@@ -132,10 +151,13 @@ def verify(manifest: SourceManifest, root: Path) -> None:
         raise ChangedFiles(changed)
 
 
-def matches(manifest: SourceManifest, root: Path) -> bool:
-    """Совпадает ли каталог с манифестом. Без исключений — для решения о пропуске загрузки."""
+def matches(manifest: SourceManifest, root: Path, derived_root: Path | None = None) -> bool:
+    """Совпадают ли каталоги с манифестом.
+
+    Без исключений — для решения о пропуске загрузки.
+    """
     try:
-        verify(manifest, root)
+        verify(manifest, root, derived_root)
     except ManifestError:
         return False
     return True
