@@ -5,7 +5,6 @@ description = "Личный переносимый инструментарий 
 requires-python = ">=3.11"
 dependencies = [
     "polars>=1.0",
-    "duckdb>=1.0",
     "pydantic>=2.7",
     "pyyaml>=6.0",
 ]
@@ -31,7 +30,7 @@ line-length = 100
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "F", "I", "UP", "B", "TID"]
 
 # Граница пакета: ядро не знает о проектах-экземплярах.
 # Дублируется тестом tests/test_import_boundary.py, который ловит и косвенные формы.

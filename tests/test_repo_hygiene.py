@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+pytestmark = pytest.mark.skipif(
+    shutil.which("git") is None or not (REPO_ROOT / ".git").exists(),
+    reason="проверка правил игнорирования требует git и рабочего репозитория",
+)
 
 
 def _is_ignored(relative_path: str) -> bool:
@@ -29,6 +35,12 @@ def _is_ignored(relative_path: str) -> bool:
         "knowledge/local/friction-log.md",
         "mlruns/0/meta.yaml",
         "data/raw.csv",
+        ".env",
+        ".env.local",
+        "kaggle.json",
+        "notes/analysis.ipynb",
+        "projects/olist-delivery-delay/data/orders.sqlite",
+        "projects/olist-delivery-delay/data/export.xlsx",
     ],
 )
 def test_sensitive_paths_are_ignored(path: str) -> None:

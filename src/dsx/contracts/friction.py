@@ -10,9 +10,20 @@ from __future__ import annotations
 import datetime as dt
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
-NonEmpty = Annotated[str, Field(min_length=1)]
+
+def _stripped(value: object) -> object:
+    """Обрезать пробелы до проверки длины.
+
+    Без этого строка из пробелов проходит min_length=1: формально поле
+    заполнено, содержательно пусто — ровно то, что схема должна отсекать.
+    """
+    return value.strip() if isinstance(value, str) else value
+
+
+NonEmpty = Annotated[str, BeforeValidator(_stripped), Field(min_length=1)]
+OptionalText = Annotated[str | None, BeforeValidator(_stripped), Field(min_length=1)]
 
 Scope = Literal["portable", "local"]
 """portable — обобщённый урок, едет между местами работы.
@@ -43,7 +54,7 @@ class FrictionRecord(BaseModel):
     outcome: NonEmpty
     """Чем закончилось: получилось, обошёл, бросил."""
 
-    looked_up: str | None = None
+    looked_up: OptionalText = None
     """Что искалось в документации или интернете, если искалось."""
 
     contains_workplace_specifics: bool = False

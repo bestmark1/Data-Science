@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Annotated
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _CHUNK = 1 << 20
 
@@ -37,6 +37,17 @@ class ChangedFiles(ManifestError):
     def __init__(self, names: list[str]) -> None:
         self.names = names
         super().__init__("контрольная сумма не совпадает: " + ", ".join(names))
+
+
+class ExtraFiles(ManifestError):
+    """В каталоге есть файлы, которых нет в манифесте.
+
+    Обычно означает остатки прошлой загрузки, смешавшиеся с новыми данными.
+    """
+
+    def __init__(self, names: list[str]) -> None:
+        self.names = names
+        super().__init__("файлы вне манифеста: " + ", ".join(names))
 
 
 def sha256_of(path: Path) -> str:
@@ -67,8 +78,12 @@ class SourceManifest(BaseModel):
     url: Annotated[str, Field(min_length=1)]
     retrieved_at: dt.date
 
-    files: list[FileEntry]
-    """Файлы, полученные из источника."""
+    files: Annotated[list[FileEntry], Field(min_length=1)]
+    """Файлы, полученные из источника.
+
+    Пустой список запрещён: манифест, не описывающий ничего, совпадёт с любым
+    пустым каталогом и заставит пропустить загрузку.
+    """
 
     derived: list[FileEntry] = Field(default_factory=list)
     """Файлы, порождённые из источника локально (например, Parquet).
@@ -77,11 +92,13 @@ class SourceManifest(BaseModel):
     контрольной суммой, ломает воспроизводимость так же, как исходный.
     """
 
-    def entry(self, name: str) -> FileEntry | None:
-        for item in (*self.files, *self.derived):
-            if item.name == name:
-                return item
-        return None
+    @model_validator(mode="after")
+    def _names_are_unique(self) -> SourceManifest:
+        for label, group in (("files", self.files), ("derived", self.derived)):
+            names = [item.name for item in group]
+            if len(names) != len(set(names)):
+                raise ValueError(f"дубликаты имён в {label}")
+        return self
 
 
 def entries_for(root: Path, patterns: tuple[str, ...] = ("*",)) -> list[FileEntry]:
@@ -90,14 +107,16 @@ def entries_for(root: Path, patterns: tuple[str, ...] = ("*",)) -> list[FileEntr
     for pattern in patterns:
         paths.update(p for p in root.rglob(pattern) if p.is_file())
 
-    return [
+    entries = [
         FileEntry(
-            name=str(path.relative_to(root)),
+            # POSIX-вид: манифест, собранный на одной ОС, читается на другой.
+            name=path.relative_to(root).as_posix(),
             sha256=sha256_of(path),
             bytes=path.stat().st_size,
         )
-        for path in sorted(paths)
+        for path in paths
     ]
+    return sorted(entries, key=lambda item: item.name)
 
 
 def build_manifest(
@@ -122,7 +141,13 @@ def build_manifest(
     )
 
 
-def verify(manifest: SourceManifest, root: Path, derived_root: Path | None = None) -> None:
+def verify(
+    manifest: SourceManifest,
+    root: Path,
+    derived_root: Path | None = None,
+    *,
+    strict: bool = False,
+) -> None:
     """Проверить каталоги против манифеста.
 
     Отсутствие файла и изменение файла — разные ошибки: первое означает
@@ -130,6 +155,10 @@ def verify(manifest: SourceManifest, root: Path, derived_root: Path | None = Non
 
     Производные файлы проверяются, только если указан derived_root: без него
     их отсутствие означает «ещё не собраны», а не «потеряны».
+
+    strict дополнительно требует, чтобы в каталогах не было файлов вне
+    манифеста. Для каталога загрузки это обязательно: лишний файл означает,
+    что данные смешались с остатками прошлой попытки.
     """
     missing: list[str] = []
     changed: list[str] = []
@@ -150,14 +179,35 @@ def verify(manifest: SourceManifest, root: Path, derived_root: Path | None = Non
     if changed:
         raise ChangedFiles(changed)
 
+    if strict:
+        extra = _extra_names(manifest.files, root)
+        if derived_root is not None:
+            extra += _extra_names(manifest.derived, derived_root)
+        if extra:
+            raise ExtraFiles(sorted(extra))
 
-def matches(manifest: SourceManifest, root: Path, derived_root: Path | None = None) -> bool:
+
+def _extra_names(expected: list[FileEntry], root: Path) -> list[str]:
+    if not root.is_dir():
+        return []
+    known = {item.name for item in expected}
+    present = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
+    return sorted(present - known)
+
+
+def matches(
+    manifest: SourceManifest,
+    root: Path,
+    derived_root: Path | None = None,
+    *,
+    strict: bool = False,
+) -> bool:
     """Совпадают ли каталоги с манифестом.
 
     Без исключений — для решения о пропуске загрузки.
     """
     try:
-        verify(manifest, root, derived_root)
+        verify(manifest, root, derived_root, strict=strict)
     except ManifestError:
         return False
     return True
@@ -172,4 +222,11 @@ def write_manifest(manifest: SourceManifest, path: Path) -> None:
 
 
 def read_manifest(path: Path) -> SourceManifest:
-    return SourceManifest.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
+    """Прочитать манифест. Повреждённый манифест — ManifestError, а не что попало."""
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return SourceManifest.model_validate(payload)
+    except ManifestError:
+        raise
+    except Exception as exc:
+        raise ManifestError(f"манифест {path} не читается: {exc}") from exc

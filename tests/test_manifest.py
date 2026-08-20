@@ -7,11 +7,16 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from dsx.io.acquire import KaggleCredentialsMissing, read_credentials
 from dsx.io.manifest import (
     ChangedFiles,
+    ExtraFiles,
+    FileEntry,
+    ManifestError,
     MissingFiles,
+    SourceManifest,
     build_manifest,
     matches,
     read_manifest,
@@ -121,7 +126,7 @@ def test_derived_files_are_recorded(data_dir: Path, tmp_path: Path) -> None:
     manifest = build_manifest(data_dir, derived_root=derived, **SOURCE_KW)
 
     assert [f.name for f in manifest.derived] == ["orders.parquet"]
-    assert manifest.entry("orders.parquet") is not None
+    assert manifest.derived[0].bytes == len(b"PAR1fake")
 
 
 def test_changed_derived_file_is_caught(data_dir: Path, tmp_path: Path) -> None:
@@ -157,3 +162,60 @@ def test_manifest_without_derived_defaults_to_empty(data_dir: Path) -> None:
     manifest = build_manifest(data_dir, **SOURCE_KW)
 
     assert manifest.derived == []
+
+
+def test_empty_manifest_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        SourceManifest(
+            source="s", license="l", url="u", retrieved_at=dt.date(2026, 8, 12), files=[]
+        )
+
+
+def test_duplicate_names_are_rejected() -> None:
+    entry = FileEntry(name="a.csv", sha256="0" * 64, bytes=1)
+    with pytest.raises(ValidationError, match="дубликаты"):
+        SourceManifest(
+            source="s",
+            license="l",
+            url="u",
+            retrieved_at=dt.date(2026, 8, 12),
+            files=[entry, entry],
+        )
+
+
+def test_extra_file_is_caught_in_strict_mode(data_dir: Path) -> None:
+    manifest = build_manifest(data_dir, **SOURCE_KW)
+    (data_dir / "leftover.csv").write_text("stale\n", encoding="utf-8")
+
+    verify(manifest, data_dir)
+
+    with pytest.raises(ExtraFiles) as excinfo:
+        verify(manifest, data_dir, strict=True)
+
+    assert excinfo.value.names == ["leftover.csv"]
+
+
+def test_nested_names_use_posix_separators(tmp_path: Path) -> None:
+    root = tmp_path / "data"
+    (root / "sub").mkdir(parents=True)
+    (root / "sub" / "orders.csv").write_text("id\n1\n", encoding="utf-8")
+
+    manifest = build_manifest(root, **SOURCE_KW)
+
+    assert [f.name for f in manifest.files] == ["sub/orders.csv"]
+
+
+def test_corrupt_manifest_raises_manifest_error(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.yaml"
+    path.write_text("files: [oops\n", encoding="utf-8")
+
+    with pytest.raises(ManifestError):
+        read_manifest(path)
+
+
+def test_manifest_of_wrong_shape_raises_manifest_error(tmp_path: Path) -> None:
+    path = tmp_path / "manifest.yaml"
+    path.write_text("just a string\n", encoding="utf-8")
+
+    with pytest.raises(ManifestError):
+        read_manifest(path)

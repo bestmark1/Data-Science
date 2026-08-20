@@ -20,3 +20,25 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .DS_Store
+
+# Секреты: ни при каких обстоятельствах.
+.env
+.env.*
+*.pem
+*.key
+kaggle.json
+credentials.json
+secrets.yaml
+
+# Данные в других форматах — тот же запрет, что и для CSV/Parquet.
+*.tsv
+*.feather
+*.arrow
+*.sqlite
+*.db
+*.xlsx
+data/**/*.json
+
+# Отчёты и ноутбуки содержат данные не хуже таблиц.
+*.ipynb
+projects/*/report/*.pdf

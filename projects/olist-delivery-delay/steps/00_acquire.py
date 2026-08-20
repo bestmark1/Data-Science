@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from dsx.io.acquire import (
     extract_archive,
     read_credentials,
 )
-from dsx.io.manifest import build_manifest, matches, read_manifest, write_manifest
+from dsx.io.manifest import ManifestError, build_manifest, matches, read_manifest, write_manifest
 
 PROJECT = Path(__file__).resolve().parent.parent
 SLUG = "olistbr/brazilian-ecommerce"
@@ -31,9 +32,15 @@ MANIFEST = PROJECT / "manifest.yaml"
 
 
 def main() -> int:
-    if MANIFEST.is_file() and matches(read_manifest(MANIFEST), RAW, PARQUET):
-        print(f"Данные на месте и совпадают с {MANIFEST.name}. Загрузка не нужна.")
-        return 0
+    if MANIFEST.is_file():
+        try:
+            manifest = read_manifest(MANIFEST)
+        except ManifestError as exc:
+            print(f"Манифест повреждён, перекачиваю: {exc}", file=sys.stderr)
+        else:
+            if matches(manifest, RAW, PARQUET, strict=True):
+                print(f"Данные на месте и совпадают с {MANIFEST.name}. Загрузка не нужна.")
+                return 0
 
     try:
         credentials = read_credentials()
@@ -42,6 +49,11 @@ def main() -> int:
         return 1
 
     print(f"Загружаю {SLUG}...")
+    # Каталоги очищаются: остатки прошлой попытки не должны смешаться с новыми данными.
+    for stale in (RAW, PARQUET):
+        if stale.is_dir():
+            shutil.rmtree(stale)
+
     archive = download_dataset(SLUG, PROJECT / "data", credentials=credentials)
     extract_archive(archive, RAW)
     archive.unlink()
