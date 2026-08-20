@@ -1,0 +1,86 @@
+# Контракт проекта-экземпляра.
+#
+# Заполнен ПО ИТОГАМ шагов 01–05, а не до них. То, что здесь записано, невозможно
+# было знать заранее: доступность признаков, трактовка ненаблюдаемого исхода и
+# зазор для сплита выведены из данных руками.
+
+project: olist-delivery-delay
+question: >
+  В момент оформления заказа предсказать, будет ли доставка позже даты,
+  обещанной покупателю.
+
+source:
+  manifest: manifest.yaml
+  tables: data/parquet
+
+entity:
+  grain: order
+  key: order_id
+  # customer_id уникален по строкам и клиентом НЕ является.
+  # Настоящий идентификатор человека — customer_unique_id в таблице customers.
+  natural_person_key: customer_unique_id
+
+decision:
+  moment: order_purchase_timestamp
+  horizon_days: 209        # максимум наблюдённой задержки доставки
+  label_lag_days:
+    median: 10
+    p95: 29
+  action: >
+    Предупредить покупателя либо вмешаться в логистику. Обратимо, blast radius
+    низкий: цена ошибки — лишнее уведомление.
+
+target:
+  name: is_late
+  definition: order_delivered_customer_date > order_estimated_delivery_date
+  positive_rate: 0.1085
+  # Доставки не было, но обещанная дата уже прошла. Наивная разметка
+  # отсутствия как "не опоздал" теряет 27.4% всех положительных.
+  never_delivered_after_estimate: late
+  unobservable: exclude   # 4 заказа: срок ещё не наступил на конце наблюдения
+
+observation:
+  why_in_data: Все заказы маркетплейса за 2016-09 — 2018-10.
+  outcome_observable_for: 0.9999
+  censoring: >
+    Правое цензурирование на конце периода. Заказы, оформленные незадолго до
+    2018-10-17, могли не успеть доставиться — исключены как ненаблюдаемые.
+  known_contradictions:
+    - 8 заказов со статусом delivered без даты доставки
+    - 1359 заказов переданы перевозчику до одобрения оплаты
+    - 23 заказа доставлены клиенту до передачи перевозчику
+
+features:
+  at_decision:
+    - order_estimated_delivery_date
+    - customer_zip_code_prefix
+    - customer_state
+    - items_count
+    - items_total
+    - freight_total
+    - sellers_count
+    - payment_installments
+    - payment_value
+  forbidden:
+    - order_approved_at
+    - order_delivered_carrier_date
+    - order_delivered_customer_date
+    - order_status          # производный от метки по построению, см. шаг 05
+    - review_score
+  ambiguous:
+    # Крайний срок отгрузки. Ставится при оформлении или при одобрении оплаты —
+    # из данных не определить. Не используется до доменного решения.
+    - shipping_limit_max
+
+joins:
+  # Наивный join задваивает: строк x1.19, выручки x1.05.
+  # Агрегировать до join, не после.
+  order_items: aggregate_before_join
+  order_payments: aggregate_before_join
+  orphans:
+    orders_without_items: 775
+    orders_without_payments: 1
+
+split:
+  strategy: out_of_time
+  embargo_days: 29   # не меньше 95-го процентиля задержки метки
