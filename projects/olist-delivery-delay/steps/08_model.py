@@ -22,18 +22,36 @@ ARTIFACTS = PROJECT / "artifacts"
 TEST_START = dt.datetime(2018, 6, 1)
 
 NUMERIC = [
-    "promised_lead_days", "items_count", "items_total", "freight_total",
-    "sellers_count", "seller_states_count", "weight_total_g", "volume_total_cm3",
-    "payment_value", "payment_installments", "payments_count",
-    "purchase_month", "purchase_weekday", "purchase_hour", "freight_ratio",
+    "promised_lead_days",
+    "items_count",
+    "items_total",
+    "freight_total",
+    "sellers_count",
+    "seller_states_count",
+    "weight_total_g",
+    "volume_total_cm3",
+    "payment_value",
+    "payment_installments",
+    "payments_count",
+    "purchase_month",
+    "purchase_weekday",
+    "purchase_hour",
+    "freight_ratio",
     "customer_zip_code_prefix",
 ]
 CATEGORICAL = ["customer_state", "seller_state", "main_category", "payment_type", "cross_state"]
 
 PARAMS = {
-    "objective": "binary", "learning_rate": 0.05, "num_leaves": 31,
-    "min_data_in_leaf": 100, "feature_fraction": 0.8, "bagging_fraction": 0.8,
-    "bagging_freq": 1, "verbose": -1, "seed": 42, "deterministic": True,
+    "objective": "binary",
+    "learning_rate": 0.05,
+    "num_leaves": 31,
+    "min_data_in_leaf": 100,
+    "feature_fraction": 0.8,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 1,
+    "verbose": -1,
+    "seed": 42,
+    "deterministic": True,
 }
 ROUNDS = 400
 
@@ -92,9 +110,7 @@ def main() -> int:
         with mlflow.start_run(run_name=f"lgbm-{label}"):
             outcome = fit_and_score(subset, test, label)
             mlflow.log_params({**PARAMS, "rounds": ROUNDS, "window": label})
-            mlflow.log_metrics(
-                {k: v for k, v in outcome.items() if isinstance(v, (int, float))}
-            )
+            mlflow.log_metrics({k: v for k, v in outcome.items() if isinstance(v, (int, float))})
         results.append(outcome)
 
     best = max(results, key=lambda r: r["pr_auc"])
@@ -119,7 +135,9 @@ def main() -> int:
     report.append(f"**Лучшее окно по PR-AUC: {best['window']}**")
 
     importance = sorted(
-        zip(best["booster"].feature_name(), best["booster"].feature_importance("gain"), strict=True),
+        zip(
+            best["booster"].feature_name(), best["booster"].feature_importance("gain"), strict=True
+        ),
         key=lambda kv: kv[1],
         reverse=True,
     )[:12]

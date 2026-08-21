@@ -29,16 +29,35 @@ ARTIFACTS = PROJECT / "artifacts"
 VALID_START = dt.datetime(2018, 4, 1)
 
 NUM = [
-    "promised_lead_days", "items_count", "items_total", "freight_total", "sellers_count",
-    "seller_states_count", "weight_total_g", "volume_total_cm3", "payment_value",
-    "payment_installments", "payments_count", "purchase_month", "purchase_weekday",
-    "purchase_hour", "freight_ratio", "customer_zip_code_prefix",
+    "promised_lead_days",
+    "items_count",
+    "items_total",
+    "freight_total",
+    "sellers_count",
+    "seller_states_count",
+    "weight_total_g",
+    "volume_total_cm3",
+    "payment_value",
+    "payment_installments",
+    "payments_count",
+    "purchase_month",
+    "purchase_weekday",
+    "purchase_hour",
+    "freight_ratio",
+    "customer_zip_code_prefix",
 ]
 CAT = ["customer_state", "seller_state", "main_category", "payment_type", "cross_state"]
 BASE = {
-    "objective": "binary", "learning_rate": 0.05, "num_leaves": 31, "min_data_in_leaf": 100,
-    "feature_fraction": 0.8, "bagging_fraction": 0.8, "bagging_freq": 1, "verbose": -1,
-    "seed": 42, "deterministic": True,
+    "objective": "binary",
+    "learning_rate": 0.05,
+    "num_leaves": 31,
+    "min_data_in_leaf": 100,
+    "feature_fraction": 0.8,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 1,
+    "verbose": -1,
+    "seed": 42,
+    "deterministic": True,
 }
 COST_WARN, COST_MISS = 1.0, 10.0
 RNG = np.random.default_rng(42)
@@ -61,9 +80,9 @@ def prep(frame: pl.DataFrame, reference=None):
 def train_model(frame: pl.DataFrame, monotone: bool):
     params = dict(BASE)
     if monotone:
-        params["monotone_constraints"] = [
-            -1 if f == "promised_lead_days" else 0 for f in NUM
-        ] + [0] * len(CAT)
+        params["monotone_constraints"] = [-1 if f == "promised_lead_days" else 0 for f in NUM] + [
+            0
+        ] * len(CAT)
     x = prep(frame)
     booster = lgb.train(
         params, lgb.Dataset(x, label=frame["is_late"].to_numpy(), categorical_feature=CAT), 400
@@ -160,10 +179,7 @@ def main() -> int:
     report.append(f"| Brier после калибровки | {brier_score_loss(y_te, p_te):.4f} |")
     report.append(f"| средний прогноз | {p_te.mean():.4f} при факте {y_te.mean():.4f} |")
     report.append("")
-    report.append(
-        f"Разница PR-AUC (выбранный минус правило), 95% бутстрэп: "
-        f"[{lo:+.4f}, {hi:+.4f}]"
-    )
+    report.append(f"Разница PR-AUC (выбранный минус правило), 95% бутстрэп: [{lo:+.4f}, {hi:+.4f}]")
     if lo <= 0 <= hi:
         report.append("Интервал накрывает ноль: превосходство не установлено.")
     report.append("")

@@ -14,7 +14,6 @@ import datetime as dt
 from pathlib import Path
 
 import lightgbm as lgb
-import numpy as np
 import polars as pl
 from sklearn.metrics import average_precision_score, roc_auc_score
 
@@ -22,16 +21,35 @@ PROJECT = Path(__file__).resolve().parent.parent
 ARTIFACTS = PROJECT / "artifacts"
 
 NUM = [
-    "promised_lead_days", "items_count", "items_total", "freight_total", "sellers_count",
-    "seller_states_count", "weight_total_g", "volume_total_cm3", "payment_value",
-    "payment_installments", "payments_count", "purchase_month", "purchase_weekday",
-    "purchase_hour", "freight_ratio", "customer_zip_code_prefix",
+    "promised_lead_days",
+    "items_count",
+    "items_total",
+    "freight_total",
+    "sellers_count",
+    "seller_states_count",
+    "weight_total_g",
+    "volume_total_cm3",
+    "payment_value",
+    "payment_installments",
+    "payments_count",
+    "purchase_month",
+    "purchase_weekday",
+    "purchase_hour",
+    "freight_ratio",
+    "customer_zip_code_prefix",
 ]
 CAT = ["customer_state", "seller_state", "main_category", "payment_type", "cross_state"]
 BASE = {
-    "objective": "binary", "learning_rate": 0.05, "num_leaves": 31, "min_data_in_leaf": 100,
-    "feature_fraction": 0.8, "bagging_fraction": 0.8, "bagging_freq": 1, "verbose": -1,
-    "seed": 42, "deterministic": True,
+    "objective": "binary",
+    "learning_rate": 0.05,
+    "num_leaves": 31,
+    "min_data_in_leaf": 100,
+    "feature_fraction": 0.8,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 1,
+    "verbose": -1,
+    "seed": 42,
+    "deterministic": True,
 }
 MONOTONE = [-1 if f == "promised_lead_days" else 0 for f in NUM] + [0] * len(CAT)
 
@@ -117,7 +135,9 @@ def main() -> int:
     names = list(rows[0]["pr"].keys())
 
     report = ["# Шаг 12 — скользящая оценка", ""]
-    report.append(f"Окон: {len(rows)}. Конфигурации фиксированы заранее, по окнам не настраивались.")
+    report.append(
+        f"Окон: {len(rows)}. Конфигурации фиксированы заранее, по окнам не настраивались."
+    )
     report.append("")
     report += [
         "| окно | заказов | доля опозданий | история | " + " | ".join(names) + " |",
@@ -129,10 +149,17 @@ def main() -> int:
             f"| {row['window']} | {row['n']:,} | {row['rate']:.2%} | {row['history']:,} | {cells} |"
         )
     report.append("")
-    report.append("Значения — PR-AUC. Для сравнения: PR-AUC случайного предсказания равен доле опозданий.")
+    report.append(
+        "Значения — PR-AUC. Для сравнения: PR-AUC случайного предсказания равен доле опозданий."
+    )
     report.append("")
 
-    report += ["## Кто выигрывает в каждом окне", "", "| окно | победитель | отрыв от правила |", "|---|---|---|"]
+    report += [
+        "## Кто выигрывает в каждом окне",
+        "",
+        "| окно | победитель | отрыв от правила |",
+        "|---|---|---|",
+    ]
     wins = {}
     for row in rows:
         best = max(row["pr"], key=row["pr"].get)
@@ -143,9 +170,7 @@ def main() -> int:
 
     report += ["## Устойчивость порядка", ""]
     for name in names:
-        ranks = [
-            sorted(row["pr"], key=row["pr"].get, reverse=True).index(name) + 1 for row in rows
-        ]
+        ranks = [sorted(row["pr"], key=row["pr"].get, reverse=True).index(name) + 1 for row in rows]
         report.append(f"- {name}: места по окнам {ranks}")
     report.append("")
 

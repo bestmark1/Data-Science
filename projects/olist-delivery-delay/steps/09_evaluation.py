@@ -18,16 +18,35 @@ PROJECT = Path(__file__).resolve().parent.parent
 ARTIFACTS = PROJECT / "artifacts"
 
 NUM = [
-    "promised_lead_days", "items_count", "items_total", "freight_total", "sellers_count",
-    "seller_states_count", "weight_total_g", "volume_total_cm3", "payment_value",
-    "payment_installments", "payments_count", "purchase_month", "purchase_weekday",
-    "purchase_hour", "freight_ratio", "customer_zip_code_prefix",
+    "promised_lead_days",
+    "items_count",
+    "items_total",
+    "freight_total",
+    "sellers_count",
+    "seller_states_count",
+    "weight_total_g",
+    "volume_total_cm3",
+    "payment_value",
+    "payment_installments",
+    "payments_count",
+    "purchase_month",
+    "purchase_weekday",
+    "purchase_hour",
+    "freight_ratio",
+    "customer_zip_code_prefix",
 ]
 CAT = ["customer_state", "seller_state", "main_category", "payment_type", "cross_state"]
 PARAMS = {
-    "objective": "binary", "learning_rate": 0.05, "num_leaves": 31, "min_data_in_leaf": 100,
-    "feature_fraction": 0.8, "bagging_fraction": 0.8, "bagging_freq": 1, "verbose": -1,
-    "seed": 42, "deterministic": True,
+    "objective": "binary",
+    "learning_rate": 0.05,
+    "num_leaves": 31,
+    "min_data_in_leaf": 100,
+    "feature_fraction": 0.8,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 1,
+    "verbose": -1,
+    "seed": 42,
+    "deterministic": True,
     "monotone_constraints": [-1 if f == "promised_lead_days" else 0 for f in NUM] + [0] * len(CAT),
 }
 
@@ -96,9 +115,12 @@ def main() -> int:
     )
     report.append("")
 
-    best = "правило" if average_precision_score(
-        y_te, candidates["правило"]["cal"]
-    ) > average_precision_score(y_te, candidates["модель"]["cal"]) else "модель"
+    best = (
+        "правило"
+        if average_precision_score(y_te, candidates["правило"]["cal"])
+        > average_precision_score(y_te, candidates["модель"]["cal"])
+        else "модель"
+    )
     p_best = candidates[best]["cal"]
     report.append(f"**Лучший кандидат по PR-AUC: {best}**")
     report.append("")
@@ -122,7 +144,12 @@ def main() -> int:
             .with_columns((pl.col("predicted") - pl.col("actual")).alias("bias"))
             .sort("bias")
         )
-        report += [f"### {title}: наибольшее смещение", "", "| сегмент | заказов | факт | прогноз | смещение |", "|---|---|---|---|---|"]
+        report += [
+            f"### {title}: наибольшее смещение",
+            "",
+            "| сегмент | заказов | факт | прогноз | смещение |",
+            "|---|---|---|---|---|",
+        ]
         for row in [*group.head(3).iter_rows(named=True), *group.tail(3).iter_rows(named=True)]:
             report.append(
                 f"| {row[column]} | {row['n']:,} | {row['actual']:.2%} | "

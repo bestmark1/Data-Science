@@ -145,7 +145,12 @@ def main() -> int:
     report = ["# Шаг 06 — обучающая таблица и сплит", ""]
     report.append(f"Строк в таблице: {table.height:,}, признаков: {table.width}")
     report.append("")
-    report += ["## Сплит", "", "| выборка | заказов | период покупки | доля опозданий |", "|---|---|---|---|"]
+    report += [
+        "## Сплит",
+        "",
+        "| выборка | заказов | период покупки | доля опозданий |",
+        "|---|---|---|---|",
+    ]
     for name, part in (("train", train), ("valid", valid), ("test", test)):
         lo = part["order_purchase_timestamp"].min()
         hi = part["order_purchase_timestamp"].max()
@@ -166,7 +171,12 @@ def main() -> int:
     )
     report.append("")
 
-    report += ["## Дрейф доли опозданий по месяцам", "", "| месяц | заказов | доля опозданий |", "|---|---|---|"]
+    report += [
+        "## Дрейф доли опозданий по месяцам",
+        "",
+        "| месяц | заказов | доля опозданий |",
+        "|---|---|---|",
+    ]
     monthly = (
         table.with_columns(pl.col("order_purchase_timestamp").dt.truncate("1mo").alias("m"))
         .group_by("m")

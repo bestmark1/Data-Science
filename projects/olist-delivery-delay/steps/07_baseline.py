@@ -66,7 +66,9 @@ def main() -> int:
             f"| {row['baseline']} | {row['roc_auc']:.4f} | {row['pr_auc']:.4f} | {row['brier']:.4f} |"
         )
     report.append("")
-    report.append(f"Доля положительных в тесте: {y_test.mean():.4f} — это PR-AUC случайного предсказания.")
+    report.append(
+        f"Доля положительных в тесте: {y_test.mean():.4f} — это PR-AUC случайного предсказания."
+    )
     report.append("")
     report.append(
         "Расхождение долей между обучением и тестом означает, что константный "

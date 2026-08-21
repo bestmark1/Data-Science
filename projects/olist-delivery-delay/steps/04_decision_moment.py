@@ -48,7 +48,7 @@ def main() -> int:
     snapshot_date = snapshot.date()
 
     report = ["# Шаг 04 — момент решения, таргет, момент узнавания метки", ""]
-    report.append(f"Момент решения: `order_purchase_timestamp`")
+    report.append("Момент решения: `order_purchase_timestamp`")
     report.append(f"Конец наблюдения: {snapshot} (по фактическим событиям)")
     report.append("")
 
@@ -93,7 +93,9 @@ def main() -> int:
 
     report += ["## Популяция", ""]
     report.append(f"- всего заказов в файле: {orders.height:,}")
-    report.append(f"- в пригодном периоде {PERIOD_START:%Y-%m-%d} .. {PERIOD_STOP:%Y-%m-%d}: {in_period.height:,}")
+    report.append(
+        f"- в пригодном периоде {PERIOD_START:%Y-%m-%d} .. {PERIOD_STOP:%Y-%m-%d}: {in_period.height:,}"
+    )
     report.append(
         f"- после исключения {NOT_INTENDED_FOR_DELIVERY}: {population.height:,} "
         f"(исключено {in_period.height - population.height:,})"

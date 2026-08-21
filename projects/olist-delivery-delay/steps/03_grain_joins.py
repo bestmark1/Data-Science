@@ -23,7 +23,12 @@ def main() -> int:
 
     report = ["# Шаг 03 — грануляция и fanout", ""]
 
-    report += ["## Грануляция по order_id", "", "| таблица | строк | уникальных order_id | строк на заказ |", "|---|---|---|---|"]
+    report += [
+        "## Грануляция по order_id",
+        "",
+        "| таблица | строк | уникальных order_id | строк на заказ |",
+        "|---|---|---|---|",
+    ]
     for name, frame in [
         ("orders", orders),
         ("order_items", items),
@@ -53,9 +58,7 @@ def main() -> int:
     report.append("")
     report.append(f"сумма price при наивном join: {naive['price'].sum():,.2f}")
     report.append(f"сумма price честная: {honest['items_total'].sum():,.2f}")
-    report.append(
-        f"завышение выручки: x{naive['price'].sum() / honest['items_total'].sum():.2f}"
-    )
+    report.append(f"завышение выручки: x{naive['price'].sum() / honest['items_total'].sum():.2f}")
     report.append("")
 
     report += ["## Заказы без связанных записей", ""]

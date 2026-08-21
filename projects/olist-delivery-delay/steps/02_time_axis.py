@@ -38,11 +38,14 @@ def main() -> int:
     report.append(f"Типы до разбора: {[str(orders[c].dtype) for c in STAMPS]}")
     report.append("")
 
-    parsed = orders.with_columns(
-        [pl.col(c).str.to_datetime(strict=False).alias(c) for c in STAMPS]
-    )
+    parsed = orders.with_columns([pl.col(c).str.to_datetime(strict=False).alias(c) for c in STAMPS])
 
-    report += ["## Диапазоны", "", "| метка | минимум | максимум | пропусков |", "|---|---|---|---|"]
+    report += [
+        "## Диапазоны",
+        "",
+        "| метка | минимум | максимум | пропусков |",
+        "|---|---|---|---|",
+    ]
     for stamp in STAMPS:
         column = parsed[stamp]
         report.append(
@@ -57,7 +60,12 @@ def main() -> int:
         report.append(f"| {earlier} -> {later} | {broken:,} |")
     report.append("")
 
-    report += ["## Статусы заказов и доставка", "", "| статус | заказов | без даты доставки |", "|---|---|---|"]
+    report += [
+        "## Статусы заказов и доставка",
+        "",
+        "| статус | заказов | без даты доставки |",
+        "|---|---|---|",
+    ]
     by_status = (
         parsed.group_by("order_status")
         .agg(

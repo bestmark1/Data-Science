@@ -38,6 +38,11 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "TID"]
 
+[tool.ruff.lint.per-file-ignores]
+# Скрипты ручного прохода этапа 0 — запись упражнения, а не код ядра.
+# Переформатировать их значит править запись задним числом.
+"projects/*/steps/*.py" = ["E501"]
+
 # Граница пакета: ядро не знает о проектах-экземплярах.
 # Дублируется тестом tests/test_import_boundary.py, который ловит и косвенные формы.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]

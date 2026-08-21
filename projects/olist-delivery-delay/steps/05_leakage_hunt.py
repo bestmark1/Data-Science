@@ -88,7 +88,9 @@ def main() -> int:
     )
 
     report = ["# Шаг 05 — поиск лика", ""]
-    report.append(f"Популяция: {wide.height:,} заказов, доля опозданий {wide['is_late'].mean():.2%}")
+    report.append(
+        f"Популяция: {wide.height:,} заказов, доля опозданий {wide['is_late'].mean():.2%}"
+    )
     report.append("")
 
     report += [
@@ -136,7 +138,12 @@ def main() -> int:
     report.append("")
 
     # Категориальный: статус заказа знать заранее нельзя, но он объясняет таргет почти полностью.
-    report += ["## Статус заказа против таргета", "", "| статус | заказов | доля опозданий |", "|---|---|---|"]
+    report += [
+        "## Статус заказа против таргета",
+        "",
+        "| статус | заказов | доля опозданий |",
+        "|---|---|---|",
+    ]
     by_status = (
         wide.group_by("order_status")
         .agg(pl.len().alias("n"), pl.col("is_late").mean().alias("late_rate"))
