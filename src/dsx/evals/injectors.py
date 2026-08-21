@@ -101,9 +101,22 @@ def outcome_component_as_feature(world: World) -> World:
     return World(frames=world.frames, schema=_replace_column(world.schema, column))
 
 
-def surrogate_key_as_entity(world: World) -> World:
-    """Подменить идентификатор сущности суррогатным ключом строки."""
-    frame = world.main.with_columns(pl.int_range(pl.len()).cast(pl.Utf8).alias("row_key"))
+def surrogate_key_as_entity(world: World, per_object: int = 3, seed: int = 21) -> World:
+    """Подменить идентификатор объекта суррогатным ключом строки.
+
+    Естественный ключ делается крупнее строки: несколько наблюдений относятся
+    к одному объекту. Без этого подмена не создаёт условия — в чистом мире
+    одна строка и есть один объект.
+    """
+    rng = np.random.default_rng(seed)
+    rows = world.main.height
+    objects = max(1, rows // per_object)
+    natural = [f"o{int(i):06d}" for i in rng.integers(0, objects, rows)]
+
+    frame = world.main.with_columns(
+        pl.Series("row_key", [f"r{i:06d}" for i in range(rows)]),
+        pl.Series("entity_id", natural),
+    )
     schema = Schema(
         columns=[
             ColumnSpec(name="row_key", role=Role.ENTITY_ID),
@@ -134,17 +147,26 @@ def missing_period(world: World, months: int = 1) -> World:
     )
 
 
-def truncated_tail(world: World, days: int = 45, keep: float = 0.04, seed: int = 5) -> World:
-    """Проредить хвост периода, имитируя обрыв сбора данных."""
+def truncated_tail(world: World, days: int = 45, keep: float = 0.1, seed: int = 5) -> World:
+    """Обрушить объём в конце периода, не выбрасывая дни целиком.
+
+    Прореживание по дням оставляет каждый день представленным: иначе инжектор
+    порождал бы ещё и пропущенные периоды, и вердикт стал бы неинтерпретируемым.
+    """
     rng = np.random.default_rng(seed)
     edge = world.main["decided_at"].max() - dt.timedelta(days=days)
     head = world.main.filter(pl.col("decided_at") < edge)
     tail = world.main.filter(pl.col("decided_at") >= edge)
     if tail.is_empty():
         return world
-    take = max(1, int(tail.height * keep))
-    idx = rng.choice(tail.height, take, replace=False)
-    return world.replace_main(pl.concat([head, tail[idx.tolist()]]))
+
+    kept = []
+    for (_day,), chunk in tail.group_by(pl.col("decided_at").dt.date(), maintain_order=True):
+        take = max(1, int(round(chunk.height * keep)))
+        idx = rng.choice(chunk.height, take, replace=False)
+        kept.append(chunk[idx.tolist()])
+
+    return world.replace_main(pl.concat([head, *kept]))
 
 
 def status_timestamp_conflict(world: World, count: int = 40, seed: int = 9) -> World:
@@ -202,11 +224,18 @@ def non_stationary_target(world: World, seed: int = 17) -> World:
 
 
 def entity_overlap(world: World, share: float = 0.1, seed: int = 19) -> World:
-    """Повторить часть сущностей в конце периода под теми же идентификаторами."""
+    """Повторить часть объектов позже, ВНУТРИ того же периода.
+
+    Сдвиг за пределы периода порождал бы разрыв и разрежённый хвост — инжектор
+    ломал бы три вещи вместо одной.
+    """
     rng = np.random.default_rng(seed)
-    count = int(world.main.height * share)
-    idx = rng.choice(world.main.height, count, replace=False)
-    repeats = world.main[idx.tolist()].with_columns(
-        (pl.col("decided_at") + pl.duration(days=400)).alias("decided_at")
+    span = world.main["decided_at"].max() - world.main["decided_at"].min()
+    early = world.main.filter(pl.col("decided_at") < world.main["decided_at"].min() + span / 2)
+    count = min(early.height, int(world.main.height * share))
+    idx = rng.choice(early.height, count, replace=False)
+
+    repeats = early[idx.tolist()].with_columns(
+        (pl.col("decided_at") + pl.duration(days=int(span.days // 2))).alias("decided_at")
     )
-    return world.replace_main(pl.concat([world.main, repeats]))
+    return world.replace_main(pl.concat([world.main, repeats]).sort("decided_at"))
