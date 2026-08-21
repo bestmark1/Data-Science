@@ -96,3 +96,25 @@ def test_always_alarming_detector_fails_the_negative_controls() -> None:
     failures = [b.id for b in ALL if not judge(b.case, everything).ok]
 
     assert len(failures) == len(ALL), "набор не отличает детектор от паникёра"
+
+
+@pytest.mark.parametrize(
+    "bundle", [b for b in ALL if not b.case.expectation.is_negative_control], ids=lambda b: b.id
+)
+def test_injected_world_actually_differs_from_the_clean_one(bundle) -> None:
+    """Инжектор обязан доказать, что дефект внесён.
+
+    Четыре раза подряд набор ловил ошибку не в проверке, а в инжекторе: дважды
+    дефект отсутствовал вовсе. Изменение данных не означает внесения дефекта,
+    но отсутствие изменений означает его отсутствие наверняка.
+    """
+    clean = BY_ID["clean-baseline"].build()
+    injected = bundle.build()
+
+    data_differs = not injected.main.equals(clean.main)
+    schema_differs = injected.schema != clean.schema
+    contract_differs = bundle.outcome != BY_ID["clean-baseline"].outcome
+
+    assert data_differs or schema_differs or contract_differs, (
+        "мир с дефектом не отличается от чистого: инжектор ничего не внёс"
+    )
