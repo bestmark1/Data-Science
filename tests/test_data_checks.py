@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from dsx.checks import ALL_CHECKS, DATA_CHECKS, Context, run_checks
+from dsx.checks import ALL_CHECKS, CONTRACT_CHECKS, DATA_CHECKS, Context, run_checks
 from dsx.evals.registry import ALL, BY_ID, NEGATIVE_CONTROLS
 from dsx.task import OutcomeTiming, TargetKind, TaskSpec
 
@@ -16,9 +16,8 @@ FULL = TaskSpec(
 )
 COVERED = frozenset(f for c in ALL_CHECKS for f in c.detects)
 
-# Единственный кейс, который проверки объявлений поймать не могут по построению:
-# декларация лжёт, и проверка читает то же ложное утверждение.
-NEEDS_EMPIRICAL = {"feature-falsely-declared-available"}
+DECLARATIVE = [*CONTRACT_CHECKS, *DATA_CHECKS]
+"""Проверки, читающие объявления и данные, но не сверяющие одно с другим."""
 
 
 def report_for(bundle, task: TaskSpec = FULL):
@@ -32,9 +31,7 @@ def test_no_alarm_on_clean_worlds(bundle) -> None:
     assert report.findings & COVERED == frozenset(), [str(s) for s in report.signals]
 
 
-@pytest.mark.parametrize(
-    "bundle", [b for b in ALL if b.id not in NEEDS_EMPIRICAL], ids=lambda b: b.id
-)
+@pytest.mark.parametrize("bundle", ALL, ids=lambda b: b.id)
 def test_injected_defect_is_found_and_nothing_else(bundle) -> None:
     """Инжектор ломает ровно одно; проверки обязаны увидеть ровно это."""
     found = report_for(bundle).findings & COVERED
@@ -42,11 +39,22 @@ def test_injected_defect_is_found_and_nothing_else(bundle) -> None:
     assert found == bundle.case.expectation.findings & COVERED
 
 
-def test_lying_declaration_needs_an_empirical_check() -> None:
+def test_lying_declaration_escapes_declarative_checks() -> None:
+    """Проверка объявлений читает то же ложное утверждение и бессильна."""
     bundle = BY_ID["feature-falsely-declared-available"]
 
-    assert report_for(bundle).findings & COVERED == frozenset()
+    report = run_checks(DECLARATIVE, Context(bundle.build(), bundle.outcome, FULL))
+
+    assert report.findings == frozenset()
     assert bundle.case.expectation.caught_by == frozenset({"N6"})
+
+
+def test_lying_declaration_is_caught_by_the_empirical_check() -> None:
+    bundle = BY_ID["feature-falsely-declared-available"]
+
+    found = report_for(bundle).findings & COVERED
+
+    assert found == bundle.case.expectation.findings
 
 
 def test_stream_checks_are_skipped_on_static_data() -> None:

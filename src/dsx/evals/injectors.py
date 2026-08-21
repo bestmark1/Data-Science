@@ -70,11 +70,15 @@ def feature_from_the_future(world: World) -> World:
     утверждает обратное. Проверка деклараций здесь бессильна: она читает то же
     ложное утверждение. Нужна эмпирическая сверка силы связи с исходом (N6).
     """
+    # Просрочка относительно срока, а не длительность: длительность сама по себе
+    # ответа не содержит, потому что исход зависит от неё В СРАВНЕНИИ со сроком.
     frame = world.main.with_columns(
-        (pl.col("event_at") - pl.col("decided_at")).dt.total_days().alias("actual_days")
+        (pl.col("event_at").dt.date() - pl.col("deadline_on").dt.date())
+        .dt.total_days()
+        .alias("overrun_days")
     )
     column = ColumnSpec(
-        name="actual_days",
+        name="overrun_days",
         role=Role.FEATURE,
         availability=Availability.AT_DECISION,
         source_of_claim=SOURCE,

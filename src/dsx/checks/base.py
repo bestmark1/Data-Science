@@ -56,16 +56,30 @@ class Check(Protocol):
     def run(self, context: Context) -> list[Signal]: ...
 
 
+class NotApplicable(Exception):
+    """Проверка не может быть выполнена по названной причине.
+
+    Отличается от невыполненной предпосылки: предпосылка известна заранее, а
+    это выясняется в ходе работы — например, когда контракт исхода нарушен и
+    метку вычислить нечем.
+    """
+
+
 @dataclass(frozen=True)
 class Skipped:
     """Проверка не применялась, и известно почему."""
 
     requirement: str
-    unmet: frozenset[Premise]
+    reason: str
+    unmet: frozenset[Premise] = frozenset()
 
     def __str__(self) -> str:
-        names = ", ".join(sorted(p.value for p in self.unmet))
-        return f"{self.requirement}: пропущена, не выполнены предпосылки — {names}"
+        return f"{self.requirement}: пропущена — {self.reason}"
+
+    @classmethod
+    def for_premises(cls, requirement: str, unmet: frozenset[Premise]) -> Skipped:
+        names = ", ".join(sorted(p.value for p in unmet))
+        return cls(requirement, f"не выполнены предпосылки: {names}", unmet)
 
 
 @dataclass
@@ -103,10 +117,16 @@ def run_checks(
     for check in checks:
         unmet = context.task.unmet(check.premises)
         if unmet:
-            report.skipped.append(Skipped(check.requirement, unmet))
+            report.skipped.append(Skipped.for_premises(check.requirement, unmet))
             continue
 
-        for signal in check.run(context):
+        try:
+            produced = check.run(context)
+        except NotApplicable as exc:
+            report.skipped.append(Skipped(check.requirement, str(exc)))
+            continue
+
+        for signal in produced:
             if signal.blocking and ledger.is_overridden(check.requirement):
                 signal = Signal(signal.finding, signal.detail, blocking=False)
             report.signals.append(signal)
