@@ -58,13 +58,16 @@ def _bundle(
     findings: set[Finding],
     build: Callable[[], World],
     comparison: ComparisonMode = ComparisonMode.BY_DATE,
+    caught_by: set[str] | None = None,
 ) -> Bundle:
     return Bundle(
         case=Case(
             id=case_id,
             title=title,
             rationale=rationale,
-            expectation=Expectation(findings=frozenset(findings)),
+            expectation=Expectation(
+                findings=frozenset(findings), caught_by=frozenset(caught_by or ())
+            ),
         ),
         build=build,
         outcome=_outcome(comparison),
@@ -118,6 +121,7 @@ ALL: tuple[Bundle, ...] = (
         {Finding.MIXED_TEMPORAL_COMPARISON},
         build_world,
         comparison=ComparisonMode.DIRECT,
+        caught_by={"A10"},
     ),
     _bundle(
         "undeclared-temporal-kind",
@@ -125,13 +129,24 @@ ALL: tuple[Bundle, ...] = (
         "Ядро не должно угадывать грануляцию эвристикой.",
         {Finding.UNDECLARED_TEMPORAL_KIND},
         lambda: inj.drop_temporal_declaration(build_world()),
+        caught_by={"A10"},
     ),
     _bundle(
-        "feature-after-decision",
-        "Признак вычислен после момента решения",
-        "Трение 05: объявленная доступность — единственная защита от такого лика.",
+        "feature-declared-after-decision",
+        "Признак честно объявлен появляющимся после решения",
+        "Трение 05: декларация говорит правду, проверки контракта достаточно.",
+        {Finding.FEATURE_AFTER_DECISION},
+        lambda: inj.feature_declared_after_decision(build_world()),
+        caught_by={"C1"},
+    ),
+    _bundle(
+        "feature-falsely-declared-available",
+        "Признак ложно объявлен доступным в момент решения",
+        "Трение 05: декларация лжёт, и проверка деклараций бессильна — "
+        "нужна эмпирическая сверка силы связи с исходом (N6).",
         {Finding.FEATURE_AFTER_DECISION},
         lambda: inj.feature_from_the_future(build_world()),
+        caught_by={"N6"},
     ),
     _bundle(
         "outcome-component-as-feature",
@@ -139,6 +154,7 @@ ALL: tuple[Bundle, ...] = (
         "Трение 05: связь возникает в формуле метки, проверки данных её не видят.",
         {Finding.OUTCOME_COMPONENT_AS_FEATURE},
         lambda: inj.outcome_component_as_feature(build_world()),
+        caught_by={"C6"},
     ),
     # --- структура данных --------------------------------------------------
     _bundle(
@@ -147,6 +163,7 @@ ALL: tuple[Bundle, ...] = (
         "Трение 01: признаки по истории объекта дали бы историю длиной в одну строку.",
         {Finding.SURROGATE_KEY_AS_ENTITY},
         lambda: inj.surrogate_key_as_entity(build_world()),
+        caught_by={"A2"},
     ),
     _bundle(
         "duplicate-rows",
@@ -154,6 +171,7 @@ ALL: tuple[Bundle, ...] = (
         "Трение 01: 26% дубликатов нашлись только потому, что проверка была дописана вручную.",
         {Finding.DUPLICATE_ROWS},
         lambda: inj.duplicate_rows(build_world()),
+        caught_by={"A3"},
     ),
     _bundle(
         "entity-overlap",
@@ -161,6 +179,7 @@ ALL: tuple[Bundle, ...] = (
         "Пересечение сущностей между обучением и оценкой при временном сплите.",
         {Finding.ENTITY_OVERLAP_ACROSS_SPLITS},
         lambda: inj.entity_overlap(build_world()),
+        caught_by={"N2"},
     ),
     # --- полнота периода ---------------------------------------------------
     _bundle(
@@ -169,6 +188,7 @@ ALL: tuple[Bundle, ...] = (
         "Трение 01: ноябрь отсутствовал целиком, обнаружено вручную.",
         {Finding.MISSING_PERIOD},
         lambda: inj.missing_period(build_world()),
+        caught_by={"A7"},
     ),
     _bundle(
         "truncated-tail",
@@ -176,6 +196,7 @@ ALL: tuple[Bundle, ...] = (
         "Трение 04: объём падал с 245 в день до 4, что выглядело как цензурирование.",
         {Finding.TRUNCATED_TAIL},
         lambda: inj.truncated_tail(build_world()),
+        caught_by={"A6"},
     ),
     # --- семантика пропусков ----------------------------------------------
     _bundle(
@@ -184,6 +205,7 @@ ALL: tuple[Bundle, ...] = (
         "Трение 02: 8 объектов со статусом завершения не имели даты события.",
         {Finding.STATUS_TIMESTAMP_CONFLICT},
         lambda: inj.status_timestamp_conflict(build_world()),
+        caught_by={"A5"},
     ),
     _bundle(
         "post-treatment-missingness",
@@ -191,6 +213,7 @@ ALL: tuple[Bundle, ...] = (
         "Трение 05: из 775 объектов без позиций 767 были отменены.",
         {Finding.POST_TREATMENT_MISSINGNESS},
         lambda: inj.post_treatment_missingness(build_world()),
+        caught_by={"A11"},
     ),
     # --- дрейф -------------------------------------------------------------
     _bundle(
@@ -199,6 +222,7 @@ ALL: tuple[Bundle, ...] = (
         "Трения 07 и 12: именно это трижды переворачивало вывод этапа 0.",
         {Finding.NON_STATIONARY_TARGET},
         lambda: inj.non_stationary_target(build_world()),
+        caught_by={"N3", "N4"},
     ),
 )
 

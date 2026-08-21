@@ -28,27 +28,47 @@ def _add_column(schema: Schema, column: ColumnSpec) -> Schema:
     return Schema(columns=[*schema.columns, column])
 
 
-def drop_temporal_declaration(world: World, name: str = "deadline_on") -> World:
-    """Убрать объявленную грануляцию временной колонки.
+def drop_temporal_declaration(world: World, name: str = "event_at") -> World:
+    """Убрать объявленную грануляцию у компонента исхода.
 
-    Ядро не должно угадывать её эвристикой: угадывание даёт ложные срабатывания,
-    которые пользователь научится затыкать.
+    Ядро не должно угадывать грануляцию эвристикой: угадывание даёт ложные
+    срабатывания, которые пользователь научится затыкать.
+
+    Целью выбран компонент исхода, а не роль с обязательной грануляцией: иначе
+    пришлось бы менять роль, и инжектор сломал бы сразу несколько вещей.
     """
     column = world.schema.get(name)
     assert column is not None
-    stripped = ColumnSpec(
-        name=column.name,
-        role=Role.FEATURE,  # роль меняется, чтобы грануляция перестала быть обязательной
-        availability=Availability.UNKNOWN,
-    )
+    stripped = ColumnSpec(name=column.name, role=column.role, availability=column.availability)
     return World(frames=world.frames, schema=_replace_column(world.schema, stripped))
 
 
-def feature_from_the_future(world: World) -> World:
-    """Добавить признак, вычисленный после момента решения.
+def feature_declared_after_decision(world: World) -> World:
+    """Добавить признак, честно объявленный появляющимся после решения.
 
-    Значение известно только по факту наступления события, но объявлено
-    доступным при принятии решения.
+    Ловится проверкой контракта: декларация говорит правду.
+    """
+    frame = world.main.with_columns(
+        (pl.col("event_at") - pl.col("decided_at")).dt.total_days().alias("actual_days")
+    )
+    column = ColumnSpec(
+        name="actual_days",
+        role=Role.FEATURE,
+        availability=Availability.AFTER,
+        source_of_claim=SOURCE,
+    )
+    return World(
+        frames={**world.frames, "main": frame},
+        schema=_add_column(world.schema, column),
+    )
+
+
+def feature_from_the_future(world: World) -> World:
+    """Добавить признак, ЛОЖНО объявленный доступным в момент решения.
+
+    Значение известно только по факту наступления события, но декларация
+    утверждает обратное. Проверка деклараций здесь бессильна: она читает то же
+    ложное утверждение. Нужна эмпирическая сверка силы связи с исходом (N6).
     """
     frame = world.main.with_columns(
         (pl.col("event_at") - pl.col("decided_at")).dt.total_days().alias("actual_days")
