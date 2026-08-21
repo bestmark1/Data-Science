@@ -1,0 +1,192 @@
+"""Инжекторы дефектов: портят чистый мир известным способом.
+
+Каждый инжектор возвращает изменённый мир. Что именно испорчено, знает кейс,
+поэтому вердикт проверки механический, а не является суждением.
+
+Инжектор обязан ломать ровно один вид дефекта. Инжектор, портящий данные
+сразу несколькими способами, делает вердикт неинтерпретируемым.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+
+import numpy as np
+import polars as pl
+
+from dsx.evals.world import World
+from dsx.roles import Availability, ColumnSpec, Role, Schema, TemporalKind
+
+SOURCE = "инжектор"
+
+
+def _replace_column(schema: Schema, column: ColumnSpec) -> Schema:
+    return Schema(columns=[column if c.name == column.name else c for c in schema.columns])
+
+
+def _add_column(schema: Schema, column: ColumnSpec) -> Schema:
+    return Schema(columns=[*schema.columns, column])
+
+
+def drop_temporal_declaration(world: World, name: str = "deadline_on") -> World:
+    """Убрать объявленную грануляцию временной колонки.
+
+    Ядро не должно угадывать её эвристикой: угадывание даёт ложные срабатывания,
+    которые пользователь научится затыкать.
+    """
+    column = world.schema.get(name)
+    assert column is not None
+    stripped = ColumnSpec(
+        name=column.name,
+        role=Role.FEATURE,  # роль меняется, чтобы грануляция перестала быть обязательной
+        availability=Availability.UNKNOWN,
+    )
+    return World(frames=world.frames, schema=_replace_column(world.schema, stripped))
+
+
+def feature_from_the_future(world: World) -> World:
+    """Добавить признак, вычисленный после момента решения.
+
+    Значение известно только по факту наступления события, но объявлено
+    доступным при принятии решения.
+    """
+    frame = world.main.with_columns(
+        (pl.col("event_at") - pl.col("decided_at")).dt.total_days().alias("actual_days")
+    )
+    column = ColumnSpec(
+        name="actual_days",
+        role=Role.FEATURE,
+        availability=Availability.AT_DECISION,
+        source_of_claim=SOURCE,
+    )
+    return World(
+        frames={**world.frames, "main": frame},
+        schema=_add_column(world.schema, column),
+    )
+
+
+def outcome_component_as_feature(world: World) -> World:
+    """Объявить компонент исхода обычным признаком.
+
+    Лик, который проверки данных увидеть не могут: связь возникает в формуле
+    метки, а не в данных.
+    """
+    column = ColumnSpec(
+        name="event_at",
+        role=Role.FEATURE,
+        temporal=TemporalKind.INSTANT,
+        availability=Availability.AT_DECISION,
+        source_of_claim=SOURCE,
+    )
+    return World(frames=world.frames, schema=_replace_column(world.schema, column))
+
+
+def surrogate_key_as_entity(world: World) -> World:
+    """Подменить идентификатор сущности суррогатным ключом строки."""
+    frame = world.main.with_columns(pl.int_range(pl.len()).cast(pl.Utf8).alias("row_key"))
+    schema = Schema(
+        columns=[
+            ColumnSpec(name="row_key", role=Role.ENTITY_ID),
+            *[c for c in world.schema.columns if c.name != "entity_id"],
+            ColumnSpec(name="entity_id", role=Role.NATURAL_KEY),
+        ]
+    )
+    return World(frames={**world.frames, "main": frame}, schema=schema)
+
+
+def duplicate_rows(world: World, share: float = 0.15, seed: int = 3) -> World:
+    """Продублировать часть строк целиком."""
+    rng = np.random.default_rng(seed)
+    count = int(world.main.height * share)
+    idx = rng.choice(world.main.height, count, replace=False)
+    extra = world.main[idx.tolist()]
+    return world.replace_main(pl.concat([world.main, extra]))
+
+
+def missing_period(world: World, months: int = 1) -> World:
+    """Вырезать целый месяц из середины периода."""
+    lo = world.main["decided_at"].min()
+    hi = world.main["decided_at"].max()
+    start = lo + (hi - lo) / 2
+    stop = start + dt.timedelta(days=30 * months)
+    return world.replace_main(
+        world.main.filter((pl.col("decided_at") < start) | (pl.col("decided_at") >= stop))
+    )
+
+
+def truncated_tail(world: World, days: int = 45, keep: float = 0.04, seed: int = 5) -> World:
+    """Проредить хвост периода, имитируя обрыв сбора данных."""
+    rng = np.random.default_rng(seed)
+    edge = world.main["decided_at"].max() - dt.timedelta(days=days)
+    head = world.main.filter(pl.col("decided_at") < edge)
+    tail = world.main.filter(pl.col("decided_at") >= edge)
+    if tail.is_empty():
+        return world
+    take = max(1, int(tail.height * keep))
+    idx = rng.choice(tail.height, take, replace=False)
+    return world.replace_main(pl.concat([head, tail[idx.tolist()]]))
+
+
+def status_timestamp_conflict(world: World, count: int = 40, seed: int = 9) -> World:
+    """Оставить статус завершения там, где метка события отсутствует."""
+    rng = np.random.default_rng(seed)
+    idx = set(rng.choice(world.main.height, count, replace=False).tolist())
+    frame = world.main.with_columns(
+        pl.when(pl.int_range(pl.len()).is_in(list(idx)))
+        .then(None)
+        .otherwise(pl.col("event_at"))
+        .alias("event_at")
+    )
+    return world.replace_main(frame)
+
+
+def post_treatment_missingness(world: World, seed: int = 13) -> World:
+    """Сделать пропуск признака следствием исхода.
+
+    Пропуск объясняется статусом, а не свойством объекта: импутация нулём
+    превращает его в признак из будущего.
+    """
+    rng = np.random.default_rng(seed)
+    late = pl.col("event_at").dt.date() > pl.col("deadline_on").dt.date()
+    drop = pl.Series(rng.random(world.main.height) < 0.7)
+    frame = world.main.with_columns(
+        pl.when(late & drop).then(None).otherwise(pl.col("size")).alias("size"),
+        pl.when(late & drop).then(pl.lit("aborted")).otherwise(pl.col("status")).alias("status"),
+    )
+    return world.replace_main(frame)
+
+
+def non_stationary_target(world: World, seed: int = 17) -> World:
+    """Сломать связь признака с исходом во второй половине периода.
+
+    В первой половине короткий срок означает высокий риск, во второй связь
+    исчезает. Именно это на этапе 0 трижды переворачивало вывод.
+    """
+    rng = np.random.default_rng(seed)
+    midpoint = (
+        world.main["decided_at"].min()
+        + (world.main["decided_at"].max() - world.main["decided_at"].min()) / 2
+    )
+    frame = world.main.with_columns(pl.Series("_roll", rng.random(world.main.height)))
+    shifted = frame.with_columns(
+        pl.when(pl.col("decided_at") >= midpoint)
+        .then(
+            pl.when(pl.col("_roll") < 0.08)
+            .then(pl.col("deadline_on").dt.offset_by("3d"))
+            .otherwise(pl.col("deadline_on").dt.offset_by("30d"))
+        )
+        .otherwise(pl.col("deadline_on"))
+        .alias("deadline_on")
+    ).drop("_roll")
+    return world.replace_main(shifted)
+
+
+def entity_overlap(world: World, share: float = 0.1, seed: int = 19) -> World:
+    """Повторить часть сущностей в конце периода под теми же идентификаторами."""
+    rng = np.random.default_rng(seed)
+    count = int(world.main.height * share)
+    idx = rng.choice(world.main.height, count, replace=False)
+    repeats = world.main[idx.tolist()].with_columns(
+        (pl.col("decided_at") + pl.duration(days=400)).alias("decided_at")
+    )
+    return world.replace_main(pl.concat([world.main, repeats]))

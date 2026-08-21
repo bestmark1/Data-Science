@@ -19,9 +19,13 @@ def test_temporal_role_must_declare_granularity() -> None:
         ColumnSpec(name="deadline", role=Role.DEADLINE)
 
 
-def test_non_temporal_role_rejects_granularity() -> None:
-    with pytest.raises(ValidationError, match="неприменима"):
-        ColumnSpec(name="amount", role=Role.FEATURE, temporal=TemporalKind.DATE)
+def test_non_temporal_role_may_declare_granularity() -> None:
+    """Компонент исхода часто является меткой времени, и его грануляция важна."""
+    column = ColumnSpec(
+        name="happened_at", role=Role.OUTCOME_COMPONENT, temporal=TemporalKind.INSTANT
+    )
+
+    assert column.temporal is TemporalKind.INSTANT
 
 
 @pytest.mark.parametrize("availability", [Availability.AT_DECISION, Availability.AFTER])

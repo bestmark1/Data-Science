@@ -93,14 +93,16 @@ class ColumnSpec(BaseModel):
 
     @model_validator(mode="after")
     def _temporal_roles_declare_granularity(self) -> ColumnSpec:
+        """Временные роли обязаны объявить грануляцию; остальные — могут.
+
+        Компонент исхода часто является меткой времени, и именно сравнение его
+        с датой дало 16.5% ложных положительных меток на этапе 0. Запрещать ему
+        объявлять грануляцию значило бы закрыть глаза на самый дорогой случай.
+        """
         if self.role in TEMPORAL_ROLES and self.temporal is None:
             raise ValueError(
                 f"колонка {self.name!r} играет временную роль {self.role.value!r} "
                 "и обязана объявить грануляцию: date или instant"
-            )
-        if self.role not in TEMPORAL_ROLES and self.temporal is not None:
-            raise ValueError(
-                f"колонка {self.name!r} не играет временной роли, грануляция неприменима"
             )
         return self
 
