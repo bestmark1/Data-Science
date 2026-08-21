@@ -41,6 +41,9 @@ class Context:
     world: World
     outcome: OutcomeDefinition
     task: TaskSpec
+    split: object | None = None
+    """Результат временного сплита, если он построен. Проверки, которым он
+    нужен, отказываются выполняться без него по названной причине."""
 
 
 @runtime_checkable

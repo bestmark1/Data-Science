@@ -20,8 +20,14 @@ DECLARATIVE = [*CONTRACT_CHECKS, *DATA_CHECKS]
 """Проверки, читающие объявления и данные, но не сверяющие одно с другим."""
 
 
+from harness import context_for  # noqa: E402
+
+
 def report_for(bundle, task: TaskSpec = FULL):
-    return run_checks(list(ALL_CHECKS), Context(bundle.build(), bundle.outcome, task))
+    context = context_for(bundle)
+    if task is not FULL:
+        context = Context(context.world, context.outcome, task, context.split)
+    return run_checks(list(ALL_CHECKS), context)
 
 
 @pytest.mark.parametrize("bundle", NEGATIVE_CONTROLS, ids=lambda b: b.id)
@@ -43,7 +49,7 @@ def test_lying_declaration_escapes_declarative_checks() -> None:
     """Проверка объявлений читает то же ложное утверждение и бессильна."""
     bundle = BY_ID["feature-falsely-declared-available"]
 
-    report = run_checks(DECLARATIVE, Context(bundle.build(), bundle.outcome, FULL))
+    report = run_checks(DECLARATIVE, context_for(bundle))
 
     assert report.findings == frozenset()
     assert bundle.case.expectation.caught_by == frozenset({"N6"})

@@ -45,6 +45,7 @@ def _outcome(comparison: ComparisonMode = ComparisonMode.BY_DATE) -> OutcomeDefi
         missing_event={
             "completed": MissingEventMeaning.NOT_OCCURRED,
             "aborted": MissingEventMeaning.EXCLUDED,
+            "pending": MissingEventMeaning.NOT_OCCURRED,
         },
         estimand="событие произошло позже назначенного срока среди объектов, "
         "которые предполагалось обработать",
@@ -160,10 +161,13 @@ ALL: tuple[Bundle, ...] = (
     _bundle(
         "surrogate-key-as-entity",
         "Суррогатный ключ выдан за идентификатор сущности",
-        "Трение 01: признаки по истории объекта дали бы историю длиной в одну строку.",
-        {Finding.SURROGATE_KEY_AS_ENTITY},
+        "Трение 01: признаки по истории объекта дали бы историю длиной в одну строку. "
+        "Пересечение сущностей здесь причинно связано: объект, встречающийся в "
+        "нескольких строках, при временном сплите неизбежно попадает и в обучение, "
+        "и в оценку.",
+        {Finding.SURROGATE_KEY_AS_ENTITY, Finding.ENTITY_OVERLAP_ACROSS_SPLITS},
         lambda: inj.surrogate_key_as_entity(build_world()),
-        caught_by={"A2"},
+        caught_by={"A2", "N2"},
     ),
     _bundle(
         "duplicate-rows",
@@ -216,6 +220,14 @@ ALL: tuple[Bundle, ...] = (
         caught_by={"A11"},
     ),
     # --- дрейф -------------------------------------------------------------
+    _bundle(
+        "label-immaturity",
+        "Исход недавних объектов созревает после конца наблюдения",
+        "Трение 06: отбросив незрелые, получим окно из объектов с короткими сроками.",
+        {Finding.LABEL_IMMATURITY},
+        lambda: inj.late_maturing_labels(build_world()),
+        caught_by={"A12"},
+    ),
     _bundle(
         "non-stationary-target",
         "Связь признака с исходом меняется во времени",

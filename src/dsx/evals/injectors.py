@@ -243,3 +243,31 @@ def entity_overlap(world: World, share: float = 0.1, seed: int = 19) -> World:
         (pl.col("decided_at") + pl.duration(days=int(span.days // 2))).alias("decided_at")
     )
     return world.replace_main(pl.concat([world.main, repeats]).sort("decided_at"))
+
+
+def late_maturing_labels(
+    world: World, share: float = 0.2, ahead: int = 400, seed: int = 29
+) -> World:
+    """Отодвинуть срок далеко вперёд у части объектов по всему периоду.
+
+    Их исход станет известен уже после конца наблюдения. Затрагивается доля
+    объектов, а не хвост периода: незрелость — свойство самих объектов, а не
+    того, куда пришлось оценочное окно, и проверка не должна зависеть от
+    расположения окна.
+    """
+    rng = np.random.default_rng(seed)
+    picked = pl.Series(rng.random(world.main.height) < share)
+    frame = world.main.with_columns(
+        # Срок далеко впереди И события ещё нет: исход не наблюдаем. Одного
+        # сдвига срока мало — при наступившем событии метка уже известна.
+        pl.when(picked)
+        .then(pl.col("deadline_on").dt.offset_by(f"{ahead}d"))
+        .otherwise(pl.col("deadline_on"))
+        .alias("deadline_on"),
+        pl.when(picked).then(None).otherwise(pl.col("event_at")).alias("event_at"),
+        # Свой статус: объект, событие которого ещё не наступило, отличается от
+        # завершённого. Иначе один статус имел бы событие то есть, то нет — а
+        # это уже другой дефект (A5), и вердикт стал бы неинтерпретируемым.
+        pl.when(picked).then(pl.lit("pending")).otherwise(pl.col("status")).alias("status"),
+    )
+    return world.replace_main(frame)

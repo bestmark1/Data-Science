@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import datetime as dt
+
 import polars as pl
 
 from dsx.evals.world import World
@@ -25,11 +27,21 @@ LABEL = "__outcome"
 """Имя служебной колонки. Двойное подчёркивание, чтобы не столкнуться с данными."""
 
 
-def compute(world: World, definition: OutcomeDefinition) -> pl.DataFrame:
-    """Вернуть таблицу с колонкой исхода, отсеяв ненаблюдаемые строки.
+def compute(
+    world: World, definition: OutcomeDefinition, snapshot: dt.datetime | None = None
+) -> pl.DataFrame:
+    """Вернуть таблицу с колонкой исхода. Ненаблюдаемый исход остаётся пустым.
 
     Возвращается новая таблица, а не изменённый мир: исход — производная
     величина, и хранить её рядом с данными значит смешивать факт и вывод.
+
+    Отсутствие события означает исход только тогда, когда срок УЖЕ ИСТЁК.
+    Пока срок не наступил, исход не наблюдаем, и метка пуста. Без снимка
+    границей считается последнее наблюдённое событие.
+
+    Строки с пустой меткой не отсеиваются здесь: их доля в оценочном окне —
+    самостоятельная находка (A12), а молча отброшенное окно смещается в
+    сторону объектов с короткими сроками.
     """
     validate_outcome(definition, world.schema)
     frame = world.main
@@ -58,20 +70,32 @@ def compute(world: World, definition: OutcomeDefinition) -> pl.DataFrame:
         if meaning is not MissingEventMeaning.NOT_OCCURRED
     ]
 
-    labelled = frame.with_columns(
+    if snapshot is None:
+        observed = frame[definition.event_column].max()
+        snapshot = (
+            observed if observed is not None else frame[world.schema.decision_time.name].max()
+        )
+    horizon = pl.lit(snapshot).cast(pl.Datetime).dt.date()
+
+    return frame.with_columns(
         pl.when(pl.col(definition.event_column).is_null())
         .then(
-            # Событие не произошло. Опозданием считается только то, чей срок истёк;
-            # остальное ненаблюдаемо и отсеивается ниже.
-            pl.when(pl.col(status).is_in(excluded)).then(None).otherwise(1)
+            pl.when(pl.col(status).is_in(excluded))
+            .then(None)
+            .when(deadline < horizon)
+            .then(1)
+            .otherwise(None)  # срок ещё не наступил: исход не наблюдаем
         )
         .otherwise((event > deadline).cast(pl.Int8))
         .cast(pl.Int8)
         .alias(LABEL)
     )
 
-    return labelled.filter(pl.col(LABEL).is_not_null())
+
+def observable(frame: pl.DataFrame) -> pl.DataFrame:
+    """Строки с наблюдаемым исходом."""
+    return frame.filter(pl.col(LABEL).is_not_null())
 
 
 def positive_rate(frame: pl.DataFrame) -> float:
-    return float(frame[LABEL].mean())
+    return float(observable(frame)[LABEL].mean())
