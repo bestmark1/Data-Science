@@ -13,6 +13,7 @@ from dsx.outcome import (
     MissingEventCause,
     MissingEventMeaning,
     OutcomeDefinition,
+    PositiveClass,
 )
 from dsx.roles import ColumnSpec, Role, Schema, TemporalKind
 
@@ -52,6 +53,7 @@ def test_by_date_and_direct_comparison_differ() -> None:
             event_column="event_at",
             deadline_column="deadline_on",
             comparison=mode,
+            positive_class=PositiveClass.EVENT_AFTER_DEADLINE,
             missing_causes=[
                 MissingEventCause(
                     name="события не было",
@@ -75,6 +77,7 @@ def test_unknown_status_is_refused() -> None:
         event_column="event_at",
         deadline_column="deadline_on",
         comparison=ComparisonMode.BY_DATE,
+        positive_class=PositiveClass.EVENT_AFTER_DEADLINE,
         missing_causes=[
             MissingEventCause(
                 name="события не было",

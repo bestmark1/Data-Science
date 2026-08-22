@@ -19,6 +19,7 @@ from dsx.outcome import (
     ComparisonMode,
     MissingEventMeaning,
     OutcomeDefinition,
+    PositiveClass,
     validate_outcome,
 )
 from dsx.roles import Role
@@ -77,11 +78,19 @@ def compute(
     # Смысл для строк, не отнесённых ни к одной различимой причине.
     fallback_meaning = definition.fallback_meaning()
 
+    after = definition.positive_class is PositiveClass.EVENT_AFTER_DEADLINE
+    observed = (event > deadline) if after else (event <= deadline)
+
     def meaning_expr(meaning: MissingEventMeaning | None) -> pl.Expr:
-        """Метка для строки без события при известном смысле отсутствия."""
+        """Метка для строки без события при известном смысле отсутствия.
+
+        Событие, не случившееся никогда, положительно при одном направлении и
+        отрицательно при другом. Отсутствие доставки к сроку — опоздание;
+        отсутствие отказа в горизонте — исправная работа.
+        """
         if meaning is MissingEventMeaning.NOT_OCCURRED:
-            # Отсутствие — наблюдение: опозданием считается истёкший срок.
-            return pl.when(deadline < horizon).then(1).otherwise(None)
+            # Отсутствие — наблюдение, но только после того, как срок истёк.
+            return pl.when(deadline < horizon).then(1 if after else 0).otherwise(None)
         # Цензура и исключение из популяции: исход не наблюдаем.
         return pl.lit(None)
 
@@ -99,7 +108,7 @@ def compute(
     return frame.with_columns(
         pl.when(pl.col(definition.event_column).is_null())
         .then(missing_label)
-        .otherwise((event > deadline).cast(pl.Int8))
+        .otherwise(observed.cast(pl.Int8))
         .cast(pl.Int8)
         .alias(LABEL)
     )

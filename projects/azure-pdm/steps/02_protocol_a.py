@@ -20,6 +20,7 @@ from dsx.outcome import (
     MissingEventCause,
     MissingEventMeaning,
     OutcomeDefinition,
+    PositiveClass,
 )
 from dsx.roles import Availability, ColumnSpec, FeatureWindow, Role, Schema, TemporalKind
 
@@ -143,6 +144,9 @@ def main() -> int:
         event_column="failed_at",
         deadline_column="horizon_on",
         comparison=ComparisonMode.DIRECT,
+        # Положителен отказ В ПРЕДЕЛАХ горизонта. До правки F-10 ядро
+        # считало обратное, и объявленный estimand это не ловил.
+        positive_class=PositiveClass.EVENT_WITHIN_DEADLINE,
         missing_causes=CAUSES,
         estimand=f"отказ любого компонента в течение {HORIZON_DAYS} дней после визита",
     )

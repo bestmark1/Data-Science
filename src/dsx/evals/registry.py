@@ -18,6 +18,7 @@ from dsx.outcome import (
     MissingEventCause,
     MissingEventMeaning,
     OutcomeDefinition,
+    PositiveClass,
 )
 from dsx.task import ObjectLifetime
 
@@ -62,6 +63,7 @@ def _outcome(comparison: ComparisonMode = ComparisonMode.BY_DATE) -> OutcomeDefi
         event_column="event_at",
         deadline_column="deadline_on",
         comparison=comparison,
+        positive_class=PositiveClass.EVENT_AFTER_DEADLINE,
         missing_causes=[
             MissingEventCause(
                 name="событие не произошло",

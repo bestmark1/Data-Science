@@ -15,18 +15,21 @@ import polars as pl
 
 from dsx.assumptions import AssumptionRegistry, Basis
 from dsx.checks import ALL_CHECKS, Context, run_checks
-from dsx.outcome import ComparisonMode, OutcomeDefinition
+from dsx.label import LABEL
+from dsx.outcome import ComparisonMode, OutcomeDefinition, PositiveClass
 from dsx.policy import OverrideLedger
 from dsx.report import Study
 from dsx.roles import Role
 from dsx.samples import SampleLedger
 from dsx.split import (
+    KNOWN_AT,
     Window,
     entity_overlap,
     extent_of,
     positive_rates,
     reserved_extent,
     split_by_windows,
+    with_label_known_at,
 )
 from dsx.task import ObjectLifetime, OutcomeTiming, TargetKind, TaskSpec
 
@@ -55,6 +58,9 @@ def main() -> int:
         event_column="failed_at",
         deadline_column="horizon_on",
         comparison=ComparisonMode.DIRECT,
+        # Положителен отказ В ПРЕДЕЛАХ горизонта. До правки F-10 ядро
+        # считало обратное, и объявленный estimand это не ловил.
+        positive_class=PositiveClass.EVENT_WITHIN_DEADLINE,
         # Причины те же: они свойство предметной области, а не постановки.
         missing_causes=protocol_a.CAUSES,
         estimand=f"отказ любого компонента в течение {HORIZON_DAYS} дней после дня решения",
@@ -151,17 +157,21 @@ def main() -> int:
     print()
 
     print("=== P-9: момент узнавания исхода ===")
-    labelled = frame.filter(pl.col("failed_at").is_not_null())
-    positives = labelled.filter(pl.col("failed_at") <= pl.col("horizon_on"))
-    gap = (pl.col("horizon_on") - pl.col("failed_at")).dt.total_days()
-    lag = positives.select(gap.alias("d"))["d"]
+    known = with_label_known_at(world, definition, snapshot)
+    early = known.filter(pl.col(LABEL) == 1).select(
+        (pl.col("horizon_on") - pl.col(KNOWN_AT)).dt.total_days().alias("d")
+    )["d"]
+    late = known.filter(pl.col(LABEL) == 0).select(
+        (pl.col("horizon_on") - pl.col(KNOWN_AT)).dt.total_days().alias("d")
+    )["d"]
     print(
-        f"положительных решений: {positives.height:,}; исход у них известен в среднем "
-        f"за {lag.mean():.1f} дн до конца горизонта (медиана {lag.median():.0f})"
+        f"отказ известен в среднем за {early.mean():.1f} дн до конца горизонта, "
+        f"его отсутствие — за {late.mean():.1f} дн"
     )
     print(
-        "сплит откладывает их до конца горизонта: отрицательные становятся известны "
-        "только там, положительные — раньше, но ядро хранит одно время узнавания"
+        "предсказание не подтвердилось: момент узнавания уже зависит от метки. "
+        "Не выражено другое — задержка ОБНАРУЖЕНИЯ: ядро считает, что о событии "
+        "узнают в момент, когда оно произошло"
     )
     print()
 

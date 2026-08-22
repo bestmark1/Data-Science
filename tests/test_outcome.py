@@ -12,6 +12,7 @@ from dsx.outcome import (
     MissingEventMeaning,
     OutcomeContractError,
     OutcomeDefinition,
+    PositiveClass,
     validate_outcome,
 )
 from dsx.roles import ColumnSpec, Role, Schema, TemporalKind
@@ -33,6 +34,7 @@ def definition(**overrides) -> OutcomeDefinition:
         "event_column": "event_at",
         "deadline_column": "deadline_on",
         "comparison": ComparisonMode.BY_DATE,
+        "positive_class": PositiveClass.EVENT_AFTER_DEADLINE,
         "missing_causes": [BY_STATUS],
         "estimand": "событие позже назначенного срока",
     }

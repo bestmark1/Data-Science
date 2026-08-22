@@ -14,7 +14,7 @@ from pathlib import Path
 
 from dsx.assumptions import AssumptionRegistry, Basis
 from dsx.checks import ALL_CHECKS, Context, run_checks
-from dsx.outcome import ComparisonMode, OutcomeDefinition
+from dsx.outcome import ComparisonMode, OutcomeDefinition, PositiveClass
 from dsx.policy import OverrideLedger
 from dsx.report import Study
 from dsx.roles import Role
@@ -43,6 +43,9 @@ def main() -> int:
         event_column="failed_at",
         deadline_column="horizon_on",
         comparison=ComparisonMode.DIRECT,
+        # Положителен отказ В ПРЕДЕЛАХ горизонта. До правки F-10 ядро
+        # считало обратное, и объявленный estimand это не ловил.
+        positive_class=PositiveClass.EVENT_WITHIN_DEADLINE,
         missing_causes=protocol_a.CAUSES,
         estimand=f"отказ любого компонента в течение {HORIZON_DAYS} дней после визита",
     )
