@@ -28,11 +28,12 @@ from dsx.roles import Availability, Role
 from dsx.task import Premise
 
 
-def separation(values: pl.Series, labels: pl.Series) -> float | None:
-    """Насколько признак разделяет классы, от 0 до 0.5.
+def association(values: pl.Series, labels: pl.Series) -> float | None:
+    """Связь признака с исходом СО ЗНАКОМ, от -0.5 до 0.5.
 
-    Считается через ранговую статистику: ноль означает отсутствие связи,
-    половина — идеальное разделение. Знак не важен, важна сила.
+    Знак важен там, где сравниваются окна: смена знака означает, что процесс
+    изменился, а не что связь ослабла. Именно это на этапе 0 трижды
+    переворачивало вывод.
     """
     mask = values.is_not_null()
     values, labels = values.filter(mask), labels.filter(mask)
@@ -47,7 +48,17 @@ def separation(values: pl.Series, labels: pl.Series) -> float | None:
     ranks = values.rank(method="average").to_numpy()
     rank_sum = float(ranks[labels.to_numpy().astype(bool)].sum())
     auc = (rank_sum - positives * (positives + 1) / 2) / (positives * negatives)
-    return abs(auc - 0.5)
+    return auc - 0.5
+
+
+def separation(values: pl.Series, labels: pl.Series) -> float | None:
+    """Насколько признак разделяет классы, от 0 до 0.5.
+
+    Считается через ранговую статистику: ноль означает отсутствие связи,
+    половина — идеальное разделение. Знак не важен, важна сила.
+    """
+    signed = association(values, labels)
+    return None if signed is None else abs(signed)
 
 
 @dataclass(frozen=True)

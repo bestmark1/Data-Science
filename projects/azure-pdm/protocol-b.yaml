@@ -34,7 +34,8 @@ columns:
   - {name: errors_7d, role: feature, availability: at_decision, source_of_claim: "журнал ошибок", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", measured_at: measured_at}
 
   # Справочник машин. Времени внесения записи нет, окно остаётся объявлением.
-  - {name: age, role: feature, availability: at_decision, source_of_claim: "справочник машин", window_lookback_days: 0, window_source: "справочник машин"}
+  # Доменное ожидание: старая машина отказывает чаще.
+  - {name: age, role: feature, availability: at_decision, source_of_claim: "справочник машин", window_lookback_days: 0, window_source: "справочник машин", direction: increases}
   - {name: model, role: feature, availability: at_decision, source_of_claim: "справочник машин", window_lookback_days: 0, window_source: "справочник машин"}
 
 outcome:

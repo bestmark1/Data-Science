@@ -33,6 +33,8 @@ columns:
     source_of_claim: "владелец данных (гипотетический)"
     window_lookback_days: 0
     window_source: "справочник машин"
+    # Доменное ожидание: старая машина отказывает чаще.
+    direction: increases
   - name: model
     role: feature
     availability: at_decision

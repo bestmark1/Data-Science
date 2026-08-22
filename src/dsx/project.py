@@ -32,7 +32,15 @@ from dsx.outcome import (
     OutcomeDefinition,
     PositiveClass,
 )
-from dsx.roles import Availability, ColumnSpec, FeatureWindow, Role, Schema, TemporalKind
+from dsx.roles import (
+    Availability,
+    ColumnSpec,
+    Direction,
+    FeatureWindow,
+    Role,
+    Schema,
+    TemporalKind,
+)
 from dsx.split import Window
 from dsx.task import ObjectLifetime, OutcomeTiming, TargetKind, TaskSpec
 
@@ -52,6 +60,8 @@ class ColumnForm(BaseModel):
     window_lag_days: float = 0.0
     window_source: str | None = None
     measured_at: str | None = None
+    direction: Direction | None = None
+    """Куда признак двигает риск по доменному знанию, до просмотра данных."""
 
     def to_spec(self) -> ColumnSpec:
         window = None
@@ -74,6 +84,7 @@ class ColumnForm(BaseModel):
             source_of_claim=self.source_of_claim,
             window=window,
             measured_at=self.measured_at,
+            direction=self.direction,
         )
 
 

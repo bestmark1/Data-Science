@@ -45,6 +45,9 @@ class Finding(StrEnum):
     FEATURE_WINDOW_OVERLAP = "feature_window_overlap"
     NO_RESERVED_MEASUREMENT_SAMPLE = "no_reserved_measurement_sample"
     FEATURE_WINDOW_MISMATCH = "feature_window_mismatch"
+    UNSTABLE_FEATURE_RELATION = "unstable_feature_relation"
+    INCOMPARABLE_SUPPORT = "incomparable_support"
+    DIRECTION_CONTRADICTS_DOMAIN = "direction_contradicts_domain"
 
 
 class Expectation(BaseModel):

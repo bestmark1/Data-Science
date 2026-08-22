@@ -109,6 +109,18 @@ class TemporalKind(StrEnum):
     INSTANT = "instant"
 
 
+class Direction(StrEnum):
+    """Куда признак двигает вероятность положительного исхода.
+
+    Объявляется из доменного знания до просмотра данных. Нужна, чтобы
+    сравнить ожидание с наблюдением: расхождение означает либо неверное
+    понимание процесса, либо испорченный признак, и оба случая дороги.
+    """
+
+    INCREASES = "increases"
+    DECREASES = "decreases"
+
+
 class Availability(StrEnum):
     """Доступность значения в момент решения."""
 
@@ -146,6 +158,10 @@ class ColumnSpec(BaseModel):
     окна: умолчание, совпадающее с честным ответом, неотличимо от пропуска.
     """
 
+    direction: Direction | None = None
+    """Куда признак двигает риск по доменному знанию. None означает, что
+    ожидания нет, и сверять наблюдение не с чем."""
+
     measured_at: str | None = None
     """Колонка с моментом получения значения. None означает, что сверить
     объявленное окно с данными нечем, и оно остаётся объявлением."""
@@ -178,6 +194,15 @@ class ColumnSpec(BaseModel):
             raise ValueError(
                 f"колонка {self.name!r} играет роль {self.role.value!r} и окна "
                 "признака иметь не может"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _only_features_have_a_direction(self) -> ColumnSpec:
+        if self.direction is not None and self.role is not Role.FEATURE:
+            raise ValueError(
+                f"колонка {self.name!r} играет роль {self.role.value!r} и доменного "
+                "направления иметь не может"
             )
         return self
 

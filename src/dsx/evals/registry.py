@@ -20,6 +20,7 @@ from dsx.outcome import (
     OutcomeDefinition,
     PositiveClass,
 )
+from dsx.roles import Direction
 from dsx.task import ObjectLifetime
 
 
@@ -318,10 +319,49 @@ ALL: tuple[Bundle, ...] = (
     _bundle(
         "non-stationary-target",
         "Связь признака с исходом меняется во времени",
-        "Трения 07 и 12: именно это трижды переворачивало вывод этапа 0.",
+        "Трения 07 и 12: именно это трижды переворачивало вывод этапа 0.\n"
+        "Перелом приходится между вторым и третьим окном намеренно. Первая версия "
+        "ломала связь в середине периода, тогда как все оценочные окна лежат в его "
+        "поздней части: окна оказывались по одну сторону перелома и различались только "
+        "шумом, а проверка объявляла этот шум дрейфом.",
         {Finding.NON_STATIONARY_TARGET},
         lambda: inj.non_stationary_target(build_world()),
         caught_by={"N3", "N4"},
+    ),
+    _bundle(
+        "flipped-feature-relation",
+        "Признак меняет знак связи с исходом, доля класса та же",
+        "Проверяет N4 отдельно от N3: зеркалирование значений сохраняет и распределение "
+        "признака, и долю положительного класса. Меняется только знак связи.",
+        {Finding.UNSTABLE_FEATURE_RELATION},
+        lambda: inj.flipped_feature_relation(build_world()),
+        caught_by={"N4"},
+    ),
+    _bundle(
+        "disjoint-feature-support",
+        "Значения признака в окнах не пересекаются",
+        "Условие осмысленности N4: пока поддержка не пересекается, смена знака означает "
+        "сравнение разных участков шкалы, а не разных времён.",
+        {Finding.INCOMPARABLE_SUPPORT},
+        lambda: inj.disjoint_support(build_world()),
+        caught_by={"N5"},
+    ),
+    _bundle(
+        "direction-contradicts-domain",
+        "Объявленное доменное направление противоречит данным",
+        "Расхождение ожидания с наблюдением означает либо неверное понимание процесса, "
+        "либо испорченный признак. Оба случая дороже ошибки в модели.",
+        {Finding.DIRECTION_CONTRADICTS_DOMAIN},
+        lambda: inj.declared_direction(build_world(), "lead_days", Direction.INCREASES),
+        caught_by={"N8"},
+    ),
+    _bundle(
+        "clean-direction-matches-domain",
+        "Объявленное направление совпадает с наблюдаемым",
+        "Отрицательный контроль к N8: проверка, срабатывающая при любом объявленном "
+        "направлении, сделала бы объявление бессмысленным.",
+        set(),
+        lambda: inj.declared_direction(build_world(), "lead_days", Direction.DECREASES),
     ),
 )
 

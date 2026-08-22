@@ -15,7 +15,15 @@ import numpy as np
 import polars as pl
 
 from dsx.evals.world import World
-from dsx.roles import Availability, ColumnSpec, FeatureWindow, Role, Schema, TemporalKind
+from dsx.roles import (
+    Availability,
+    ColumnSpec,
+    Direction,
+    FeatureWindow,
+    Role,
+    Schema,
+    TemporalKind,
+)
 
 SOURCE = "инжектор"
 
@@ -202,17 +210,14 @@ def post_treatment_missingness(world: World, seed: int = 13) -> World:
     return world.replace_main(frame)
 
 
-def non_stationary_target(world: World, seed: int = 17) -> World:
+def non_stationary_target(world: World, seed: int = 17, at_fraction: float = 0.72) -> World:
     """Сломать связь признака с исходом во второй половине периода.
 
     В первой половине короткий срок означает высокий риск, во второй связь
     исчезает. Именно это на этапе 0 трижды переворачивало вывод.
     """
     rng = np.random.default_rng(seed)
-    midpoint = (
-        world.main["decided_at"].min()
-        + (world.main["decided_at"].max() - world.main["decided_at"].min()) / 2
-    )
+    midpoint = _moment_at(world.main, at_fraction)
     frame = world.main.with_columns(pl.Series("_roll", rng.random(world.main.height)))
     shifted = frame.with_columns(
         pl.when(pl.col("decided_at") >= midpoint)
@@ -328,3 +333,65 @@ def stale_measurements(world: World, age_days: int = 3, lookback_days: float = 0
         ColumnSpec(name="measured_at", role=Role.MEASURED_AT, temporal=TemporalKind.INSTANT)
     )
     return World(frames={**world.frames, "main": frame}, schema=Schema(columns=columns))
+
+
+def _moment_at(frame: pl.DataFrame, fraction: float):
+    """Момент внутри периода наблюдения по доле от его длины.
+
+    Перелом должен приходиться МЕЖДУ оценочными окнами, иначе все окна
+    оказываются по одну сторону от него и контраста не возникает.
+    """
+    lo, hi = frame["decided_at"].min(), frame["decided_at"].max()
+    return lo + (hi - lo) * fraction
+
+
+def flipped_feature_relation(
+    world: World, feature: str = "lead_days", at_fraction: float = 0.72
+) -> World:
+    """Развернуть связь признака с исходом во второй половине периода.
+
+    Значения зеркалятся относительно медианы: распределение признака остаётся
+    прежним, доля класса тоже, меняется только знак связи. Отличается от
+    non_stationary_target тем, что не трогает долю положительного класса —
+    иначе нельзя проверить, что N4 видит смену знака сама по себе.
+    """
+    frame = world.main
+    midpoint = _moment_at(frame, at_fraction)
+    median = float(frame[feature].median())
+    return world.replace_main(
+        frame.with_columns(
+            pl.when(pl.col("decided_at") >= midpoint)
+            .then(2 * median - pl.col(feature))
+            .otherwise(pl.col(feature))
+            .alias(feature)
+        )
+    )
+
+
+def disjoint_support(
+    world: World, feature: str = "size", shift: float = 1000.0, at_fraction: float = 0.72
+) -> World:
+    """Развести значения признака по окнам так, что они не пересекаются.
+
+    Сравнивать связь между окнами при такой поддержке нельзя: сравниваются
+    разные участки шкалы, а не разные времена.
+    """
+    frame = world.main
+    midpoint = _moment_at(frame, at_fraction)
+    return world.replace_main(
+        frame.with_columns(
+            pl.when(pl.col("decided_at") >= midpoint)
+            .then(pl.col(feature) + shift)
+            .otherwise(pl.col(feature))
+            .alias(feature)
+        )
+    )
+
+
+def declared_direction(world: World, feature: str, direction: Direction) -> World:
+    """Объявить доменное направление связи признака с исходом."""
+    columns = [
+        c.model_copy(update={"direction": direction}) if c.name == feature else c
+        for c in world.schema.columns
+    ]
+    return World(frames=world.frames, schema=Schema(columns=columns))
