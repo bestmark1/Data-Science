@@ -24,6 +24,15 @@ class TargetKind(StrEnum):
 
     BINARY = "binary"
     REGRESSION = "regression"
+    COMPETING = "competing"
+    """Несколько взаимоисключающих исходов: наступает не более одного.
+
+    Отличается от многоклассовой задачи тем, что наступление одного исхода
+    ОБРЫВАЕТ наблюдение за остальными. Отказ одного компонента не является
+    отрицательным исходом для другого: машину остановили и починили, и что
+    случилось бы со вторым компонентом, неизвестно.
+    """
+
     RANKING = "ranking"
     SURVIVAL = "survival"
     UPLIFT = "uplift"
@@ -99,6 +108,18 @@ class TaskSpec(BaseModel):
     is_stream: bool = False
     """Собираются ли данные регулярным временным потоком."""
 
+    kinds_collapsed: bool | None = None
+    """Намеренно ли несколько видов событий сведены в один исход.
+
+    None означает, что ответа нет. Свести четыре вида отказа в исход «отказало
+    хоть что-то» бывает верно: если вмешательство одно на все виды, различать
+    их незачем. Бывает и ошибкой: если ремонт адресный, модель предсказывает
+    не то, чем управляют.
+
+    Из данных это не выводится — как и жизненный цикл объекта. Поэтому
+    блокируется отсутствие ответа, а не сама склейка.
+    """
+
     def satisfies(self, premise: Premise) -> bool:
         """Выполнена ли предпосылка."""
         match premise:
@@ -121,7 +142,12 @@ class TaskSpec(BaseModel):
         return frozenset(p for p in premises if not self.satisfies(p))
 
 
-SUPPORTED = frozenset({(TargetKind.BINARY, OutcomeTiming.DELAYED)})
+SUPPORTED = frozenset(
+    {
+        (TargetKind.BINARY, OutcomeTiming.DELAYED),
+        (TargetKind.COMPETING, OutcomeTiming.DELAYED),
+    }
+)
 """Комбинации, для которых есть реализация. Интерфейс шире реализации намеренно."""
 
 

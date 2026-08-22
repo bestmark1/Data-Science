@@ -331,9 +331,51 @@ class DeclaredDirectionHolds:
         return signals
 
 
+@dataclass(frozen=True)
+class CompetingKindsDeclared:
+    """N12. Виды событий сведены в один исход, и не объявлено, намеренно ли.
+
+    Свести четыре вида отказа в исход «отказало хоть что-то» бывает верно:
+    если вмешательство одно на все виды, различать их незачем. Бывает и
+    ошибкой: если ремонт адресный, модель предсказывает не то, чем управляют.
+
+    По данным эти случаи неотличимы, поэтому блокируется отсутствие ответа,
+    а не сама склейка. Ровно та же развилка, что с жизненным циклом объекта.
+    """
+
+    requirement: str = "N12"
+    premises: frozenset[Premise] = frozenset({Premise.UNIVERSAL})
+    detects: frozenset[Finding] = frozenset({Finding.COMPETING_KINDS_COLLAPSED})
+
+    def run(self, context: Context) -> list[Signal]:
+        from dsx.competing import kinds_in
+        from dsx.task import TargetKind
+
+        kinds = kinds_in(context.world)
+        if len(kinds) < 2:
+            raise NotApplicable("видов события меньше двух: конкуренции нет")
+        if context.task.target_kind is TargetKind.COMPETING:
+            return []  # виды различаются, склейки нет
+        if context.task.kinds_collapsed is not None:
+            return []  # ответ дан
+
+        return [
+            Signal(
+                Finding.COMPETING_KINDS_COLLAPSED,
+                f"в данных {len(kinds)} видов события ({', '.join(kinds)}), а исход "
+                "объявлен одним. Объявите, намеренно ли: если вмешательство адресное, "
+                "модель предсказывает не то, чем управляют. Наступление одного вида "
+                "к тому же обрывает наблюдение за остальными, и такие строки не "
+                "отрицательны, а неизвестны",
+                blocking=True,
+            )
+        ]
+
+
 DRIFT_CHECKS = [
     TargetRateStationarity(),
     ComparableSupport(),
     FeatureRelationStability(),
     DeclaredDirectionHolds(),
+    CompetingKindsDeclared(),
 ]

@@ -48,6 +48,7 @@ class Finding(StrEnum):
     UNSTABLE_FEATURE_RELATION = "unstable_feature_relation"
     INCOMPARABLE_SUPPORT = "incomparable_support"
     DIRECTION_CONTRADICTS_DOMAIN = "direction_contradicts_domain"
+    COMPETING_KINDS_COLLAPSED = "competing_kinds_collapsed"
 
 
 class Expectation(BaseModel):

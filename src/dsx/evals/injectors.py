@@ -395,3 +395,27 @@ def declared_direction(world: World, feature: str, direction: Direction) -> Worl
         for c in world.schema.columns
     ]
     return World(frames=world.frames, schema=Schema(columns=columns))
+
+
+def competing_event_kinds(world: World, kinds: int = 4, seed: int = 29) -> World:
+    """Разметить событие по видам: наступает не более одного из нескольких.
+
+    Само по себе дефектом не является — это устройство предметной области.
+    Дефектом становится молчаливое сведение видов в один исход: строка, где
+    наступил конкурирующий вид, не отрицательна, а неизвестна.
+    """
+    rng = np.random.default_rng(seed)
+    frame = world.main
+    labels = [f"kind{i + 1}" for i in range(kinds)]
+    drawn = [labels[int(i)] for i in rng.integers(0, kinds, frame.height)]
+
+    frame = frame.with_columns(
+        pl.when(pl.col("event_at").is_not_null())
+        .then(pl.Series("event_kind", drawn))
+        .otherwise(None)
+        .alias("event_kind")
+    )
+    schema = Schema(
+        columns=[*world.schema.columns, ColumnSpec(name="event_kind", role=Role.EVENT_KIND)]
+    )
+    return World(frames={**world.frames, "main": frame}, schema=schema)
