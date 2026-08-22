@@ -12,6 +12,24 @@ TASK = TaskSpec(
 )
 
 
+def task_for(world) -> TaskSpec:
+    """Объявить предпосылки так, как они есть в данных.
+
+    Объявлять их наугад — ровно та ошибка, которую ловит проверка S6: стенд
+    сам объявлял наличие процесса там, где статус принимает одно значение.
+    """
+    from dsx.premises import _process_observed, _stream_observed
+
+    has_process, _ = _process_observed(world)
+    is_stream, _ = _stream_observed(world)
+    return TaskSpec(
+        target_kind=TargetKind.BINARY,
+        outcome_timing=OutcomeTiming.DELAYED,
+        has_process=has_process,
+        is_stream=is_stream,
+    )
+
+
 def context_for(bundle):
     """Стенд: снимок — конец НАБЛЮДЕНИЯ, окна отстоят от него.
 
@@ -30,7 +48,7 @@ def context_for(bundle):
         split = split_by_windows(world, bundle.outcome, windows, snapshot)
     except Exception:
         split = None
-    return Context(world, bundle.outcome, TASK, split)
+    return Context(world, bundle.outcome, task_for(world), split)
 
 
 def report_for(bundle, checks=None):

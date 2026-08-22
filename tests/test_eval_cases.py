@@ -41,6 +41,9 @@ def test_every_declared_finding_is_covered_by_some_case() -> None:
         Finding.JOIN_WITHOUT_DECLARED_GRAIN,
         Finding.ROW_INFLATION_ON_JOIN,
         Finding.UNDECLARED_AVAILABILITY,
+        # Проверяется напрямую в test_premises.py: расхождение объявления с
+        # данными — свойство пары "мир + объявленная задача", а не мира.
+        Finding.PREMISE_MISMATCH,
     }
     assert uncovered <= protocol_scope, f"не покрыты кейсами: {uncovered - protocol_scope}"
 

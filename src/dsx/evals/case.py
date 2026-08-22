@@ -40,6 +40,7 @@ class Finding(StrEnum):
     LABEL_IMMATURITY = "label_immaturity"
     NON_STATIONARY_TARGET = "non_stationary_target"
     SAMPLE_ALREADY_SPENT = "sample_already_spent"
+    PREMISE_MISMATCH = "premise_mismatch"
 
 
 class Expectation(BaseModel):

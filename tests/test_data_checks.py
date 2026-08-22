@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from dsx.checks import ALL_CHECKS, CONTRACT_CHECKS, DATA_CHECKS, Context, run_checks
+from dsx.evals.case import Finding
 from dsx.evals.registry import ALL, BY_ID, NEGATIVE_CONTROLS
 from dsx.task import OutcomeTiming, TargetKind, TaskSpec
 
@@ -76,7 +77,9 @@ def test_stream_checks_are_skipped_on_static_data() -> None:
     report = report_for(bundle, static)
 
     assert {"A6", "A7"} <= {s.requirement for s in report.skipped}
-    assert report.findings == frozenset()
+    # Ложное объявление отсутствия потока теперь само является находкой (F-4):
+    # выключить проверку молча больше нельзя.
+    assert report.findings == frozenset({Finding.PREMISE_MISMATCH})
 
 
 def test_process_checks_are_skipped_without_a_process() -> None:

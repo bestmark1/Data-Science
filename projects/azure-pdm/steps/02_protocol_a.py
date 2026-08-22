@@ -9,13 +9,12 @@
 
 from __future__ import annotations
 
-import datetime as dt
 from pathlib import Path
 
 import polars as pl
 
 from dsx.evals.world import World
-from dsx.label import LabelError, compute
+from dsx.label import compute
 from dsx.outcome import ComparisonMode, MissingEventMeaning, OutcomeDefinition
 from dsx.roles import Availability, ColumnSpec, Role, Schema, TemporalKind
 
@@ -27,9 +26,7 @@ SOURCE = "владелец данных (гипотетический)"
 
 def build_case() -> World:
     """Собрать таблицу решений: одна строка на визит обслуживания."""
-    maint = pl.read_csv(RAW / "PdM_maint.csv").with_columns(
-        pl.col("datetime").str.to_datetime()
-    )
+    maint = pl.read_csv(RAW / "PdM_maint.csv").with_columns(pl.col("datetime").str.to_datetime())
     failures = pl.read_csv(RAW / "PdM_failures.csv").with_columns(
         pl.col("datetime").str.to_datetime().alias("failed_at")
     )
@@ -70,7 +67,9 @@ def build_case() -> World:
             ColumnSpec(name="fabricated_status", role=Role.STATUS),
             ColumnSpec(name="machine_key", role=Role.NATURAL_KEY),
             ColumnSpec(name="decided_at", role=Role.DECISION_TIME, temporal=TemporalKind.INSTANT),
-            ColumnSpec(name="failed_at", role=Role.OUTCOME_COMPONENT, temporal=TemporalKind.INSTANT),
+            ColumnSpec(
+                name="failed_at", role=Role.OUTCOME_COMPONENT, temporal=TemporalKind.INSTANT
+            ),
             ColumnSpec(name="horizon_on", role=Role.DEADLINE, temporal=TemporalKind.INSTANT),
             ColumnSpec(
                 name="components_serviced",
@@ -79,11 +78,15 @@ def build_case() -> World:
                 source_of_claim=SOURCE,
             ),
             ColumnSpec(
-                name="age", role=Role.FEATURE, availability=Availability.AT_DECISION,
+                name="age",
+                role=Role.FEATURE,
+                availability=Availability.AT_DECISION,
                 source_of_claim=SOURCE,
             ),
             ColumnSpec(
-                name="model", role=Role.FEATURE, availability=Availability.AT_DECISION,
+                name="model",
+                role=Role.FEATURE,
+                availability=Availability.AT_DECISION,
                 source_of_claim=SOURCE,
             ),
         ]
@@ -94,8 +97,10 @@ def build_case() -> World:
 def main() -> int:
     world = build_case()
     print(f"визитов: {world.main.height:,}, машин: {world.main['machine_key'].n_unique()}")
-    print(f"с отказом в горизонте {HORIZON_DAYS} дн: "
-          f"{world.main.filter(pl.col('failed_at') <= pl.col('horizon_on')).height:,}")
+    print(
+        f"с отказом в горизонте {HORIZON_DAYS} дн: "
+        f"{world.main.filter(pl.col('failed_at') <= pl.col('horizon_on')).height:,}"
+    )
     print()
 
     definition = OutcomeDefinition(

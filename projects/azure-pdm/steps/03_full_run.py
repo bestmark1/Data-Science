@@ -11,11 +11,8 @@ import datetime as dt
 import importlib.util
 from pathlib import Path
 
-import polars as pl
-
 from dsx.assumptions import AssumptionRegistry, Basis
 from dsx.checks import ALL_CHECKS, Context, run_checks
-from dsx.label import LABEL, compute
 from dsx.outcome import ComparisonMode, MissingEventMeaning, OutcomeDefinition
 from dsx.policy import OverrideLedger
 from dsx.report import Study
@@ -26,9 +23,7 @@ from dsx.task import OutcomeTiming, TargetKind, TaskSpec
 PROJECT = Path(__file__).resolve().parent.parent
 HORIZON_DAYS = 30
 
-spec = importlib.util.spec_from_file_location(
-    "protocol_a", PROJECT / "steps" / "02_protocol_a.py"
-)
+spec = importlib.util.spec_from_file_location("protocol_a", PROJECT / "steps" / "02_protocol_a.py")
 protocol_a = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(protocol_a)
 
@@ -46,8 +41,8 @@ def main() -> int:
     task = TaskSpec(
         target_kind=TargetKind.BINARY,
         outcome_timing=OutcomeTiming.DELAYED,
-        has_process=False,   # статуса процесса нет
-        is_stream=False,     # решения событийные, не поток
+        has_process=False,  # статуса процесса нет
+        is_stream=False,  # решения событийные, не поток
     )
 
     lo = world.main["decided_at"].min()
@@ -89,17 +84,23 @@ def main() -> int:
     assumptions = AssumptionRegistry()
     assumptions.record(
         "визит на обслуживание является моментом, когда возможно вмешательство",
-        basis=Basis.DOMAIN_KNOWLEDGE, author="автор",
-        consequence="момент решения выбран там, где действие невозможно, и прогноз бесполезен")
+        basis=Basis.DOMAIN_KNOWLEDGE,
+        author="автор",
+        consequence="момент решения выбран там, где действие невозможно, и прогноз бесполезен",
+    )
     assumptions.record(
         "отсутствие записи об отказе означает, что отказа не было",
-        basis=Basis.DOMAIN_KNOWLEDGE, author="автор",
+        basis=Basis.DOMAIN_KNOWLEDGE,
+        author="автор",
         consequence="цензура, вывод из эксплуатации и незарегистрированные отказы "
-                    "склеены с настоящим отсутствием отказа")
+        "склеены с настоящим отсутствием отказа",
+    )
     assumptions.record(
         "горизонт 30 дней соответствует времени реакции обслуживания",
-        basis=Basis.DOMAIN_KNOWLEDGE, author="автор",
-        consequence="прогноз не успевает изменить исход либо теряет сигнал")
+        basis=Basis.DOMAIN_KNOWLEDGE,
+        author="автор",
+        consequence="прогноз не успевает изменить исход либо теряет сигнал",
+    )
 
     study = Study(title="Azure PdM, протокол A: аудит")
     study.checks = report
