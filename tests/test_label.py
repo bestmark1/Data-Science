@@ -8,7 +8,12 @@ from dsx.checks.empirical import separation
 from dsx.evals.registry import BY_ID
 from dsx.evals.world import build_world
 from dsx.label import LABEL, LabelError, compute, positive_rate
-from dsx.outcome import ComparisonMode, MissingEventMeaning, OutcomeDefinition
+from dsx.outcome import (
+    ComparisonMode,
+    MissingEventCause,
+    MissingEventMeaning,
+    OutcomeDefinition,
+)
 from dsx.roles import ColumnSpec, Role, Schema, TemporalKind
 
 CLEAN = BY_ID["clean-baseline"]
@@ -47,7 +52,13 @@ def test_by_date_and_direct_comparison_differ() -> None:
             event_column="event_at",
             deadline_column="deadline_on",
             comparison=mode,
-            missing_event={"completed": MissingEventMeaning.NOT_OCCURRED},
+            missing_causes=[
+                MissingEventCause(
+                    name="события не было",
+                    meaning=MissingEventMeaning.NOT_OCCURRED,
+                    status_value="completed",
+                )
+            ],
             estimand="событие позже срока",
         )
 
@@ -64,7 +75,13 @@ def test_unknown_status_is_refused() -> None:
         event_column="event_at",
         deadline_column="deadline_on",
         comparison=ComparisonMode.BY_DATE,
-        missing_event={"completed": MissingEventMeaning.NOT_OCCURRED},
+        missing_causes=[
+            MissingEventCause(
+                name="события не было",
+                meaning=MissingEventMeaning.NOT_OCCURRED,
+                status_value="completed",
+            )
+        ],
         estimand="событие позже срока",
     )
 

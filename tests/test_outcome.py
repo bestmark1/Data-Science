@@ -1,4 +1,4 @@
-"""Контракт исхода (C3, C4, C6, A10)."""
+"""Контракт исхода (C3, C4, C6, A10, F-1)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from dsx.evals.world import build_world
 from dsx.outcome import (
     ComparisonMode,
+    MissingEventCause,
     MissingEventMeaning,
     OutcomeContractError,
     OutcomeDefinition,
@@ -15,7 +16,16 @@ from dsx.outcome import (
 )
 from dsx.roles import ColumnSpec, Role, Schema, TemporalKind
 
-MISSING = {"completed": MissingEventMeaning.NOT_OCCURRED}
+BY_STATUS = MissingEventCause(
+    name="событие не произошло",
+    meaning=MissingEventMeaning.NOT_OCCURRED,
+    status_value="completed",
+)
+UNKNOWABLE = MissingEventCause(
+    name="объект выведен из эксплуатации",
+    meaning=MissingEventMeaning.NOT_OCCURRED,
+    assumption="вывода из эксплуатации в наблюдаемом периоде не было",
+)
 
 
 def definition(**overrides) -> OutcomeDefinition:
@@ -23,10 +33,13 @@ def definition(**overrides) -> OutcomeDefinition:
         "event_column": "event_at",
         "deadline_column": "deadline_on",
         "comparison": ComparisonMode.BY_DATE,
-        "missing_event": MISSING,
+        "missing_causes": [BY_STATUS],
         "estimand": "событие позже назначенного срока",
     }
     return OutcomeDefinition(**{**payload, **overrides})
+
+
+# --- временная семантика ---------------------------------------------------
 
 
 def test_by_date_comparison_is_accepted() -> None:
@@ -75,10 +88,84 @@ def test_component_without_granularity_is_refused() -> None:
         validate_outcome(definition(), schema)
 
 
-def test_empty_missing_event_meaning_is_refused() -> None:
-    """Склейка разных причин отсутствия в один класс добавила 11.3% ложных положительных."""
-    with pytest.raises(ValidationError, match="явно"):
-        definition(missing_event={})
+# --- причины отсутствия события (F-1) --------------------------------------
+
+
+def test_empty_cause_list_is_refused() -> None:
+    """Склейка причин в один класс добавила 11.3% ложных положительных."""
+    with pytest.raises(ValidationError):
+        definition(missing_causes=[])
+
+
+def test_indistinguishable_cause_requires_an_assumption() -> None:
+    """Неназванное допущение неотличимо от его отсутствия."""
+    with pytest.raises(ValidationError, match="допущение"):
+        MissingEventCause(name="датчики отключились", meaning=MissingEventMeaning.UNOBSERVED)
+
+
+def test_blank_assumption_does_not_count() -> None:
+    with pytest.raises(ValidationError):
+        MissingEventCause(
+            name="датчики отключились",
+            meaning=MissingEventMeaning.UNOBSERVED,
+            assumption="   ",
+        )
+
+
+def test_distinguishable_cause_needs_no_assumption() -> None:
+    assert BY_STATUS.distinguishable
+    assert BY_STATUS.assumption is None
+
+
+def test_duplicate_status_values_are_refused() -> None:
+    twin = MissingEventCause(
+        name="другая причина",
+        meaning=MissingEventMeaning.EXCLUDED,
+        status_value="completed",
+    )
+
+    with pytest.raises(ValidationError, match="нескольких причин"):
+        definition(missing_causes=[BY_STATUS, twin])
+
+
+def test_contract_builds_without_any_status_column() -> None:
+    """Второй кейс: статуса нет ни в одной из пяти таблиц."""
+    contract = definition(missing_causes=[UNKNOWABLE])
+
+    assert contract.distinguishable == ()
+    assert len(contract.indistinguishable) == 1
+
+
+def test_assumptions_are_exposed_for_the_registry() -> None:
+    """Неразличимая причина обязана попасть в реестр, а не раствориться."""
+    contract = definition(missing_causes=[UNKNOWABLE])
+
+    assert contract.assumptions() == (UNKNOWABLE.assumption,)
+
+
+def test_same_meaning_across_indistinguishable_causes_is_resolvable() -> None:
+    another = MissingEventCause(
+        name="отказ не зарегистрирован",
+        meaning=MissingEventMeaning.NOT_OCCURRED,
+        assumption="доля незарегистрированных пренебрежимо мала",
+    )
+    contract = definition(missing_causes=[UNKNOWABLE, another])
+
+    assert not contract.conflated
+    assert contract.fallback_meaning() is MissingEventMeaning.NOT_OCCURRED
+
+
+def test_differing_meanings_are_reported_as_conflated() -> None:
+    """Строку такой группы разметить нельзя: наблюдение это или цензура — неизвестно."""
+    censored = MissingEventCause(
+        name="наблюдение прервано",
+        meaning=MissingEventMeaning.UNOBSERVED,
+        assumption="доля прерванных наблюдений неизвестна",
+    )
+    contract = definition(missing_causes=[UNKNOWABLE, censored])
+
+    assert contract.conflated
+    assert contract.fallback_meaning() is None
 
 
 def test_estimand_is_required() -> None:
@@ -87,5 +174,4 @@ def test_estimand_is_required() -> None:
 
 
 def test_components_are_listed_for_leakage_control() -> None:
-    """Колонки, участвующие в вычислении метки, известны явно и не могут быть признаками."""
     assert definition().components() == frozenset({"event_at", "deadline_on"})

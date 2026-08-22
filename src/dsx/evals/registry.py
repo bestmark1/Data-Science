@@ -13,7 +13,12 @@ from dataclasses import dataclass
 from dsx.evals import injectors as inj
 from dsx.evals.case import Case, Expectation, Finding
 from dsx.evals.world import World, build_child_frame, build_world
-from dsx.outcome import ComparisonMode, MissingEventMeaning, OutcomeDefinition
+from dsx.outcome import (
+    ComparisonMode,
+    MissingEventCause,
+    MissingEventMeaning,
+    OutcomeDefinition,
+)
 
 
 def _with_children() -> World:
@@ -42,11 +47,23 @@ def _outcome(comparison: ComparisonMode = ComparisonMode.BY_DATE) -> OutcomeDefi
         event_column="event_at",
         deadline_column="deadline_on",
         comparison=comparison,
-        missing_event={
-            "completed": MissingEventMeaning.NOT_OCCURRED,
-            "aborted": MissingEventMeaning.EXCLUDED,
-            "pending": MissingEventMeaning.NOT_OCCURRED,
-        },
+        missing_causes=[
+            MissingEventCause(
+                name="событие не произошло",
+                meaning=MissingEventMeaning.NOT_OCCURRED,
+                status_value="completed",
+            ),
+            MissingEventCause(
+                name="объект исключён из обработки",
+                meaning=MissingEventMeaning.EXCLUDED,
+                status_value="aborted",
+            ),
+            MissingEventCause(
+                name="событие ещё не наступило",
+                meaning=MissingEventMeaning.NOT_OCCURRED,
+                status_value="pending",
+            ),
+        ],
         estimand="событие произошло позже назначенного срока среди объектов, "
         "которые предполагалось обработать",
     )

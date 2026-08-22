@@ -15,13 +15,46 @@ import polars as pl
 
 from dsx.evals.world import World
 from dsx.label import compute
-from dsx.outcome import ComparisonMode, MissingEventMeaning, OutcomeDefinition
+from dsx.outcome import (
+    ComparisonMode,
+    MissingEventCause,
+    MissingEventMeaning,
+    OutcomeDefinition,
+)
 from dsx.roles import Availability, ColumnSpec, Role, Schema, TemporalKind
 
 PROJECT = Path(__file__).resolve().parent.parent
 RAW = PROJECT / "data" / "raw"
 HORIZON_DAYS = 30
 SOURCE = "владелец данных (гипотетический)"
+
+# Статуса в данных нет. Причины отсутствия отказа объявляются перечнем, и все
+# они неразличимы: ни одна не выводится из имеющихся таблиц. Каждая обязана
+# назвать принимаемое допущение.
+CAUSES = [
+    MissingEventCause(
+        name="отказа действительно не было",
+        meaning=MissingEventMeaning.NOT_OCCURRED,
+        assumption="отсутствие записи об отказе означает исправную работу, "
+        "а не пробел в регистрации",
+    ),
+    MissingEventCause(
+        name="отказ произошёл, но не зарегистрирован",
+        meaning=MissingEventMeaning.NOT_OCCURRED,
+        assumption="доля незарегистрированных отказов пренебрежимо мала",
+    ),
+    MissingEventCause(
+        name="профилактический ремонт предотвратил отказ",
+        meaning=MissingEventMeaning.NOT_OCCURRED,
+        assumption="предотвращённый отказ считается отсутствием отказа, "
+        "хотя это вмешательство, а не наблюдение",
+    ),
+    MissingEventCause(
+        name="объект выведен из эксплуатации",
+        meaning=MissingEventMeaning.NOT_OCCURRED,
+        assumption="вывода из эксплуатации в наблюдаемом периоде не было",
+    ),
+]
 
 
 def build_case() -> World:
@@ -55,16 +88,12 @@ def build_case() -> World:
             (pl.col("decided_at") + pl.duration(days=HORIZON_DAYS)).alias("horizon_on"),
             pl.col("visit_id").cast(pl.Utf8).alias("visit_key"),
             pl.col("machineID").cast(pl.Utf8).alias("machine_key"),
-            # Статуса в данных нет. Здесь он ВЫДУМАН, чтобы проверить, пропустит
-            # ли контракт формальное удовлетворение требования.
-            pl.lit("in_service").alias("fabricated_status"),
         )
     )
 
     schema = Schema(
         columns=[
             ColumnSpec(name="visit_key", role=Role.ENTITY_ID),
-            ColumnSpec(name="fabricated_status", role=Role.STATUS),
             ColumnSpec(name="machine_key", role=Role.NATURAL_KEY),
             ColumnSpec(name="decided_at", role=Role.DECISION_TIME, temporal=TemporalKind.INSTANT),
             ColumnSpec(
@@ -107,18 +136,24 @@ def main() -> int:
         event_column="failed_at",
         deadline_column="horizon_on",
         comparison=ComparisonMode.DIRECT,
-        missing_event={"in_service": MissingEventMeaning.NOT_OCCURRED},
+        missing_causes=CAUSES,
         estimand=f"отказ любого компонента в течение {HORIZON_DAYS} дней после визита",
     )
     frame = compute(world, definition)
     observed = frame.filter(pl.col("__outcome").is_not_null())
-    print("контракт ПРИНЯЛ выдуманный статус")
+    print("контракт собран БЕЗ выдуманного статуса")
     print(f"  строк размечено: {observed.height:,}")
     print(f"  доля положительных: {observed['__outcome'].mean():.2%}")
     print()
-    print("Ни одна проверка не заметила, что статус сконструирован,")
-    print("а причины отсутствия отказа склеены в один класс —")
-    print("ровно то, что требование C5 должно было предотвратить.")
+    print(
+        f"причин объявлено: {len(definition.missing_causes)}, "
+        f"из них неразличимых: {len(definition.indistinguishable)}"
+    )
+    print(f"смыслы неразличимых смешаны: {definition.conflated}")
+    print()
+    print("допущения, принятые из-за неразличимости:")
+    for text in definition.assumptions():
+        print(f"  - {text}")
     return 0
 
 

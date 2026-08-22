@@ -1,13 +1,19 @@
 """Определение исхода.
 
 Исход вычисляется по объявленному правилу, а не произвольным выражением.
-Причина в том, что самая дорогая ошибка этапа 0 сидела именно в способе
+Причина в том, что самая дорогая ошибка первого кейса сидела именно в способе
 сравнения: момент времени сравнивался с датой, и 16.5% положительных меток
 оказались ложными. Пока сравнение скрыто внутри кода анализа, проверить его
 нечем.
 
-Второе следствие: колонки, участвующие в вычислении исхода, известны явно и
-потому не могут попасть в признаки (C6).
+Второй кейс показал вторую ошибку: трактовка отсутствия события была привязана
+к колонке статуса. В обслуживании оборудования статуса нет вовсе, а причин
+отсутствия отказа не меньше восьми. Требование удовлетворялось выдуманной
+колонкой — механизм, который принимает фиктивное заполнение, защищает хуже
+своего отсутствия.
+
+Поэтому трактовка привязана к перечню ПРИЧИН, а не к колонке. Причина,
+неразличимая по данным, не исчезает: она обязана назвать принимаемое допущение.
 """
 
 from __future__ import annotations
@@ -43,6 +49,44 @@ class MissingEventMeaning(StrEnum):
     """Объект не предполагался к обработке; исключается из популяции."""
 
 
+class MissingEventCause(BaseModel):
+    """Одна причина, по которой события могло не быть.
+
+    Причина, неразличимая по данным, не исчезает. Она обязана назвать
+    принимаемое допущение, иначе растворится в умолчании.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: Annotated[str, Field(min_length=1)]
+    meaning: MissingEventMeaning
+
+    status_value: str | None = None
+    """Значение статуса, по которому причина различима. None означает, что по
+    данным она неотличима от прочих неразличимых причин."""
+
+    assumption: str | None = None
+    """Что принимается на веру, если причина неразличима. Обязательно."""
+
+    @property
+    def distinguishable(self) -> bool:
+        return self.status_value is not None
+
+    @model_validator(mode="after")
+    def _indistinguishable_needs_an_assumption(self) -> MissingEventCause:
+        if not self.distinguishable and not (self.assumption or "").strip():
+            raise ValueError(
+                f"причина {self.name!r} неразличима по данным и обязана назвать "
+                "принимаемое допущение: неназванное допущение неотличимо от "
+                "его отсутствия"
+            )
+        return self
+
+    def __str__(self) -> str:
+        mark = f"по статусу {self.status_value!r}" if self.distinguishable else "неразличима"
+        return f"{self.name} → {self.meaning.value} ({mark})"
+
+
 class OutcomeDefinition(BaseModel):
     """Исход как сравнение момента события с назначенным сроком."""
 
@@ -52,26 +96,56 @@ class OutcomeDefinition(BaseModel):
     deadline_column: Annotated[str, Field(min_length=1)]
     comparison: ComparisonMode
 
-    missing_event: dict[str, MissingEventMeaning]
-    """Трактовка отсутствия события по значению статуса. Пустой словарь
-    запрещён: склейка разных причин в один класс — ошибка, которая на этапе 0
-    добавила 11.3% ложных положительных."""
+    missing_causes: Annotated[list[MissingEventCause], Field(min_length=1)]
+    """Причины отсутствия события. Пустой список запрещён: склейка разных
+    причин в один класс добавила 11.3% ложных положительных на первом кейсе."""
 
     estimand: Annotated[str, Field(min_length=1)]
     """Что именно оценивается, словами. Заполняется до вычисления таргета."""
 
     @model_validator(mode="after")
-    def _missing_event_is_explicit(self) -> OutcomeDefinition:
-        if not self.missing_event:
-            raise ValueError(
-                "трактовка отсутствия события обязана быть объявлена явно "
-                "для каждого значения статуса"
-            )
+    def _status_values_are_unique(self) -> OutcomeDefinition:
+        values = [c.status_value for c in self.missing_causes if c.distinguishable]
+        if len(values) != len(set(values)):
+            raise ValueError("одно значение статуса объявлено для нескольких причин")
         return self
 
     def components(self) -> frozenset[str]:
         """Колонки, участвующие в вычислении исхода."""
         return frozenset({self.event_column, self.deadline_column})
+
+    @property
+    def distinguishable(self) -> tuple[MissingEventCause, ...]:
+        return tuple(c for c in self.missing_causes if c.distinguishable)
+
+    @property
+    def indistinguishable(self) -> tuple[MissingEventCause, ...]:
+        return tuple(c for c in self.missing_causes if not c.distinguishable)
+
+    @property
+    def conflated(self) -> bool:
+        """Смешаны ли неразличимые причины с РАЗНЫМ смыслом.
+
+        Если да, строку, попавшую в эту группу, разметить нельзя: неизвестно,
+        наблюдение это, цензура или исключение из популяции.
+        """
+        return len({c.meaning for c in self.indistinguishable}) > 1
+
+    def status_meaning(self) -> dict[str, MissingEventMeaning]:
+        return {c.status_value: c.meaning for c in self.distinguishable if c.status_value}
+
+    def fallback_meaning(self) -> MissingEventMeaning | None:
+        """Смысл для строк, не отнесённых ни к одной различимой причине.
+
+        None, когда неразличимые причины имеют разный смысл: такие строки
+        размечать нельзя, и это отдельная находка.
+        """
+        meanings = {c.meaning for c in self.indistinguishable}
+        return meanings.pop() if len(meanings) == 1 else None
+
+    def assumptions(self) -> tuple[str, ...]:
+        """Допущения, принятые из-за неразличимости причин."""
+        return tuple(c.assumption for c in self.indistinguishable if c.assumption)
 
 
 class OutcomeContractError(Exception):
