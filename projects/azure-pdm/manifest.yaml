@@ -1,0 +1,21 @@
+source: kaggle:arnabbiswas1/microsoft-azure-predictive-maintenance
+license: не объявлена источником; данные не перераспределяются
+url: https://www.kaggle.com/datasets/arnabbiswas1/microsoft-azure-predictive-maintenance
+retrieved_at: '2026-08-22'
+files:
+- name: PdM_errors.csv
+  sha256: 9c2a2a010ad77227e2bb0c94e7971bca78810790ddd1f28a8bee4f12c2f62370
+  bytes: 129077
+- name: PdM_failures.csv
+  sha256: 0c6c31a4fd52ef2df95ad7c44e8b0c8c32917bcef29ba5a1ba3ba45531ded3b7
+  bytes: 24336
+- name: PdM_machines.csv
+  sha256: 5e8e1571c4999bf88abb7cae3925964c218d946fe851a9a100bb3d19330652bc
+  bytes: 1582
+- name: PdM_maint.csv
+  sha256: 481ed4e155f609e6ca6130754d2c035453093902a507cce5b3f3e235995f1db6
+  bytes: 104903
+- name: PdM_telemetry.csv
+  sha256: d957f3c45bb83416b716600da8cffd72f4b6961db89867d9696ad19f7cb1bd4e
+  bytes: 80142329
+derived: []
