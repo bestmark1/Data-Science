@@ -7,7 +7,7 @@ import pytest
 from dsx.checks import ALL_CHECKS, CONTRACT_CHECKS, DATA_CHECKS, Context, run_checks
 from dsx.evals.case import Finding
 from dsx.evals.registry import ALL, BY_ID, NEGATIVE_CONTROLS
-from dsx.task import OutcomeTiming, TargetKind, TaskSpec
+from dsx.task import ObjectLifetime, OutcomeTiming, TargetKind, TaskSpec
 
 FULL = TaskSpec(
     target_kind=TargetKind.BINARY,
@@ -15,6 +15,8 @@ FULL = TaskSpec(
     has_process=True,
     is_stream=True,
 )
+RECURRING = FULL.model_copy(update={"object_lifetime": ObjectLifetime.RECURRING})
+ONE_SHOT = FULL.model_copy(update={"object_lifetime": ObjectLifetime.ONE_SHOT})
 COVERED = frozenset(f for c in ALL_CHECKS for f in c.detects)
 
 DECLARATIVE = [*CONTRACT_CHECKS, *DATA_CHECKS]
@@ -116,3 +118,21 @@ def test_surrogate_key_check_stays_quiet_without_a_natural_key() -> None:
     assert not [
         s for s in report_for(bundle).signals if s.finding.value == "surrogate_key_as_entity"
     ]
+
+
+# --- жизненный цикл объекта (F-2, F-3) -------------------------------------
+
+
+def test_recurring_object_does_not_trigger_the_surrogate_key_check() -> None:
+    """Визит намеренно мельче машины: это устройство задачи, а не подмена ключа."""
+    report = report_for(BY_ID["surrogate-key-as-entity"], task=RECURRING)
+
+    assert not any(s.finding is Finding.SURROGATE_KEY_AS_ENTITY for s in report.signals)
+
+
+def test_one_shot_declaration_contradicted_by_data_is_refused() -> None:
+    """Объявление, расходящееся с данными, хуже отсутствия объявления."""
+    report = report_for(BY_ID["surrogate-key-as-entity"], task=ONE_SHOT)
+    signals = [s for s in report.signals if s.finding is Finding.SURROGATE_KEY_AS_ENTITY]
+
+    assert signals and "противоречит" in signals[0].detail

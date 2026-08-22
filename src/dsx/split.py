@@ -117,13 +117,17 @@ def split_by_windows(
     return result
 
 
-def entity_overlap(parts: list[Part], world: World) -> dict[str, int]:
-    """Объекты, встречающиеся и в обучении, и в оценке одного окна.
+def entity_overlap(parts: list[Part], world: World, role: Role | None = None) -> dict[str, int]:
+    """Значения ключа, встречающиеся и в обучении, и в оценке одного окна.
 
-    Пересечение сущностей при временном сплите означает, что модель видела тот
-    же объект и оценивается на нём же.
+    Без указания роли берётся естественный ключ, то есть объект реального мира.
+    Роль указывают, когда объект долгоживущий: тогда его присутствие по обе
+    стороны нормально, а утечкой является повтор самой ЕДИНИЦЫ РЕШЕНИЯ.
     """
-    keys = world.schema.by_role(Role.NATURAL_KEY) or world.schema.by_role(Role.ENTITY_ID)
+    if role is not None:
+        keys = world.schema.by_role(role)
+    else:
+        keys = world.schema.by_role(Role.NATURAL_KEY) or world.schema.by_role(Role.ENTITY_ID)
     if not keys:
         return {}
     key = keys[0].name

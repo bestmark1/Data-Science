@@ -1,8 +1,9 @@
 """Шаг 03 — полный прогон протокола A текущим ядром.
 
-Цель не получить модель, а увидеть, где ядро ломается. Выдуманный статус из
-шага 02 сохранён намеренно: F-1 уже зафиксирована, и чинить её до сбора
-остальных находок дороже.
+Цель не получить модель, а увидеть, где ядро ломается.
+
+После правок F-1, F-2 и F-3 прогон повторён: исход строится на перечне причин
+без выдуманного статуса, а машина объявлена долгоживущим объектом.
 """
 
 from __future__ import annotations
@@ -13,12 +14,13 @@ from pathlib import Path
 
 from dsx.assumptions import AssumptionRegistry, Basis
 from dsx.checks import ALL_CHECKS, Context, run_checks
-from dsx.outcome import ComparisonMode, MissingEventMeaning, OutcomeDefinition
+from dsx.outcome import ComparisonMode, OutcomeDefinition
 from dsx.policy import OverrideLedger
 from dsx.report import Study
+from dsx.roles import Role
 from dsx.samples import SampleLedger
 from dsx.split import Window, entity_overlap, positive_rates, split_by_windows
-from dsx.task import OutcomeTiming, TargetKind, TaskSpec
+from dsx.task import ObjectLifetime, OutcomeTiming, TargetKind, TaskSpec
 
 PROJECT = Path(__file__).resolve().parent.parent
 HORIZON_DAYS = 30
@@ -34,7 +36,7 @@ def main() -> int:
         event_column="failed_at",
         deadline_column="horizon_on",
         comparison=ComparisonMode.DIRECT,
-        missing_event={"in_service": MissingEventMeaning.NOT_OCCURRED},
+        missing_causes=protocol_a.CAUSES,
         estimand=f"отказ любого компонента в течение {HORIZON_DAYS} дней после визита",
     )
 
@@ -43,6 +45,9 @@ def main() -> int:
         outcome_timing=OutcomeTiming.DELAYED,
         has_process=False,  # статуса процесса нет
         is_stream=False,  # решения событийные, не поток
+        # Машина обслуживается многократно: единица решения — визит,
+        # объект — машина. Дробление намеренное (F-2, F-3).
+        object_lifetime=ObjectLifetime.RECURRING,
     )
 
     lo = world.main["decided_at"].min()
@@ -61,7 +66,11 @@ def main() -> int:
         print(f"  {part.name}: обучение {part.train.height:5,}  оценка {part.evaluate.height:4,}")
     print("незрелых:", split.immature or "нет")
     print("доли положительных:", {k: f"{v:.1%}" for k, v in positive_rates(split.parts).items()})
-    print("пересечение сущностей:", entity_overlap(split.parts, world) or "нет")
+    print("машин по обе стороны:", entity_overlap(split.parts, world) or "нет", "(ожидаемо)")
+    print(
+        "повторов решения:",
+        entity_overlap(split.parts, world, role=Role.ENTITY_ID) or "нет",
+    )
     print()
 
     report = run_checks(list(ALL_CHECKS), Context(world, definition, task, split))

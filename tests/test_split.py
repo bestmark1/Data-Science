@@ -134,3 +134,14 @@ def test_windows_without_data_are_tolerated() -> None:
     result = split_by_windows(world, CLEAN.outcome, far, snapshot_for(world))
 
     assert result.part("empty").evaluate.height == 0
+
+
+def test_overlap_of_decision_units_is_leakage_even_for_recurring_objects() -> None:
+    """Долгоживущий объект по обе стороны нормален; повтор решения — нет."""
+    from dsx.roles import Role
+    from harness import context_for
+
+    context = context_for(BY_ID["entity-overlap"])
+    assert context.split is not None
+
+    assert entity_overlap(context.split.parts, context.world, role=Role.ENTITY_ID)

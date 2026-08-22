@@ -16,7 +16,7 @@ import polars as pl
 from dsx.checks.base import Context, Signal
 from dsx.evals.case import Finding
 from dsx.roles import Role
-from dsx.task import Premise
+from dsx.task import ObjectLifetime, Premise
 
 UNIVERSAL = frozenset({Premise.UNIVERSAL})
 PROCESS = frozenset({Premise.PROCESS})
@@ -25,13 +25,14 @@ STREAM = frozenset({Premise.STREAM})
 
 @dataclass(frozen=True)
 class SurrogateKeyAsEntity:
-    """A2. Объявленная сущность мельче реального объекта.
+    """A2. Единица решения мельче объекта, и не объявлено, намеренно ли.
 
-    Трение 01: идентификатор был уникален по строкам и объектом не являлся.
-    Признаки по истории объекта дали бы историю длиной в одну строку.
+    У маркетплейса ключ заказа выдавался за клиента — ошибка. В обслуживании
+    оборудования визит намеренно мельче машины — верный дизайн. По данным эти
+    случаи неотличимы, поэтому проверка требует ответа, а не запрещает ситуацию.
 
     Срабатывает только при объявленном естественном ключе: без него сравнивать
-    не с чем, и уникальность идентификатора по строкам сама по себе нормальна.
+    не с чем.
     """
 
     requirement: str = "A2"
@@ -44,6 +45,10 @@ class SurrogateKeyAsEntity:
         natural = schema.by_role(Role.NATURAL_KEY)
         if not entities or not natural:
             return []
+
+        lifetime = context.task.object_lifetime
+        if lifetime is ObjectLifetime.RECURRING:
+            return []  # повторные решения по одному объекту — устройство задачи
 
         frame = context.world.main
         entity_cardinality = frame[entities[0].name].n_unique()
@@ -58,8 +63,16 @@ class SurrogateKeyAsEntity:
                     Signal(
                         Finding.SURROGATE_KEY_AS_ENTITY,
                         f"{entities[0].name!r} различает {entity_cardinality:,} значений, "
-                        f"а {key.name!r} — {natural_cardinality:,}. Объявленная сущность "
-                        "мельче реального объекта: история по ней будет короче настоящей",
+                        f"а {key.name!r} — {natural_cardinality:,}: на один объект "
+                        f"приходится несколько решений. "
+                        + (
+                            "Объявлено, что объект одноразов: объявление противоречит "
+                            "данным, и история по нему будет короче настоящей"
+                            if lifetime is ObjectLifetime.ONE_SHOT
+                            else "Объявите жизненный цикл объекта. Намеренное дробление "
+                            "и подмена ключа по данным неотличимы, а во втором случае "
+                            "история по ней будет короче настоящей"
+                        ),
                         blocking=True,
                     )
                 )
