@@ -144,6 +144,41 @@ def entity_overlap(parts: list[Part], world: World, role: Role | None = None) ->
     return overlaps
 
 
+def feature_window_overlap(parts: list[Part], world: World, lookback_days: float) -> dict[str, int]:
+    """Оценочные решения, чьё окно признаков задевает обучающие решения.
+
+    У долгоживущего объекта присутствие по обе стороны сплита нормально.
+    Утечка возникает иначе: признак оценочного решения посчитан по интервалу,
+    который захватывает измерения, вошедшие в признаки обучающих решений того
+    же объекта.
+
+    Окно решения в момент t достаёт назад на lookback. Значит окна двух
+    решений одного объекта пересекаются, когда между решениями меньше
+    lookback: оценочное решение в момент e задевает обучающее в момент t
+    при e <= t + lookback.
+    """
+    keys = world.schema.by_role(Role.NATURAL_KEY) or world.schema.by_role(Role.ENTITY_ID)
+    if not keys:
+        return {}
+    key = keys[0].name
+    moment = world.schema.decision_time.name
+    reach = pl.lit(dt.timedelta(days=lookback_days))
+
+    overlaps: dict[str, int] = {}
+    for part in parts:
+        if key not in part.train.columns or key not in part.evaluate.columns:
+            continue
+        last_train = part.train.group_by(key).agg(pl.col(moment).max().alias("__last_train"))
+        touching = (
+            part.evaluate.join(last_train, on=key, how="inner")
+            .filter(pl.col(moment) <= pl.col("__last_train") + reach)
+            .height
+        )
+        if touching:
+            overlaps[part.name] = touching
+    return overlaps
+
+
 def positive_rates(parts: list[Part]) -> dict[str, float]:
     """Доля положительного класса по окнам.
 

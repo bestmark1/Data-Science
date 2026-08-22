@@ -51,6 +51,44 @@ class Role(StrEnum):
     IGNORED = "ignored"
 
 
+class FeatureWindow(BaseModel):
+    """Интервал, по которому посчитан признак-агрегат.
+
+    Второй кейс показал, что ядро не знает, откуда взялось значение признака.
+    Среднее за неделю и мгновенное показание выглядят одинаково — колонка
+    с числом. Но у первого есть протяжённость назад, и она может захватить
+    измерения, попавшие в обучающие строки того же объекта.
+
+    Окно решения в момент t покрывает [t - lag - lookback, t - lag].
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    lookback_days: Annotated[float, Field(ge=0.0)]
+    """Протяжённость окна назад. Ноль означает мгновенное показание."""
+
+    lag_days: Annotated[float, Field(ge=0.0)] = 0.0
+    """Отступ: окно кончается за столько дней до момента решения.
+
+    Ненулевой отступ — обычный способ учесть задержку поставки данных.
+    """
+
+    source_of_claim: Annotated[str, Field(min_length=1)]
+    """Чем подтверждено окно: код построения признака, владелец, документ.
+
+    Без источника поле заполняется по памяти, и объявление перестаёт быть
+    свидетельством.
+    """
+
+    @property
+    def instantaneous(self) -> bool:
+        return self.lookback_days == 0.0
+
+    def bounds_days(self) -> tuple[float, float]:
+        """Границы окна в днях относительно момента решения, слева направо."""
+        return (-(self.lag_days + self.lookback_days), -self.lag_days)
+
+
 class TemporalKind(StrEnum):
     """Фактическая грануляция временной колонки.
 
@@ -84,6 +122,13 @@ class ColumnSpec(BaseModel):
     temporal: TemporalKind | None = None
     availability: Availability = Availability.UNKNOWN
 
+    window: FeatureWindow | None = None
+    """Окно, по которому посчитан признак. None означает, что ответа нет.
+
+    Мгновенное показание объявляется окном нулевой длины, а не отсутствием
+    окна: умолчание, совпадающее с честным ответом, неотличимо от пропуска.
+    """
+
     source_of_claim: str | None = None
     """Чем подтверждена объявленная доступность: владелец, схема, документ, лог.
 
@@ -103,6 +148,15 @@ class ColumnSpec(BaseModel):
             raise ValueError(
                 f"колонка {self.name!r} играет временную роль {self.role.value!r} "
                 "и обязана объявить грануляцию: date или instant"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _only_features_have_windows(self) -> ColumnSpec:
+        if self.window is not None and self.role is not Role.FEATURE:
+            raise ValueError(
+                f"колонка {self.name!r} играет роль {self.role.value!r} и окна "
+                "признака иметь не может"
             )
         return self
 

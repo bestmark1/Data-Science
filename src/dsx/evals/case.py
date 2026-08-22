@@ -41,6 +41,8 @@ class Finding(StrEnum):
     NON_STATIONARY_TARGET = "non_stationary_target"
     SAMPLE_ALREADY_SPENT = "sample_already_spent"
     PREMISE_MISMATCH = "premise_mismatch"
+    UNDECLARED_FEATURE_WINDOW = "undeclared_feature_window"
+    FEATURE_WINDOW_OVERLAP = "feature_window_overlap"
 
 
 class Expectation(BaseModel):

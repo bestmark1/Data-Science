@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from dsx.checks.base import Context, NotApplicable, Signal
 from dsx.evals.case import Finding
 from dsx.roles import Role
-from dsx.split import SplitResult, entity_overlap
+from dsx.split import SplitResult, entity_overlap, feature_window_overlap
 from dsx.task import ObjectLifetime, Premise
 
 
@@ -67,32 +67,63 @@ class EntityOverlapAcrossSplits:
 
 
 @dataclass(frozen=True)
-class ObservationIntervalOverlap:
-    """N2i. Пересечение интервалов наблюдения у долгоживущего объекта.
+class FeatureWindowOverlap:
+    """N2i. Окна признаков двух решений одного объекта пересекаются.
 
-    Для машины, клиента или пациента присутствие по обе стороны сплита
-    неизбежно, и настоящей утечкой является пересечение интервалов, из которых
-    построены признаки. Проверить это нечем: окна признаков нигде не
-    объявляются.
+    Для долгоживущего объекта присутствие по обе стороны сплита нормально, и
+    N2 на нём молчит. Утечка возникает иначе: признак оценочного решения
+    посчитан по интервалу, захватывающему измерения обучающих решений того же
+    объекта. Модель видела эти измерения и оценивается на них же.
 
-    Проверка существует, чтобы разрыв был виден. Ноль блокирующих сигналов на
-    задаче с долгоживущими объектами иначе читался бы как отсутствие утечки,
-    хотя означает лишь, что её не искали.
+    Проверка требует, чтобы окно каждого признака было объявлено. Без
+    объявления она не молчит, а блокирует: ноль сигналов иначе читался бы как
+    отсутствие утечки, хотя означал бы лишь, что её не искали.
     """
 
     requirement: str = "N2i"
     premises: frozenset[Premise] = frozenset({Premise.UNIVERSAL})
-    detects: frozenset[Finding] = frozenset({Finding.ENTITY_OVERLAP_ACROSS_SPLITS})
+    detects: frozenset[Finding] = frozenset(
+        {Finding.UNDECLARED_FEATURE_WINDOW, Finding.FEATURE_WINDOW_OVERLAP}
+    )
 
     def run(self, context: Context) -> list[Signal]:
-        _require_split(context)
+        split = _require_split(context)
         if context.task.object_lifetime is not ObjectLifetime.RECURRING:
-            raise NotApplicable("объект одноразов: пересечение объектов уже проверено N2")
-        raise NotApplicable(
-            "объект долгоживущий, и утечкой является пересечение интервалов "
-            "наблюдения, а не присутствие объекта. Окна признаков нигде не "
-            "объявляются, поэтому проверить это нечем — утечка не исключена"
-        )
+            raise NotApplicable(
+                "объект одноразов: два решения по одному объекту невозможны, "
+                "и окна признаков пересечься не могут"
+            )
+
+        features = context.world.schema.usable_features()
+        undeclared = [c.name for c in features if c.window is None]
+        if undeclared:
+            return [
+                Signal(
+                    Finding.UNDECLARED_FEATURE_WINDOW,
+                    f"признаки {sorted(undeclared)!r} не объявили окно, по которому "
+                    "посчитаны. Объект долгоживущий, и без окна нельзя сказать, "
+                    "захватывает ли признак оценочного решения измерения обучающих",
+                    blocking=True,
+                )
+            ]
+
+        reach = max((c.window.lookback_days + c.window.lag_days for c in features), default=0.0)
+        if reach == 0.0:
+            return []  # все признаки мгновенные: пересекаться нечему
+
+        overlaps = feature_window_overlap(split.parts, context.world, reach)
+        widest = max(features, key=lambda c: c.window.lookback_days + c.window.lag_days)
+        return [
+            Signal(
+                Finding.FEATURE_WINDOW_OVERLAP,
+                f"в окне {name!r} у {count:,} оценочных решений окно признаков "
+                f"(до {reach:g} дн назад, шире всех у {widest.name!r}) достаёт до "
+                "обучающих решений того же объекта: модель оценивается на "
+                "измерениях, которые видела",
+                blocking=True,
+            )
+            for name, count in sorted(overlaps.items())
+        ]
 
 
 @dataclass(frozen=True)
@@ -130,4 +161,4 @@ class LabelImmaturity:
         return signals
 
 
-SPLIT_CHECKS = [EntityOverlapAcrossSplits(), ObservationIntervalOverlap(), LabelImmaturity()]
+SPLIT_CHECKS = [EntityOverlapAcrossSplits(), FeatureWindowOverlap(), LabelImmaturity()]

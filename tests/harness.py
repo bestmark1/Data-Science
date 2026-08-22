@@ -12,7 +12,7 @@ TASK = TaskSpec(
 )
 
 
-def task_for(world) -> TaskSpec:
+def task_for(world, lifetime=None) -> TaskSpec:
     """Объявить предпосылки так, как они есть в данных.
 
     Объявлять их наугад — ровно та ошибка, которую ловит проверка S6: стенд
@@ -27,6 +27,7 @@ def task_for(world) -> TaskSpec:
         outcome_timing=OutcomeTiming.DELAYED,
         has_process=has_process,
         is_stream=is_stream,
+        object_lifetime=lifetime,
     )
 
 
@@ -48,7 +49,7 @@ def context_for(bundle):
         split = split_by_windows(world, bundle.outcome, windows, snapshot)
     except Exception:
         split = None
-    return Context(world, bundle.outcome, task_for(world), split)
+    return Context(world, bundle.outcome, task_for(world, bundle.lifetime), split)
 
 
 def report_for(bundle, checks=None):

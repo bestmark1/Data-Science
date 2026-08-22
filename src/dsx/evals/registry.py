@@ -19,6 +19,7 @@ from dsx.outcome import (
     MissingEventMeaning,
     OutcomeDefinition,
 )
+from dsx.task import ObjectLifetime
 
 
 def _with_children() -> World:
@@ -36,6 +37,13 @@ class Bundle:
     case: Case
     build: Callable[[], World]
     outcome: OutcomeDefinition
+
+    lifetime: ObjectLifetime | None = None
+    """Жизненный цикл объекта, объявленный автором кейса.
+
+    Из данных он не выводится — на этом стоит F-2. Стенд, выводящий его сам,
+    повторил бы ошибку F-4: объявление без свидетельства.
+    """
 
     @property
     def id(self) -> str:
@@ -77,6 +85,7 @@ def _bundle(
     build: Callable[[], World],
     comparison: ComparisonMode = ComparisonMode.BY_DATE,
     caught_by: set[str] | None = None,
+    lifetime: ObjectLifetime | None = None,
 ) -> Bundle:
     return Bundle(
         case=Case(
@@ -89,6 +98,7 @@ def _bundle(
         ),
         build=build,
         outcome=_outcome(comparison),
+        lifetime=lifetime,
     )
 
 
@@ -201,6 +211,37 @@ ALL: tuple[Bundle, ...] = (
         {Finding.ENTITY_OVERLAP_ACROSS_SPLITS},
         lambda: inj.entity_overlap(build_world()),
         caught_by={"N2"},
+    ),
+    _bundle(
+        "clean-recurring-narrow-windows",
+        "Долгоживущий объект с узкими окнами признаков",
+        "Отрицательный контроль к N2i: проверка, срабатывающая на любом долгоживущем "
+        "объекте, выглядела бы идеальной и была бы бесполезна.",
+        set(),
+        lambda: inj.declare_feature_windows(inj.repeated_object(build_world()), 1),
+        lifetime=ObjectLifetime.RECURRING,
+    ),
+    _bundle(
+        "feature-window-undeclared",
+        "Признаки не объявили окно, по которому посчитаны",
+        "F-8: среднее за неделю и мгновенное показание выглядят одинаково — колонка "
+        "с числом. У долгоживущего объекта разница решающая, и молчание проверки "
+        "здесь означало бы, что утечку не искали.",
+        {Finding.UNDECLARED_FEATURE_WINDOW},
+        lambda: inj.repeated_object(build_world()),
+        caught_by={"N2i"},
+        lifetime=ObjectLifetime.RECURRING,
+    ),
+    _bundle(
+        "feature-window-overlap",
+        "Окна признаков двух решений одного объекта пересекаются",
+        "F-5: у долгоживущего объекта присутствие по обе стороны сплита нормально, "
+        "и N2 молчит. Утечка идёт через измерения, попавшие и в обучающие признаки, "
+        "и в оценочные.",
+        {Finding.FEATURE_WINDOW_OVERLAP},
+        lambda: inj.declare_feature_windows(inj.repeated_object(build_world()), 120),
+        caught_by={"N2i"},
+        lifetime=ObjectLifetime.RECURRING,
     ),
     # --- полнота периода ---------------------------------------------------
     _bundle(

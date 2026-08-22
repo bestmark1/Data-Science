@@ -15,7 +15,7 @@ import numpy as np
 import polars as pl
 
 from dsx.evals.world import World
-from dsx.roles import Availability, ColumnSpec, Role, Schema, TemporalKind
+from dsx.roles import Availability, ColumnSpec, FeatureWindow, Role, Schema, TemporalKind
 
 SOURCE = "инжектор"
 
@@ -271,3 +271,36 @@ def late_maturing_labels(
         pl.when(picked).then(pl.lit("pending")).otherwise(pl.col("status")).alias("status"),
     )
     return world.replace_main(frame)
+
+
+def repeated_object(world: World, per_object: int = 3, seed: int = 23) -> World:
+    """Сделать объект долгоживущим: несколько решений на один объект.
+
+    Это не дефект, а условие. Пересечение окон признаков невозможно там, где
+    объект получает одно решение, поэтому кейсы про окна строятся на нём.
+    """
+    rng = np.random.default_rng(seed)
+    rows = world.main.height
+    objects = max(1, rows // per_object)
+    natural = [f"obj{int(i):06d}" for i in rng.integers(0, objects, rows)]
+
+    frame = world.main.with_columns(pl.Series("object_key", natural))
+    schema = Schema(
+        columns=[*world.schema.columns, ColumnSpec(name="object_key", role=Role.NATURAL_KEY)]
+    )
+    return World(frames={**world.frames, "main": frame}, schema=schema)
+
+
+def declare_feature_windows(world: World, lookback_days: float, lag_days: float = 0.0) -> World:
+    """Объявить окно у всех признаков.
+
+    Само по себе объявление дефектом не является: оно лишь делает видимым то,
+    как признак посчитан. Дефектом становится ширина окна, при которой окна
+    двух решений одного объекта пересекаются.
+    """
+    window = FeatureWindow(lookback_days=lookback_days, lag_days=lag_days, source_of_claim=SOURCE)
+    columns = [
+        c.model_copy(update={"window": window}) if c.role is Role.FEATURE else c
+        for c in world.schema.columns
+    ]
+    return World(frames=world.frames, schema=Schema(columns=columns))

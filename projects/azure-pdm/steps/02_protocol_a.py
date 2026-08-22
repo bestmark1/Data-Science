@@ -21,12 +21,16 @@ from dsx.outcome import (
     MissingEventMeaning,
     OutcomeDefinition,
 )
-from dsx.roles import Availability, ColumnSpec, Role, Schema, TemporalKind
+from dsx.roles import Availability, ColumnSpec, FeatureWindow, Role, Schema, TemporalKind
 
 PROJECT = Path(__file__).resolve().parent.parent
 RAW = PROJECT / "data" / "raw"
 HORIZON_DAYS = 30
 SOURCE = "владелец данных (гипотетический)"
+
+# Все признаки протокола A мгновенные: они читаются из карточки машины или из
+# самой записи о визите, а не считаются по интервалу назад.
+INSTANT = FeatureWindow(lookback_days=0, source_of_claim="код сборки кейса, шаг 02")
 
 # Статуса в данных нет. Причины отсутствия отказа объявляются перечнем, и все
 # они неразличимы: ни одна не выводится из имеющихся таблиц. Каждая обязана
@@ -105,18 +109,21 @@ def build_case() -> World:
                 role=Role.FEATURE,
                 availability=Availability.AT_DECISION,
                 source_of_claim=SOURCE,
+                window=INSTANT,
             ),
             ColumnSpec(
                 name="age",
                 role=Role.FEATURE,
                 availability=Availability.AT_DECISION,
                 source_of_claim=SOURCE,
+                window=INSTANT,
             ),
             ColumnSpec(
                 name="model",
                 role=Role.FEATURE,
                 availability=Availability.AT_DECISION,
                 source_of_claim=SOURCE,
+                window=INSTANT,
             ),
         ]
     )

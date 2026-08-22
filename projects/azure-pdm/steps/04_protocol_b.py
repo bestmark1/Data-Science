@@ -16,7 +16,7 @@ from pathlib import Path
 import polars as pl
 
 from dsx.evals.world import World
-from dsx.roles import Availability, ColumnSpec, Role, Schema, TemporalKind
+from dsx.roles import Availability, ColumnSpec, FeatureWindow, Role, Schema, TemporalKind
 
 PROJECT = Path(__file__).resolve().parent.parent
 RAW = PROJECT / "data" / "raw"
@@ -25,9 +25,10 @@ HORIZON_DAYS = 30
 """Горизонт исхода: отказ любого компонента в течение стольких дней."""
 
 LOOKBACK_DAYS = 7
-"""Окно назад, по которому считаются признаки. Ядро о нём не знает — F-5."""
+"""Окно назад, по которому считаются признаки. Теперь объявляется ядру."""
 
 SOURCE = "владелец данных (гипотетический)"
+WINDOW_SOURCE = "код построения признаков, шаг 04"
 
 
 def daily_telemetry() -> pl.DataFrame:
@@ -129,6 +130,9 @@ def build_case() -> World:
         or c == f"errors_{LOOKBACK_DAYS}d"
     ] + ["age", "model"]
 
+    rolling = FeatureWindow(lookback_days=LOOKBACK_DAYS, source_of_claim=WINDOW_SOURCE)
+    static = FeatureWindow(lookback_days=0, source_of_claim=WINDOW_SOURCE)
+
     schema = Schema(
         columns=[
             ColumnSpec(name="decision_key", role=Role.ENTITY_ID),
@@ -145,6 +149,7 @@ def build_case() -> World:
                 role=Role.FEATURE,
                 availability=Availability.AT_DECISION,
                 source_of_claim=SOURCE,
+                window=static if name in ("age", "model") else rolling,
             )
             for name in feature_names
         ]
