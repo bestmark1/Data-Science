@@ -225,3 +225,92 @@ def test_extent_accepts_integer_identifiers() -> None:
     extent = _extent_of_frame(frame, World(frames={"main": frame}, schema=schema))
 
     assert extent.units == frozenset({"1", "2", "3"})
+
+
+# --- причины отсутствия метки различаются (ревью Кодекса) ------------------
+
+
+def test_excluded_rows_are_not_counted_as_immature() -> None:
+    """Исключение из популяции — не короткий период наблюдения."""
+    import polars as pl
+
+    from dsx.label import REASON, OutcomeReason
+
+    bundle = BY_ID["label-immaturity"]
+    frame = with_label_known_at(bundle.build(), bundle.outcome)
+    reasons = set(frame[REASON].unique().to_list())
+
+    assert OutcomeReason.IMMATURE.value in reasons
+    immature = frame.filter(pl.col(REASON) == OutcomeReason.IMMATURE.value)
+    assert immature[LABEL].null_count() == immature.height
+
+
+def test_reserve_keeps_rows_whose_outcome_is_not_yet_known() -> None:
+    """Отбор резерва по известности исхода — отбор полных случаев."""
+    from harness import context_for
+
+    context = context_for(BY_ID["label-immaturity"])
+    reserved = context.split.reserved
+
+    assert reserved is not None and reserved.height
+    assert reserved.height >= reserved[LABEL].is_not_null().sum()
+
+
+def test_known_at_respects_the_declared_comparison() -> None:
+    """Посуточное сравнение даёт ответ с началом следующей даты, прямое — сразу."""
+    import datetime as dt
+
+    import polars as pl
+
+    from dsx.evals.world import World
+    from dsx.outcome import (
+        ComparisonMode,
+        MissingEventCause,
+        MissingEventMeaning,
+        OutcomeDefinition,
+        PositiveClass,
+    )
+    from dsx.roles import ColumnSpec, Role, Schema, TemporalKind
+    from dsx.split import KNOWN_AT
+
+    moment = dt.datetime(2024, 3, 5, 14, 30)
+    frame = pl.DataFrame(
+        {
+            "entity_id": ["a"],
+            "decided_at": [dt.datetime(2024, 3, 1)],
+            "deadline_on": [moment],
+            "event_at": [None],
+        },
+        schema_overrides={"event_at": pl.Datetime},
+    )
+    schema = Schema(
+        columns=[
+            ColumnSpec(name="entity_id", role=Role.ENTITY_ID),
+            ColumnSpec(name="decided_at", role=Role.DECISION_TIME, temporal=TemporalKind.INSTANT),
+            ColumnSpec(name="deadline_on", role=Role.DEADLINE, temporal=TemporalKind.INSTANT),
+            ColumnSpec(name="event_at", role=Role.OUTCOME_COMPONENT, temporal=TemporalKind.INSTANT),
+        ]
+    )
+    world = World(frames={"main": frame}, schema=schema)
+
+    def definition(mode: ComparisonMode) -> OutcomeDefinition:
+        return OutcomeDefinition(
+            event_column="event_at",
+            deadline_column="deadline_on",
+            comparison=mode,
+            positive_class=PositiveClass.EVENT_AFTER_DEADLINE,
+            missing_causes=[
+                MissingEventCause(
+                    name="события не было",
+                    meaning=MissingEventMeaning.NOT_OCCURRED,
+                    assumption="принимается, что запись полна",
+                )
+            ],
+            estimand="событие позже срока",
+        )
+
+    direct = with_label_known_at(world, definition(ComparisonMode.DIRECT))[KNOWN_AT][0]
+    by_date = with_label_known_at(world, definition(ComparisonMode.BY_DATE))[KNOWN_AT][0]
+
+    assert direct == moment, "при прямом сравнении ответ известен сразу за сроком"
+    assert by_date == dt.datetime(2024, 3, 6), "посуточное — с началом следующей даты"

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from enum import StrEnum
 
 import polars as pl
 
@@ -31,6 +32,34 @@ class LabelError(Exception):
 
 LABEL = "__outcome"
 """Имя служебной колонки. Двойное подчёркивание, чтобы не столкнуться с данными."""
+
+REASON = "__outcome_reason"
+"""Почему исход не размечен. Пустая метка бывает трёх разных вещей."""
+
+
+class OutcomeReason(StrEnum):
+    """Отчего строка не получила метку.
+
+    Три причины склеивались в один `null`, и проверка незрелости считала
+    незрелыми исключённых из популяции. Различие существенное: незрелость
+    означает короткий период наблюдения, исключение — что объект не
+    предполагался к обработке, цензура — что наблюдение оборвалось.
+    """
+
+    OBSERVED = "observed"
+    """Исход наблюдён, метка есть."""
+
+    IMMATURE = "immature"
+    """Срок ещё не истёк: исход появится позже."""
+
+    EXCLUDED = "excluded"
+    """Объект не предполагался к обработке."""
+
+    CENSORED = "censored"
+    """Наблюдение оборвалось, исход неизвестен навсегда."""
+
+    CONFLATED = "conflated"
+    """Неразличимые причины имеют разный смысл: разметить нельзя."""
 
 
 def compute(
@@ -66,13 +95,20 @@ def compute(
     status = statuses[0].name if statuses else None
 
     if status is not None:
+        # Проверяются только строки БЕЗ события: у остальных исход вычисляется
+        # напрямую, и статус на него не влияет.
+        missing = frame.filter(pl.col(definition.event_column).is_null())
         declared = set(definition.status_meaning())
-        present = set(frame[status].drop_nulls().unique().to_list())
+        present = set(missing[status].drop_nulls().unique().to_list())
         unknown = present - declared
-        if unknown and not definition.indistinguishable:
+        if unknown:
+            # Неразличимые причины не покрывают ВИДИМЫЙ статус: раз значение
+            # присутствует в данных, оно по определению различимо, и молча
+            # отправлять его в общую группу значит терять объявленное различие.
             raise LabelError(
                 f"для статусов {sorted(unknown)!r} не объявлено, что означает "
-                "отсутствие события, и неразличимых причин тоже не объявлено"
+                "отсутствие события. Статус виден в данных, поэтому неразличимые "
+                "причины его не покрывают"
             )
 
     # Смысл для строк, не отнесённых ни к одной различимой причине.
@@ -94,23 +130,39 @@ def compute(
         # Цензура и исключение из популяции: исход не наблюдаем.
         return pl.lit(None)
 
-    if status is None:
-        missing_label = meaning_expr(fallback_meaning)
-    else:
-        missing_label = meaning_expr(fallback_meaning)
-        for value, meaning in definition.status_meaning().items():
-            missing_label = (
-                pl.when(pl.col(status) == value)
-                .then(meaning_expr(meaning))
-                .otherwise(missing_label)
+    def reason_expr(meaning: MissingEventMeaning | None) -> pl.Expr:
+        """Отчего строка без события не получила метку."""
+        if meaning is MissingEventMeaning.NOT_OCCURRED:
+            return (
+                pl.when(deadline < horizon)
+                .then(pl.lit(OutcomeReason.OBSERVED.value))
+                .otherwise(pl.lit(OutcomeReason.IMMATURE.value))
             )
+        if meaning is MissingEventMeaning.EXCLUDED:
+            return pl.lit(OutcomeReason.EXCLUDED.value)
+        if meaning is MissingEventMeaning.UNOBSERVED:
+            return pl.lit(OutcomeReason.CENSORED.value)
+        return pl.lit(OutcomeReason.CONFLATED.value)
 
+    missing_label = meaning_expr(fallback_meaning)
+    missing_reason = reason_expr(fallback_meaning)
+    if status is not None:
+        for value, meaning in definition.status_meaning().items():
+            matches = pl.col(status) == value
+            missing_label = pl.when(matches).then(meaning_expr(meaning)).otherwise(missing_label)
+            missing_reason = pl.when(matches).then(reason_expr(meaning)).otherwise(missing_reason)
+
+    absent = pl.col(definition.event_column).is_null()
     return frame.with_columns(
-        pl.when(pl.col(definition.event_column).is_null())
+        pl.when(absent)
         .then(missing_label)
         .otherwise(observed.cast(pl.Int8))
         .cast(pl.Int8)
-        .alias(LABEL)
+        .alias(LABEL),
+        pl.when(absent)
+        .then(missing_reason)
+        .otherwise(pl.lit(OutcomeReason.OBSERVED.value))
+        .alias(REASON),
     )
 
 

@@ -71,8 +71,13 @@ def test_by_date_and_direct_comparison_differ() -> None:
 
 
 def test_unknown_status_is_refused() -> None:
-    """Склейка разных причин отсутствия в один класс запрещена (C5)."""
-    world = BY_ID["post-treatment-missingness"].build()
+    """Склейка разных причин отсутствия в один класс запрещена (C5).
+
+    Мир взят с ОТСУТСТВУЮЩИМИ событиями: только на таких строках статус и
+    определяет исход. На мире, где событие есть у всех, проверка неприменима,
+    и прежняя версия теста этого не замечала.
+    """
+    world = BY_ID["label-immaturity"].build()
     definition = OutcomeDefinition(
         event_column="event_at",
         deadline_column="deadline_on",
@@ -89,6 +94,39 @@ def test_unknown_status_is_refused() -> None:
     )
 
     with pytest.raises(LabelError, match="не объявлено"):
+        compute(world, definition)
+
+
+def test_status_of_a_row_with_an_observed_event_does_not_matter() -> None:
+    """Исход такой строки вычисляется напрямую; статус на него не влияет."""
+    import polars as pl
+
+    world = BY_ID["label-immaturity"].build()
+    frame = world.main.filter(pl.col("event_at").is_not_null())
+    world = world.replace_main(frame.with_columns(pl.lit("невиданный").alias("status")))
+
+    compute(world, BY_ID["label-immaturity"].outcome)
+
+
+def test_indistinguishable_causes_do_not_cover_a_visible_status() -> None:
+    """Раз значение видно в данных, оно различимо — и требует объявления."""
+    world = BY_ID["label-immaturity"].build()
+    definition = OutcomeDefinition(
+        event_column="event_at",
+        deadline_column="deadline_on",
+        comparison=ComparisonMode.BY_DATE,
+        positive_class=PositiveClass.EVENT_AFTER_DEADLINE,
+        missing_causes=[
+            MissingEventCause(
+                name="причина, неотличимая по данным",
+                meaning=MissingEventMeaning.NOT_OCCURRED,
+                assumption="принимается, что таких строк немного",
+            )
+        ],
+        estimand="событие позже срока",
+    )
+
+    with pytest.raises(LabelError, match="не покрывают"):
         compute(world, definition)
 
 

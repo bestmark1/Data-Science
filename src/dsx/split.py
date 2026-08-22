@@ -20,8 +20,8 @@ import polars as pl
 
 from dsx.evals.world import World
 from dsx.join import Cardinality, guarded_join
-from dsx.label import LABEL, compute, observable
-from dsx.outcome import OutcomeDefinition
+from dsx.label import LABEL, REASON, OutcomeReason, compute, observable
+from dsx.outcome import ComparisonMode, OutcomeDefinition
 from dsx.roles import Role
 from dsx.samples import Extent
 
@@ -33,18 +33,27 @@ def with_label_known_at(
 ) -> pl.DataFrame:
     """Добавить момент узнавания исхода к размеченной таблице.
 
-    Исход известен в момент события, если оно произошло в срок; иначе — в конце
-    срока, когда стало ясно, что событие не успело.
+    Исход известен в момент события, если оно произошло в срок; иначе — когда
+    срок истёк и стало ясно, что событие не успело.
+
+    Когда именно срок истёк, зависит от объявленного способа сравнения. При
+    посуточном сравнении ответ появляется с началом следующей календарной даты,
+    при прямом — сразу за моментом срока. Первая версия добавляла ровно сутки
+    в обоих случаях и теряла лишние часы обучающих строк.
     """
     frame = compute(world, definition, snapshot)
     event = pl.col(definition.event_column)
     deadline = pl.col(definition.deadline_column)
 
+    if definition.comparison is ComparisonMode.BY_DATE:
+        in_time = event.dt.date() <= deadline.dt.date()
+        expired = deadline.dt.date().cast(pl.Datetime).dt.offset_by("1d")
+    else:
+        in_time = event <= deadline
+        expired = deadline
+
     return frame.with_columns(
-        pl.when(event.is_not_null() & (event.dt.date() <= deadline.dt.date()))
-        .then(event)
-        .otherwise(deadline.dt.offset_by("1d"))
-        .alias(KNOWN_AT)
+        pl.when(event.is_not_null() & in_time).then(event).otherwise(expired).alias(KNOWN_AT)
     )
 
 
@@ -79,6 +88,9 @@ class SplitResult:
 
     immature: dict[str, int] = field(default_factory=dict)
     """Объекты оценочного окна, чей исход не наблюдаем к концу наблюдения."""
+
+    reserved_immature: int = 0
+    """Строки резерва, чей исход ещё не наблюдаем."""
 
     reserved: pl.DataFrame | None = None
     """Измерительная выборка, отрезанная до начала работы и не входящая ни в
@@ -122,8 +134,15 @@ def split_by_windows(
                 f"окна {late!r} заходят за границу резерва {reserve_from:%Y-%m-%d}: "
                 "измерительная выборка перестала бы быть независимой"
             )
-        reserved = labelled.filter((pl.col(decision) >= reserve_from) & pl.col(LABEL).is_not_null())
+        # Резерв НЕ фильтруется по известности исхода: отбор по исходу — это
+        # отбор полных случаев, который приукрашивает итоговую метрику ровно
+        # там, где она должна быть честной. Незрелость внутри резерва видна
+        # отдельно и попадает в отчёт.
+        reserved = labelled.filter(pl.col(decision) >= reserve_from)
         result.reserved = reserved
+        result.reserved_immature = reserved.filter(
+            pl.col(REASON) == OutcomeReason.IMMATURE.value
+        ).height
         labelled = labelled.filter(pl.col(decision) < reserve_from)
 
     for window in windows:
@@ -133,8 +152,10 @@ def split_by_windows(
         )
         result.parts.append(Part(window=window, train=train, evaluate=evaluate))
 
-        # Незрелость — это пустая метка в окне: исход ещё не наблюдаем.
-        immature = evaluate.filter(pl.col(LABEL).is_null()).height
+        # Незрелость — не всякая пустая метка. Исключённый из популяции и
+        # цензурированный объект тоже без метки, но период наблюдения тут ни
+        # при чём, и считать их незрелыми значит диагностировать не то.
+        immature = evaluate.filter(pl.col(REASON) == OutcomeReason.IMMATURE.value).height
         if immature:
             result.immature[window.name] = immature
 
