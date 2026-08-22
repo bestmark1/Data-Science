@@ -142,3 +142,52 @@ def test_undeclared_collapse_blocks() -> None:
 
     assert [s.finding for s in signals] == [Finding.COMPETING_KINDS_COLLAPSED]
     assert signals[0].blocking
+
+
+# --- одновременность: объявление, которое можно сверить --------------------
+
+
+def test_naming_an_absent_kind_as_simultaneous_is_refused() -> None:
+    """Объявление описывает то, чего не происходит."""
+    context = _context(
+        target_kind=TargetKind.COMPETING,
+        simultaneous_kinds=Simultaneity.OWN_KIND,
+        simultaneous_kind_value="kind_which_is_absent",
+    )
+
+    signals = CompetingKindsDeclared().run(context)
+
+    assert [s.finding for s in signals] == [Finding.SIMULTANEITY_UNDECLARED]
+    assert "в данных его нет" in signals[0].detail
+
+
+def test_claiming_impossibility_against_a_present_kind_is_refused() -> None:
+    context = _context(
+        target_kind=TargetKind.COMPETING,
+        simultaneous_kinds=Simultaneity.NOT_POSSIBLE,
+        simultaneous_kind_value="kind1",
+    )
+
+    signals = CompetingKindsDeclared().run(context)
+
+    assert [s.finding for s in signals] == [Finding.SIMULTANEITY_UNDECLARED]
+    assert "противоречит данным" in signals[0].detail
+
+
+def test_naming_a_present_kind_as_simultaneous_passes() -> None:
+    context = _context(
+        target_kind=TargetKind.COMPETING,
+        simultaneous_kinds=Simultaneity.OWN_KIND,
+        simultaneous_kind_value="kind1",
+    )
+
+    assert CompetingKindsDeclared().run(context) == []
+
+
+def test_excluded_simultaneity_removes_those_rows_from_the_population() -> None:
+    """Объявление, ничего не меняющее в вычислении, — украшение."""
+    with_all = compute_by_kind(world(), BUNDLE.outcome)
+    without = compute_by_kind(world(), BUNDLE.outcome, exclude_kind="kind1")
+
+    assert [o.kind for o in without] == ["kind2", "kind3", "kind4"]
+    assert without[0].frame.height < with_all[0].frame.height

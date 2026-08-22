@@ -59,7 +59,9 @@ def kinds_in(world: World) -> tuple[str, ...]:
     return tuple(sorted(world.main[name].drop_nulls().unique().to_list()))
 
 
-def compute_by_kind(world: World, definition: OutcomeDefinition) -> list[KindOutcome]:
+def compute_by_kind(
+    world: World, definition: OutcomeDefinition, exclude_kind: str | None = None
+) -> list[KindOutcome]:
     """Разметить исход отдельно по каждому виду события.
 
     Строка, где наступил другой вид, для данного вида не отрицательна, а
@@ -79,6 +81,12 @@ def compute_by_kind(world: World, definition: OutcomeDefinition) -> list[KindOut
         )
 
     base = compute(world, definition)
+    if exclude_kind is not None:
+        # Одновременный случай объявлен выводимым из популяции: строки уходят
+        # целиком, а не размечаются произвольным видом.
+        base = base.filter(pl.col(kind_column).is_null() | (pl.col(kind_column) != exclude_kind))
+        kinds = tuple(k for k in kinds if k != exclude_kind)
+
     results = []
     for kind in kinds:
         # Событие другого вида обрывает наблюдение, только если случилось ДО

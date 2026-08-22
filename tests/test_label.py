@@ -7,7 +7,7 @@ import pytest
 from dsx.checks.empirical import separation
 from dsx.evals.registry import BY_ID
 from dsx.evals.world import build_world
-from dsx.label import LABEL, LabelError, compute, positive_rate
+from dsx.label import LABEL, LabelError, compute, observable, positive_rate
 from dsx.outcome import (
     ComparisonMode,
     MissingEventCause,
@@ -131,10 +131,48 @@ def test_indistinguishable_causes_do_not_cover_a_visible_status() -> None:
 
 
 def test_excluded_status_leaves_the_population() -> None:
-    world = BY_ID["post-treatment-missingness"].build()
-    frame = compute(world, BY_ID["post-treatment-missingness"].outcome)
+    """Исключённый объект не получает метки и не входит в знаменатель.
 
-    assert frame.height == world.main.height, "события есть у всех, никто не выпадает"
+    Прежняя версия проверяла лишь сохранение числа строк после with_columns и
+    работала на мире, где событие есть у каждой строки. Она проходила при
+    полностью сломанной семантике исключения.
+    """
+    import polars as pl
+
+    from dsx.label import REASON, OutcomeReason
+
+    bundle = BY_ID["clean-excluded-from-population"]
+    frame = compute(bundle.build(), bundle.outcome)
+    excluded = frame.filter(pl.col(REASON) == OutcomeReason.EXCLUDED.value)
+
+    assert excluded.height, "кейс обязан содержать исключённых"
+    assert excluded[LABEL].null_count() == excluded.height, "метки у них быть не должно"
+    assert observable(frame).height == frame.height - excluded.height
+
+
+def test_excluded_is_not_immature() -> None:
+    """Исключение из популяции и несозревший исход — разные вещи (A12)."""
+
+    from dsx.label import REASON, OutcomeReason
+
+    bundle = BY_ID["clean-excluded-from-population"]
+    frame = compute(bundle.build(), bundle.outcome)
+    reasons = set(frame[REASON].unique().to_list())
+
+    assert OutcomeReason.EXCLUDED.value in reasons
+    assert OutcomeReason.IMMATURE.value not in reasons
+
+
+def test_positive_rate_ignores_excluded_rows() -> None:
+    import polars as pl
+
+    from dsx.label import REASON, OutcomeReason
+
+    bundle = BY_ID["clean-excluded-from-population"]
+    frame = compute(bundle.build(), bundle.outcome)
+    by_hand = frame.filter(pl.col(REASON) != OutcomeReason.EXCLUDED.value)[LABEL].mean()
+
+    assert positive_rate(frame) == pytest.approx(float(by_hand))
 
 
 def test_label_is_returned_separately_from_the_data() -> None:

@@ -386,8 +386,9 @@ class CompetingKindsDeclared:
             raise NotApplicable("видов события меньше двух: конкуренции нет")
 
         if context.task.target_kind is TargetKind.COMPETING:
-            if context.task.simultaneous_kinds is not None:
-                return []  # виды различаются, склейки нет, ответ об одновременности дан
+            declared = context.task.simultaneous_kinds
+            if declared is not None:
+                return _simultaneity_signals(context, declared, kinds)
             return [
                 Signal(
                     Finding.SIMULTANEITY_UNDECLARED,
@@ -420,6 +421,40 @@ class CompetingKindsDeclared:
                 blocking=True,
             )
         ]
+
+
+def _simultaneity_signals(context: Context, declared, kinds: tuple[str, ...]) -> list[Signal]:
+    """Сверить объявление об одновременности с данными, если оно проверяемо.
+
+    Проверяемым его делает названное значение вида. Без него остаётся только
+    записать допущение — что и делает запуск проекта.
+    """
+    from dsx.task import Simultaneity
+
+    value = context.task.simultaneous_kind_value
+    if value is None:
+        return []
+
+    present = value in kinds
+    if declared is Simultaneity.NOT_POSSIBLE and present:
+        return [
+            Signal(
+                Finding.SIMULTANEITY_UNDECLARED,
+                f"объявлено, что одновременное наступление невозможно, но вид "
+                f"{value!r} присутствует в данных: объявление противоречит данным",
+                blocking=True,
+            )
+        ]
+    if declared is not Simultaneity.NOT_POSSIBLE and not present:
+        return [
+            Signal(
+                Finding.SIMULTANEITY_UNDECLARED,
+                f"вид {value!r} назван обозначением одновременного случая, но в данных "
+                "его нет: объявление описывает то, чего не происходит",
+                blocking=True,
+            )
+        ]
+    return []
 
 
 @dataclass(frozen=True)

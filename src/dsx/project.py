@@ -159,6 +159,7 @@ class TaskForm(BaseModel):
     object_lifetime: ObjectLifetime
     kinds_collapsed: bool | None = None
     simultaneous_kinds: Simultaneity | None = None
+    simultaneous_kind_value: str | None = None
 
     def to_spec(self) -> TaskSpec:
         return TaskSpec(
@@ -169,6 +170,7 @@ class TaskForm(BaseModel):
             object_lifetime=self.object_lifetime,
             kinds_collapsed=self.kinds_collapsed,
             simultaneous_kinds=self.simultaneous_kinds,
+            simultaneous_kind_value=self.simultaneous_kind_value,
         )
 
 

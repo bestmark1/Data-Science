@@ -419,3 +419,26 @@ def competing_event_kinds(world: World, kinds: int = 4, seed: int = 29) -> World
         columns=[*world.schema.columns, ColumnSpec(name="event_kind", role=Role.EVENT_KIND)]
     )
     return World(frames={**world.frames, "main": frame}, schema=schema)
+
+
+def excluded_from_population(world: World, share: float = 0.12, seed: int = 31) -> World:
+    """Часть объектов не предполагалась к обработке: события нет, статус объявлен.
+
+    Не дефект, а условие. До него ветви разметки «исключён из популяции» и
+    «наблюдение оборвано» не выполнялись ни разу: во всех мирах событие было у
+    каждой строки, и код, различающий причины отсутствия, оставался мёртвым.
+    """
+    rng = np.random.default_rng(seed)
+    frame = world.main
+    picked = pl.Series("_pick", rng.random(frame.height) < share)
+    return world.replace_main(
+        frame.with_columns(picked)
+        .with_columns(
+            pl.when(pl.col("_pick")).then(None).otherwise(pl.col("event_at")).alias("event_at"),
+            pl.when(pl.col("_pick"))
+            .then(pl.lit("aborted"))
+            .otherwise(pl.col("status"))
+            .alias("status"),
+        )
+        .drop("_pick")
+    )
