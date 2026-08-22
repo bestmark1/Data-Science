@@ -41,6 +41,15 @@ class Role(StrEnum):
     AVAILABLE_AT = "available_at"
     """Момент, когда значение стало доступно системе."""
 
+    MEASURED_AT = "measured_at"
+    """Момент, когда значение признака было получено.
+
+    Введена по F-11. Окно признака объявлялось и ни с чем не сверялось: ядро
+    верило, что среднее посчитано за объявленные семь дней, и что мгновенное
+    показание получено ровно в момент решения. Ни то, ни другое проверить было
+    нечем, и объявление оставалось необеспеченным.
+    """
+
     STATUS = "status"
     """Категориальное состояние процесса."""
 
@@ -109,7 +118,15 @@ class Availability(StrEnum):
     """Полноправное состояние. Умолчание здесь опаснее отсутствия ответа."""
 
 
-TEMPORAL_ROLES = frozenset({Role.DECISION_TIME, Role.EVENT_TIME, Role.DEADLINE, Role.AVAILABLE_AT})
+TEMPORAL_ROLES = frozenset(
+    {
+        Role.DECISION_TIME,
+        Role.EVENT_TIME,
+        Role.DEADLINE,
+        Role.AVAILABLE_AT,
+        Role.MEASURED_AT,
+    }
+)
 
 
 class ColumnSpec(BaseModel):
@@ -128,6 +145,10 @@ class ColumnSpec(BaseModel):
     Мгновенное показание объявляется окном нулевой длины, а не отсутствием
     окна: умолчание, совпадающее с честным ответом, неотличимо от пропуска.
     """
+
+    measured_at: str | None = None
+    """Колонка с моментом получения значения. None означает, что сверить
+    объявленное окно с данными нечем, и оно остаётся объявлением."""
 
     source_of_claim: str | None = None
     """Чем подтверждена объявленная доступность: владелец, схема, документ, лог.
@@ -157,6 +178,16 @@ class ColumnSpec(BaseModel):
             raise ValueError(
                 f"колонка {self.name!r} играет роль {self.role.value!r} и окна "
                 "признака иметь не может"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _measured_at_needs_a_window(self) -> ColumnSpec:
+        """Время измерения без окна сверять не с чем."""
+        if self.measured_at is not None and self.window is None:
+            raise ValueError(
+                f"колонка {self.name!r} называет время измерения, но не объявила "
+                "окно признака: сверять нечего"
             )
         return self
 

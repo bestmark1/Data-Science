@@ -44,6 +44,7 @@ class Finding(StrEnum):
     UNDECLARED_FEATURE_WINDOW = "undeclared_feature_window"
     FEATURE_WINDOW_OVERLAP = "feature_window_overlap"
     NO_RESERVED_MEASUREMENT_SAMPLE = "no_reserved_measurement_sample"
+    FEATURE_WINDOW_MISMATCH = "feature_window_mismatch"
 
 
 class Expectation(BaseModel):

@@ -25,7 +25,16 @@ HORIZON_DAYS = 30
 """Горизонт исхода: отказ любого компонента в течение стольких дней."""
 
 LOOKBACK_DAYS = 7
-"""Окно назад, по которому считаются признаки. Теперь объявляется ядру."""
+"""Окно назад, по которому считаются признаки."""
+
+FEATURE_LAG_DAYS = 0.25
+"""Отступ окна от момента решения, шесть часов.
+
+Первая версия его не имела, и проверка S7 нашла утечку: суточный агрегат за
+день решения включал показания, снятые ПОСЛЕ решения. Телеметрия идёт с 06:00
+до 23:00, решение принималось в 06:00 того же дня — до 17 часов из будущего в
+36 400 строках из 36 500.
+"""
 
 SOURCE = "владелец данных (гипотетический)"
 WINDOW_SOURCE = "код построения признаков, шаг 04"
@@ -40,7 +49,12 @@ def daily_telemetry() -> pl.DataFrame:
     return (
         telemetry.with_columns(pl.col("datetime").dt.date().alias("day"))
         .group_by("machineID", "day")
-        .agg([pl.col(s).mean().alias(f"{s}_day") for s in sensors])
+        .agg(
+            [pl.col(s).mean().alias(f"{s}_day") for s in sensors]
+            # Самое позднее показание суток. Нужно, чтобы объявленное окно
+            # можно было сверить с данными, а не принять на слово (F-11).
+            + [pl.col("datetime").max().alias("last_reading")]
+        )
         .sort("machineID", "day")
     )
 
@@ -58,6 +72,7 @@ def rolling_features(daily: pl.DataFrame) -> pl.DataFrame:
         .agg(
             [pl.col(f"{s}_day").mean().alias(f"{s}_mean_{LOOKBACK_DAYS}d") for s in sensors]
             + [pl.col(f"{s}_day").std().alias(f"{s}_std_{LOOKBACK_DAYS}d") for s in sensors]
+            + [pl.col("last_reading").max().alias("measured_at")]
         )
         .sort("machineID", "day")
     )
@@ -96,7 +111,9 @@ def build_case() -> World:
     )
 
     grid = features.join(errors, on=["machineID", "day"], how="inner").with_columns(
-        pl.col("day").cast(pl.Datetime).dt.offset_by("6h").alias("decided_at")
+        # Решение принимается на следующее утро после последнего показания:
+        # окно признаков обязано кончаться до момента решения, а не в нём.
+        pl.col("day").cast(pl.Datetime).dt.offset_by("1d6h").alias("decided_at")
     )
 
     # Ближайший отказ строго после момента решения.
@@ -130,7 +147,11 @@ def build_case() -> World:
         or c == f"errors_{LOOKBACK_DAYS}d"
     ] + ["age", "model"]
 
-    rolling = FeatureWindow(lookback_days=LOOKBACK_DAYS, source_of_claim=WINDOW_SOURCE)
+    rolling = FeatureWindow(
+        lookback_days=LOOKBACK_DAYS,
+        lag_days=FEATURE_LAG_DAYS,
+        source_of_claim=WINDOW_SOURCE,
+    )
     static = FeatureWindow(lookback_days=0, source_of_claim=WINDOW_SOURCE)
 
     schema = Schema(
@@ -142,6 +163,7 @@ def build_case() -> World:
                 name="failed_at", role=Role.OUTCOME_COMPONENT, temporal=TemporalKind.INSTANT
             ),
             ColumnSpec(name="horizon_on", role=Role.DEADLINE, temporal=TemporalKind.INSTANT),
+            ColumnSpec(name="measured_at", role=Role.MEASURED_AT, temporal=TemporalKind.INSTANT),
         ]
         + [
             ColumnSpec(
@@ -150,6 +172,9 @@ def build_case() -> World:
                 availability=Availability.AT_DECISION,
                 source_of_claim=SOURCE,
                 window=static if name in ("age", "model") else rolling,
+                # У справочника машин времени измерения нет: окно остаётся
+                # объявлением, и это видно в отчёте.
+                measured_at=None if name in ("age", "model") else "measured_at",
             )
             for name in feature_names
         ]
@@ -163,7 +188,10 @@ def main() -> int:
     print(f"решений: {frame.height:,}, машин: {frame['machine_key'].n_unique()}")
     print(f"период: {frame['decided_at'].min():%Y-%m-%d} .. {frame['decided_at'].max():%Y-%m-%d}")
     print(f"решений на машину: {frame.height / frame['machine_key'].n_unique():.0f}")
-    print(f"окно признаков: {LOOKBACK_DAYS} дн, горизонт исхода: {HORIZON_DAYS} дн")
+    print(
+        f"окно признаков: {LOOKBACK_DAYS} дн с отступом {FEATURE_LAG_DAYS} дн, "
+        f"горизонт исхода: {HORIZON_DAYS} дн"
+    )
     return 0
 
 

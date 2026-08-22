@@ -28,6 +28,7 @@ from dsx.split import (
     split_by_windows,
 )
 from dsx.task import ObjectLifetime, OutcomeTiming, TargetKind, TaskSpec
+from dsx.windows import unverified
 
 PROJECT = Path(__file__).resolve().parent.parent
 HORIZON_DAYS = 30
@@ -95,6 +96,10 @@ def main() -> int:
         print(f"  {item}")
     print()
     print(f"блокирующих: {len(report.blocking)}, пропущено проверок: {len(report.skipped)}")
+    print(
+        "окна признаков, сверить которые не с чем:",
+        ", ".join(unverified(world)) or "нет",
+    )
 
     samples = SampleLedger(OverrideLedger())
     for part in split.parts:

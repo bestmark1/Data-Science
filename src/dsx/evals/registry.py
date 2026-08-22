@@ -224,6 +224,24 @@ ALL: tuple[Bundle, ...] = (
         caught_by={"N2"},
     ),
     _bundle(
+        "stale-measurement-under-zero-window",
+        "Признак объявлен мгновенным, а получен тремя днями раньше",
+        "F-11: окно нулевой длины утверждает одновременность, которой у данных не "
+        "бывает. Внешнее ревью назвало это местом, где объявление окна остаётся "
+        "необеспеченным.",
+        {Finding.FEATURE_WINDOW_MISMATCH},
+        lambda: inj.stale_measurements(build_world()),
+        caught_by={"S7"},
+    ),
+    _bundle(
+        "clean-measured-within-window",
+        "Время измерения укладывается в объявленное окно",
+        "Отрицательный контроль к S7: проверка, срабатывающая при любом объявленном "
+        "времени измерения, сделала бы роль бесполезной.",
+        set(),
+        lambda: inj.stale_measurements(build_world(), age_days=3, lookback_days=7),
+    ),
+    _bundle(
         "clean-recurring-narrow-windows",
         "Долгоживущий объект с узкими окнами признаков",
         "Отрицательный контроль к N2i: проверка, срабатывающая на любом долгоживущем "

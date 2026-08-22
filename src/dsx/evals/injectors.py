@@ -304,3 +304,27 @@ def declare_feature_windows(world: World, lookback_days: float, lag_days: float 
         for c in world.schema.columns
     ]
     return World(frames=world.frames, schema=Schema(columns=columns))
+
+
+def stale_measurements(world: World, age_days: int = 3, lookback_days: float = 0.0) -> World:
+    """Значения признаков получены раньше, чем утверждает объявленное окно.
+
+    Окно нулевой длины утверждает, что значение получено в момент решения.
+    Здесь оно получено на несколько дней раньше — ровно тот случай, который
+    ядро не видело до F-11.
+    """
+    moment = world.schema.decision_time.name
+    frame = world.main.with_columns(
+        (pl.col(moment) - pl.duration(days=age_days)).alias("measured_at")
+    )
+    window = FeatureWindow(lookback_days=lookback_days, source_of_claim=SOURCE)
+    columns = [
+        c.model_copy(update={"window": window, "measured_at": "measured_at"})
+        if c.role is Role.FEATURE
+        else c
+        for c in world.schema.columns
+    ]
+    columns.append(
+        ColumnSpec(name="measured_at", role=Role.MEASURED_AT, temporal=TemporalKind.INSTANT)
+    )
+    return World(frames={**world.frames, "main": frame}, schema=Schema(columns=columns))
