@@ -1,0 +1,92 @@
+title: "Azure PdM, протокол A: событийный подкейс"
+
+# Момент решения — визит на обслуживание. Вопрос: случится ли отказ любого
+# компонента в течение горизонта после визита.
+
+columns:
+  - name: visit_key
+    role: entity_id
+  - name: machine_key
+    role: natural_key
+  - name: decided_at
+    role: decision_time
+    temporal: instant
+  - name: failed_at
+    role: outcome_component
+    temporal: instant
+  - name: horizon_on
+    role: deadline
+    temporal: instant
+
+  # Признаки читаются из карточки машины или из самой записи о визите.
+  # Окна нулевой длины: агрегатов по интервалу здесь нет. Сверить их не с чем —
+  # времени внесения записи в данных нет, и выдумывать его нельзя (F-11).
+  - name: components_serviced
+    role: feature
+    availability: at_decision
+    source_of_claim: "владелец данных (гипотетический)"
+    window_lookback_days: 0
+    window_source: "код сборки таблицы решений"
+  - name: age
+    role: feature
+    availability: at_decision
+    source_of_claim: "владелец данных (гипотетический)"
+    window_lookback_days: 0
+    window_source: "справочник машин"
+  - name: model
+    role: feature
+    availability: at_decision
+    source_of_claim: "владелец данных (гипотетический)"
+    window_lookback_days: 0
+    window_source: "справочник машин"
+
+outcome:
+  event_column: failed_at
+  deadline_column: horizon_on
+  comparison: direct
+  positive_class: event_within_deadline
+  estimand: "отказ любого компонента в течение 30 дней после визита"
+
+  # Статуса в данных нет ни в одной из пяти таблиц. Все причины неразличимы,
+  # и каждая обязана назвать принимаемое допущение (F-1).
+  missing_causes:
+    - name: "отказа действительно не было"
+      meaning: not_occurred
+      assumption: "отсутствие записи об отказе означает исправную работу, а не пробел в регистрации"
+    - name: "отказ произошёл, но не зарегистрирован"
+      meaning: not_occurred
+      assumption: "доля незарегистрированных отказов пренебрежимо мала"
+    - name: "профилактический ремонт предотвратил отказ"
+      meaning: not_occurred
+      assumption: "предотвращённый отказ считается отсутствием отказа, хотя это вмешательство, а не наблюдение"
+    - name: "объект выведен из эксплуатации"
+      meaning: not_occurred
+      assumption: "вывода из эксплуатации в наблюдаемом периоде не было"
+
+task:
+  target_kind: binary
+  outcome_timing: delayed
+  has_process: false      # колонки статуса нет
+  is_stream: false        # решения событийные, календарь дырявый
+  object_lifetime: recurring   # машина обслуживается многократно (F-2, F-3)
+
+split:
+  windows:
+    - {name: w0, start_day: 180, stop_day: 240}
+    - {name: w1, start_day: 240, stop_day: 300}
+    - {name: w2, start_day: 300, stop_day: 360}
+  reserve_from_day: 400
+
+assumptions:
+  - statement: "визит на обслуживание является моментом, когда возможно вмешательство"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "момент решения выбран там, где действие невозможно, и прогноз бесполезен"
+  - statement: "отсутствие записи об отказе означает, что отказа не было"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "цензура, вывод из эксплуатации и незарегистрированные отказы склеены с настоящим отсутствием отказа"
+  - statement: "горизонт 30 дней соответствует времени реакции обслуживания"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "прогноз не успевает изменить исход либо теряет сигнал"

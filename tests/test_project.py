@@ -1,0 +1,168 @@
+"""Форма проекта и запуск по ней."""
+
+from __future__ import annotations
+
+import textwrap
+from pathlib import Path
+
+import pytest
+import yaml
+from pydantic import ValidationError
+
+from dsx.evals.registry import BY_ID
+from dsx.project import ProjectForm, load
+from dsx.runner import RESERVE, run
+
+FORM = textwrap.dedent("""
+    title: "Проверочный проект"
+    columns:
+      - {name: entity_id, role: entity_id}
+      - {name: decided_at, role: decision_time, temporal: instant}
+      - {name: deadline_on, role: deadline, temporal: date}
+      - {name: event_at, role: outcome_component, temporal: instant}
+      - {name: status, role: status}
+      - name: lead_days
+        role: feature
+        availability: at_decision
+        source_of_claim: "генератор мира"
+        window_lookback_days: 0
+        window_source: "код мира"
+    outcome:
+      event_column: event_at
+      deadline_column: deadline_on
+      comparison: by_date
+      positive_class: event_after_deadline
+      estimand: "событие позже назначенного срока"
+      missing_causes:
+        - {name: "события не было", meaning: not_occurred, status_value: completed}
+        - {name: "объект исключён", meaning: excluded, status_value: aborted}
+        - {name: "событие ещё впереди", meaning: not_occurred, status_value: pending}
+    task:
+      target_kind: binary
+      outcome_timing: delayed
+      has_process: true
+      is_stream: true
+      object_lifetime: one_shot
+    split:
+      windows:
+        - {name: w0, start_day: 300, stop_day: 345}
+        - {name: w1, start_day: 345, stop_day: 390}
+      reserve_from_day: 480
+    assumptions:
+      - statement: "срок назначается до решения"
+        basis: owner
+        author: "автор"
+        consequence: "срок мог назначаться задним числом"
+""")
+
+
+def form(**overrides) -> ProjectForm:
+    payload = yaml.safe_load(FORM)
+    payload.update(overrides)
+    return ProjectForm(**payload)
+
+
+def test_form_loads_from_yaml(tmp_path: Path) -> None:
+    path = tmp_path / "project.yaml"
+    path.write_text(FORM, encoding="utf-8")
+
+    assert load(path).title == "Проверочный проект"
+
+
+def test_unknown_field_is_refused() -> None:
+    """Опечатка в имени поля не должна проходить молча."""
+    with pytest.raises(ValidationError):
+        form(unknown_section={})
+
+
+def test_window_without_a_source_is_refused() -> None:
+    """Окно без источника — необеспеченное объявление (F-5, F-11)."""
+    payload = yaml.safe_load(FORM)
+    for column in payload["columns"]:
+        if column.get("window_source"):
+            del column["window_source"]
+
+    with pytest.raises(ValueError, match="источника"):
+        ProjectForm(**payload).schema_spec()
+
+
+def test_reserve_behind_a_window_is_refused() -> None:
+    """Резерв, в который заходит окно, независимым не является (F-9)."""
+    payload = yaml.safe_load(FORM)
+    payload["split"]["reserve_from_day"] = 310
+
+    with pytest.raises(ValidationError, match="заходят за границу резерва"):
+        ProjectForm(**payload)
+
+
+def test_project_without_assumptions_is_refused() -> None:
+    """Ноль записанных допущений означает, что их принимали молча."""
+    payload = yaml.safe_load(FORM)
+    payload["assumptions"] = []
+
+    with pytest.raises(ValidationError):
+        ProjectForm(**payload)
+
+
+def test_direction_of_the_outcome_must_be_declared() -> None:
+    """Умолчание здесь дало долю противоположного класса (F-10)."""
+    payload = yaml.safe_load(FORM)
+    del payload["outcome"]["positive_class"]
+
+    with pytest.raises(ValidationError):
+        ProjectForm(**payload)
+
+
+def test_object_lifetime_must_be_declared() -> None:
+    payload = yaml.safe_load(FORM)
+    del payload["task"]["object_lifetime"]
+
+    with pytest.raises(ValidationError):
+        ProjectForm(**payload)
+
+
+# --- запуск ----------------------------------------------------------------
+
+
+def test_run_produces_split_reserve_and_report(tmp_path: Path) -> None:
+    result = run(form(), BY_ID["clean-baseline"].build().main, tmp_path)
+
+    assert [p.name for p in result.split.parts] == ["w0", "w1"]
+    assert result.split.reserved is not None and result.split.reserved.height
+    assert (tmp_path / "report.md").exists()
+
+
+def test_clean_world_raises_no_blocking_signals() -> None:
+    result = run(form(), BY_ID["clean-baseline"].build().main)
+
+    assert not result.checks.blocking, [str(s) for s in result.checks.signals]
+
+
+def test_reserve_is_registered_and_measurable() -> None:
+    result = run(form(), BY_ID["clean-baseline"].build().main)
+
+    result.samples.select("w0", "выбор порога")
+    result.samples.measure(RESERVE)
+
+    assert result.samples.was_measured(RESERVE)
+
+
+def test_assumptions_from_the_form_reach_the_report() -> None:
+    result = run(form(), BY_ID["clean-baseline"].build().main)
+
+    assert "срок назначается до решения" in result.study.render()
+
+
+def test_summary_names_features_whose_window_cannot_be_verified() -> None:
+    result = run(form(), BY_ID["clean-baseline"].build().main)
+
+    assert "lead_days" in result.summary()
+
+
+def test_template_is_a_valid_shape_even_though_filled_with_placeholders() -> None:
+    """Шаблон обязан загружаться: форма с опечаткой не поможет заполнить её."""
+    import yaml as _yaml
+
+    payload = _yaml.safe_load(Path("templates/project.yaml").read_text(encoding="utf-8"))
+
+    ProjectForm(**payload)

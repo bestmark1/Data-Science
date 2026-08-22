@@ -1,0 +1,121 @@
+"""Запуск проекта по заполненной форме.
+
+Скрипт проекта сводится к двум действиям: построить таблицу решений и вызвать
+`run`. Всё остальное — сплит, проверки, учёт выборок, отчёт — общее и живёт
+здесь, а не переписывается в каждом проекте заново.
+
+Порядок шагов не настраивается. На этапе 0 заключение переворачивалось трижды
+именно из-за перестановок в протоколе, и возможность их сделать — не гибкость,
+а незакрытая дыра.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from dataclasses import dataclass
+from pathlib import Path
+
+import polars as pl
+
+from dsx.checks import ALL_CHECKS, Context, run_checks
+from dsx.checks.base import Report as CheckReport
+from dsx.evals.world import World
+from dsx.policy import OverrideLedger
+from dsx.project import ProjectForm
+from dsx.report import Study
+from dsx.samples import SampleLedger
+from dsx.split import (
+    SplitResult,
+    entity_overlap,
+    extent_of,
+    positive_rates,
+    reserved_extent,
+    split_by_windows,
+)
+from dsx.windows import unverified
+
+RESERVE = "резерв"
+"""Имя измерительной выборки. Одно на все проекты: разные имена для одной
+роли — способ незаметно измерить дважды."""
+
+
+@dataclass
+class Result:
+    """Что получилось: данные протокола вместе с отчётом."""
+
+    world: World
+    split: SplitResult
+    checks: CheckReport
+    samples: SampleLedger
+    study: Study
+
+    def summary(self) -> str:
+        lines = [f"решений: {self.world.main.height:,}"]
+        for part in self.split.parts:
+            lines.append(
+                f"  {part.name}: обучение {part.train.height:6,}  оценка {part.evaluate.height:5,}"
+            )
+        reserved = self.split.reserved
+        lines.append(f"  {RESERVE}: {reserved.height if reserved is not None else 0:,}")
+        lines.append(f"выпало между выборками: {self.split.dropped_not_yet_known:,}")
+        lines.append("незрелых: " + (str(self.split.immature) if self.split.immature else "нет"))
+        lines.append(
+            "доли положительных: "
+            + str({k: f"{v:.1%}" for k, v in positive_rates(self.split.parts).items()})
+        )
+        lines.append("")
+
+        lines.append("СИГНАЛЫ")
+        lines += [f"  {s}" for s in self.checks.signals] or ["  нет"]
+        lines.append("")
+        lines.append("ПРОПУЩЕННЫЕ ПРОВЕРКИ")
+        lines += [f"  {s}" for s in self.checks.skipped] or ["  нет"]
+        lines.append("")
+        lines.append(
+            f"блокирующих: {len(self.checks.blocking)}, "
+            f"пропущено проверок: {len(self.checks.skipped)}"
+        )
+        lines.append(
+            "окна признаков, сверить которые не с чем: "
+            + (", ".join(unverified(self.world)) or "нет")
+        )
+        return "\n".join(lines)
+
+
+def run(form: ProjectForm, frame: pl.DataFrame, report_dir: Path | None = None) -> Result:
+    """Прогнать проект: сплит, проверки, учёт выборок, отчёт."""
+    world = World(frames={"main": frame}, schema=form.schema_spec())
+    definition = form.outcome.to_definition()
+    task = form.task.to_spec()
+
+    moment = world.schema.decision_time.name
+    origin = frame[moment].min()
+    snapshot = frame[moment].max()
+    reserve_from = origin + dt.timedelta(days=form.split.reserve_from_day)
+
+    split = split_by_windows(
+        world, definition, form.split.to_windows(origin), snapshot, reserve_from
+    )
+    checks = run_checks(list(ALL_CHECKS), Context(world, definition, task, split))
+
+    samples = SampleLedger(OverrideLedger())
+    for part in split.parts:
+        samples.register(part.name, extent_of(part, world))
+    samples.register(RESERVE, reserved_extent(split, world))
+
+    study = Study(title=form.title)
+    study.checks = checks
+    study.samples = samples
+    study.assumptions = form.registry()
+
+    result = Result(world=world, split=split, checks=checks, samples=samples, study=study)
+
+    if report_dir is not None:
+        report_dir.mkdir(parents=True, exist_ok=True)
+        (report_dir / "report.md").write_text(study.render(), encoding="utf-8")
+    return result
+
+
+def objects_across_splits(result: Result) -> dict[str, int]:
+    """Объекты по обе стороны сплита. Для долгоживущих это норма, не находка."""
+    return entity_overlap(result.split.parts, result.world)
