@@ -21,7 +21,7 @@ from dsx.outcome import (
     PositiveClass,
 )
 from dsx.roles import Direction
-from dsx.task import ObjectLifetime
+from dsx.task import ObjectLifetime, TargetKind
 
 
 def _with_children() -> World:
@@ -39,6 +39,9 @@ class Bundle:
     case: Case
     build: Callable[[], World]
     outcome: OutcomeDefinition
+
+    target_kind: TargetKind | None = None
+    """Тип задачи, если кейс требует не бинарного."""
 
     reserve: bool = True
     """Резервировать ли измерительную выборку при построении сплита.
@@ -97,6 +100,7 @@ def _bundle(
     caught_by: set[str] | None = None,
     lifetime: ObjectLifetime | None = None,
     reserve: bool = True,
+    target_kind: TargetKind | None = None,
 ) -> Bundle:
     return Bundle(
         case=Case(
@@ -111,6 +115,7 @@ def _bundle(
         outcome=_outcome(comparison),
         lifetime=lifetime,
         reserve=reserve,
+        target_kind=target_kind,
     )
 
 
@@ -364,6 +369,17 @@ ALL: tuple[Bundle, ...] = (
         {Finding.COMPETING_KINDS_COLLAPSED},
         lambda: inj.competing_event_kinds(build_world()),
         caught_by={"N12"},
+    ),
+    _bundle(
+        "simultaneity-undeclared",
+        "Конкурирующие исходы объявлены, одновременность — нет",
+        "F-12: допущение «побеждает ровно один» на втором кейсе оказалось нарушено в "
+        "42 моментах из 719. По таблице решений это не проверить, поэтому объявление "
+        "обязательно.",
+        {Finding.SIMULTANEITY_UNDECLARED},
+        lambda: inj.competing_event_kinds(build_world()),
+        caught_by={"N12"},
+        target_kind=TargetKind.COMPETING,
     ),
     _bundle(
         "clean-direction-matches-domain",

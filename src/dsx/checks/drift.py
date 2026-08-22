@@ -345,7 +345,9 @@ class CompetingKindsDeclared:
 
     requirement: str = "N12"
     premises: frozenset[Premise] = frozenset({Premise.UNIVERSAL})
-    detects: frozenset[Finding] = frozenset({Finding.COMPETING_KINDS_COLLAPSED})
+    detects: frozenset[Finding] = frozenset(
+        {Finding.COMPETING_KINDS_COLLAPSED, Finding.SIMULTANEITY_UNDECLARED}
+    )
 
     def run(self, context: Context) -> list[Signal]:
         from dsx.competing import kinds_in
@@ -354,8 +356,21 @@ class CompetingKindsDeclared:
         kinds = kinds_in(context.world)
         if len(kinds) < 2:
             raise NotApplicable("видов события меньше двух: конкуренции нет")
+
         if context.task.target_kind is TargetKind.COMPETING:
-            return []  # виды различаются, склейки нет
+            if context.task.simultaneous_kinds is not None:
+                return []  # виды различаются, склейки нет, ответ об одновременности дан
+            return [
+                Signal(
+                    Finding.SIMULTANEITY_UNDECLARED,
+                    "конкурирующие исходы предполагают, что побеждает ровно один, "
+                    "но что делать при одновременном наступлении, не объявлено. "
+                    "По таблице решений это не проверить: там один вид на строку, "
+                    "а нарушение происходит раньше, при её сборке",
+                    blocking=True,
+                )
+            ]
+
         if context.task.kinds_collapsed is not None:
             return []  # ответ дан
 

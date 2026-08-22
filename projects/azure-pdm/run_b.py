@@ -14,7 +14,7 @@ from dsx.runner import objects_across_splits, run
 
 PROJECT = Path(__file__).resolve().parent
 
-_spec = importlib.util.spec_from_file_location("build_b", PROJECT / "steps" / "04_protocol_b.py")
+_spec = importlib.util.spec_from_file_location("build_b", PROJECT / "build_b.py")
 _build = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_build)
 

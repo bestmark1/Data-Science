@@ -1,4 +1,4 @@
-"""Шаг 04 — протокол B: полная скользящая постановка.
+"""Сборка таблицы решений протокола B: полная скользящая постановка.
 
 Протокол A выбирал момент решения там, где он почти естественен — визит на
 обслуживание. Здесь моменты решения назначаются календарём: каждая машина
@@ -16,9 +16,10 @@ from pathlib import Path
 import polars as pl
 
 from dsx.evals.world import World
+from dsx.join import Cardinality, guarded_join
 from dsx.roles import Availability, ColumnSpec, FeatureWindow, Role, Schema, TemporalKind
 
-PROJECT = Path(__file__).resolve().parent.parent
+PROJECT = Path(__file__).resolve().parent
 RAW = PROJECT / "data" / "raw"
 
 HORIZON_DAYS = 30
@@ -86,9 +87,9 @@ def error_counts(days: pl.DataFrame) -> pl.DataFrame:
         .group_by("machineID", "day")
         .agg(pl.len().alias("errors_day"))
     )
-    joined = days.join(errors, on=["machineID", "day"], how="left").with_columns(
-        pl.col("errors_day").fill_null(0)
-    )
+    joined = guarded_join(
+        days, errors, on=["machineID", "day"], expect=Cardinality.MANY_TO_ONE, how="left"
+    ).with_columns(pl.col("errors_day").fill_null(0))
     return (
         joined.sort("machineID", "day")
         .rolling(index_column="day", period=f"{LOOKBACK_DAYS}d", group_by="machineID")
@@ -110,24 +111,41 @@ def build_case() -> World:
         .select("machineID", "failed_at")
     )
 
-    grid = features.join(errors, on=["machineID", "day"], how="inner").with_columns(
+    grid = guarded_join(
+        features, errors, on=["machineID", "day"], expect=Cardinality.MANY_TO_ONE, how="inner"
+    ).with_columns(
         # Решение принимается на следующее утро после последнего показания:
         # окно признаков обязано кончаться до момента решения, а не в нём.
         pl.col("day").cast(pl.Datetime).dt.offset_by("1d6h").alias("decided_at")
     )
 
     # Ближайший отказ строго после момента решения.
+    # Размножает намеренно: у машины много дней и много отказов, пары нужны
+    # все, чтобы выбрать ближайший.
+    pairs = guarded_join(
+        grid.select("machineID", "decided_at"),
+        failures,
+        on=["machineID"],
+        expect=Cardinality.ONE_TO_MANY,
+        how="left",
+    )
     next_failure = (
-        grid.select("machineID", "decided_at")
-        .join(failures, on="machineID", how="left")
-        .filter(pl.col("failed_at") > pl.col("decided_at"))
+        pairs.filter(pl.col("failed_at") > pl.col("decided_at"))
         .group_by("machineID", "decided_at")
         .agg(pl.col("failed_at").min())
     )
 
+    with_failure = guarded_join(
+        grid,
+        next_failure,
+        on=["machineID", "decided_at"],
+        expect=Cardinality.MANY_TO_ONE,
+        how="left",
+    )
     table = (
-        grid.join(next_failure, on=["machineID", "decided_at"], how="left")
-        .join(machines, on="machineID", how="left")
+        guarded_join(
+            with_failure, machines, on=["machineID"], expect=Cardinality.MANY_TO_ONE, how="left"
+        )
         .with_columns(
             (pl.col("decided_at") + pl.duration(days=HORIZON_DAYS)).alias("horizon_on"),
             pl.col("machineID").cast(pl.Utf8).alias("machine_key"),

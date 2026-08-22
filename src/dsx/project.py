@@ -42,7 +42,13 @@ from dsx.roles import (
     TemporalKind,
 )
 from dsx.split import Window
-from dsx.task import ObjectLifetime, OutcomeTiming, TargetKind, TaskSpec
+from dsx.task import (
+    ObjectLifetime,
+    OutcomeTiming,
+    Simultaneity,
+    TargetKind,
+    TaskSpec,
+)
 
 
 class ColumnForm(BaseModel):
@@ -140,6 +146,8 @@ class TaskForm(BaseModel):
     has_process: bool
     is_stream: bool
     object_lifetime: ObjectLifetime
+    kinds_collapsed: bool | None = None
+    simultaneous_kinds: Simultaneity | None = None
 
     def to_spec(self) -> TaskSpec:
         return TaskSpec(
@@ -148,6 +156,8 @@ class TaskForm(BaseModel):
             has_process=self.has_process,
             is_stream=self.is_stream,
             object_lifetime=self.object_lifetime,
+            kinds_collapsed=self.kinds_collapsed,
+            simultaneous_kinds=self.simultaneous_kinds,
         )
 
 

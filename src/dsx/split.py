@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 import polars as pl
 
 from dsx.evals.world import World
+from dsx.join import Cardinality, guarded_join
 from dsx.label import LABEL, compute, observable
 from dsx.outcome import OutcomeDefinition
 from dsx.roles import Role
@@ -228,8 +229,17 @@ def feature_window_overlap(parts: list[Part], world: World, lookback_days: float
         if key not in part.train.columns or key not in part.evaluate.columns:
             continue
         last_train = part.train.group_by(key).agg(pl.col(moment).max().alias("__last_train"))
+        # Грануляция объявляется даже там, где она очевидна по построению:
+        # group_by даёт одну строку на ключ. Необъявленное соединение в ядре —
+        # то же самое, что необъявленное в проекте.
         touching = (
-            part.evaluate.join(last_train, on=key, how="inner")
+            guarded_join(
+                part.evaluate,
+                last_train,
+                on=[key],
+                expect=Cardinality.MANY_TO_ONE,
+                how="inner",
+            )
             .filter(pl.col(moment) <= pl.col("__last_train") + reach)
             .height
         )

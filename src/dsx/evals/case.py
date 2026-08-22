@@ -49,6 +49,7 @@ class Finding(StrEnum):
     INCOMPARABLE_SUPPORT = "incomparable_support"
     DIRECTION_CONTRADICTS_DOMAIN = "direction_contradicts_domain"
     COMPETING_KINDS_COLLAPSED = "competing_kinds_collapsed"
+    SIMULTANEITY_UNDECLARED = "simultaneity_undeclared"
 
 
 class Expectation(BaseModel):

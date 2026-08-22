@@ -10,6 +10,7 @@ from pathlib import Path
 
 import polars as pl
 
+from dsx.join import Cardinality, guarded_join
 from dsx.project import load
 from dsx.runner import objects_across_splits, run
 
@@ -33,20 +34,31 @@ def build() -> pl.DataFrame:
         .sort("machineID", "decided_at")
         .with_row_index("visit_id")
     )
+    # Соединения объявляют ожидаемую грануляцию. Первое РАЗМНОЖАЕТ намеренно:
+    # у машины много визитов и много отказов, и пары нужны все, чтобы выбрать
+    # ближайший. Объявить это обязательно — раздутие таблицы в четыре раза на
+    # первом кейсе выглядело точно так же и ошибкой не считалось.
+    pairs = guarded_join(
+        visits,
+        failures.select("machineID", "failed_at"),
+        on=["machineID"],
+        expect=Cardinality.ONE_TO_MANY,
+        how="left",
+    )
     next_failure = (
-        visits.join(failures.select("machineID", "failed_at"), on="machineID", how="left")
-        .filter(pl.col("failed_at") > pl.col("decided_at"))
+        pairs.filter(pl.col("failed_at") > pl.col("decided_at"))
         .group_by("visit_id")
         .agg(pl.col("failed_at").min())
     )
-    return (
-        visits.join(next_failure, on="visit_id", how="left")
-        .join(machines, on="machineID", how="left")
-        .with_columns(
-            (pl.col("decided_at") + pl.duration(days=HORIZON_DAYS)).alias("horizon_on"),
-            pl.col("visit_id").cast(pl.Utf8).alias("visit_key"),
-            pl.col("machineID").cast(pl.Utf8).alias("machine_key"),
-        )
+    with_failure = guarded_join(
+        visits, next_failure, on=["visit_id"], expect=Cardinality.MANY_TO_ONE, how="left"
+    )
+    return guarded_join(
+        with_failure, machines, on=["machineID"], expect=Cardinality.MANY_TO_ONE, how="left"
+    ).with_columns(
+        (pl.col("decided_at") + pl.duration(days=HORIZON_DAYS)).alias("horizon_on"),
+        pl.col("visit_id").cast(pl.Utf8).alias("visit_key"),
+        pl.col("machineID").cast(pl.Utf8).alias("machine_key"),
     )
 
 

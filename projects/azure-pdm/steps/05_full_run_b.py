@@ -45,7 +45,7 @@ def _load(name: str, filename: str):
 
 
 protocol_a = _load("protocol_a", "02_protocol_a.py")
-protocol_b = _load("protocol_b", "04_protocol_b.py")
+protocol_b = _load("protocol_b", "../build_b.py")
 
 HORIZON_DAYS = protocol_b.HORIZON_DAYS
 LOOKBACK_DAYS = protocol_b.LOOKBACK_DAYS

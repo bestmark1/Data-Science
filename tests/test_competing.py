@@ -12,7 +12,7 @@ from dsx.evals.case import Finding
 from dsx.evals.registry import BY_ID
 from dsx.evals.world import build_world
 from dsx.label import LABEL
-from dsx.task import TargetKind
+from dsx.task import Simultaneity, TargetKind
 
 BUNDLE = BY_ID["competing-kinds-collapsed"]
 
@@ -101,9 +101,15 @@ def test_declaring_the_collapse_as_unintended_also_silences_it() -> None:
     assert CompetingKindsDeclared().run(_context(kinds_collapsed=False)) == []
 
 
-def test_competing_target_kind_silences_the_check() -> None:
-    """Виды различаются по существу задачи — склейки нет."""
-    context = _context(target_kind=TargetKind.COMPETING)
+def test_competing_target_kind_still_needs_the_simultaneity_answer() -> None:
+    """Склейки нет, но допущение «побеждает ровно один» тоже надо объявить (F-12)."""
+    signals = CompetingKindsDeclared().run(_context(target_kind=TargetKind.COMPETING))
+
+    assert [s.finding for s in signals] == [Finding.SIMULTANEITY_UNDECLARED]
+
+
+def test_competing_with_declared_simultaneity_is_silent() -> None:
+    context = _context(target_kind=TargetKind.COMPETING, simultaneous_kinds=Simultaneity.OWN_KIND)
 
     assert CompetingKindsDeclared().run(context) == []
 
