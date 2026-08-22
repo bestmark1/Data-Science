@@ -230,6 +230,13 @@ class PostTreatmentMissingness:
     detects: frozenset[Finding] = frozenset({Finding.POST_TREATMENT_MISSINGNESS})
     concentration: float = 0.8
 
+    min_missing: int = 30
+    """Меньше этого пропусков — концентрация ничего не значит.
+
+    Один пропуск у строки редкого статуса даёт стопроцентную концентрацию, и
+    проверка объявляла случайность находкой.
+    """
+
     def run(self, context: Context) -> list[Signal]:
         schema = context.world.schema
         statuses = schema.by_role(Role.STATUS)
@@ -243,7 +250,7 @@ class PostTreatmentMissingness:
             if column.name not in frame.columns:
                 continue
             missing = frame.filter(pl.col(column.name).is_null())
-            if missing.is_empty():
+            if missing.height < self.min_missing:
                 continue
 
             share = (

@@ -111,7 +111,13 @@ class TargetRateStationarity:
         low_name = min(rates, key=lambda k: rates[k])
         high_name = max(rates, key=lambda k: rates[k])
         low, high = rates[low_name], rates[high_name]
-        if low <= 0 or high / low < self.ratio:
+
+        # Нулевая доля в одном окне при ненулевой в другом — расхождение
+        # бесконечной кратности, а не повод к раннему возврату. Первая версия
+        # трактовала самый крайний случай как отсутствие дефекта.
+        if low > 0 and high / low < self.ratio:
+            return []
+        if high <= 0:
             return []
 
         # Кратность сама по себе ничего не значит: при редком исходе два
@@ -123,11 +129,16 @@ class TargetRateStationarity:
             return []
 
         shown = ", ".join(f"{name}: {value:.1%}" for name, value in sorted(rates.items()))
+        times = (
+            f"{high / low:.1f} раза"
+            if low > 0
+            else "бесконечное число раз (в окне нет ни одного положительного)"
+        )
         return [
             Signal(
                 Finding.NON_STATIONARY_TARGET,
                 f"доля положительного класса различается между окнами в "
-                f"{high / low:.1f} раза ({shown}). Модель, обученная на одной доле "
+                f"{times} ({shown}). Модель, обученная на одной доле "
                 "и оценённая на другой, сравнивается не сама с собой",
                 blocking=True,
             )
@@ -183,7 +194,10 @@ def support_overlap(windows: list[tuple[str, pl.DataFrame]], feature: str) -> fl
     widths = [s[1] - s[0] for s in spans]
     typical = min(widths)
     if typical <= 0:
-        return None
+        # Признак постоянен хотя бы в одном окне. Совпадающие константы
+        # сопоставимы полностью, разошедшиеся — не сопоставимы вовсе. Возврат
+        # None прятал второй случай как невычислимость.
+        return 1.0 if hi >= lo else 0.0
     return max(0.0, (hi - lo) / typical)
 
 
@@ -262,13 +276,24 @@ class FeatureRelationStability:
                 )
                 continue
 
-            # Ослабление можно утверждать, только когда обе стороны сравнения
-            # различимы на фоне шума: иначе сравнивается связь с пустотой.
-            if len(strong) < 2:
-                continue
-            magnitudes = [abs(v) for v in strong.values()]
-            low, high = min(magnitudes), max(magnitudes)
-            if high >= self.strong and high / low >= self.ratio:
+            # Ослабление сильной связи до шума — это и есть «признак перестал
+            # работать», и требовать двух сильных окон значило бы молчать
+            # именно в этом случае.
+            #
+            # Но кратности мало: 0.20 против 0.05 при шуме 0.15 — одно и то же
+            # значение, измеренное дважды. Поэтому требуется, чтобы РАЗРЫВ
+            # между окнами превосходил совместный шум, а не только максимум.
+            magnitudes = {w: abs(v) for w, v in values.items()}
+            high_window = max(magnitudes, key=lambda w: magnitudes[w])
+            low_window = min(magnitudes, key=lambda w: magnitudes[w])
+            high, low = magnitudes[high_window], magnitudes[low_window]
+            spread = math.sqrt((noise[high_window] / SIGMA) ** 2 + (noise[low_window] / SIGMA) ** 2)
+            ratio_broken = low <= 0 or high / low >= self.ratio
+            if (
+                high >= max(self.strong, noise[high_window])
+                and ratio_broken
+                and high - low >= SIGMA * spread
+            ):
                 signals.append(
                     Signal(
                         Finding.UNSTABLE_FEATURE_RELATION,
@@ -308,13 +333,16 @@ class DeclaredDirectionHolds:
 
         windows = _windows_with_labels(context)
         frame = pl.concat([f for _, f in windows], how="vertical_relaxed")
+        # Порог считается с шумом выборки: на сотне строк случайный признак
+        # даёт связь около 0.06 и противоречил бы объявленному направлению.
+        threshold = max(self.floor, SIGMA * _association_error(frame[LABEL]))
 
         signals = []
         for column in declared:
             if column.name not in frame.columns or not frame[column.name].dtype.is_numeric():
                 continue
             value = association(frame[column.name], frame[LABEL])
-            if value is None or abs(value) < self.floor:
+            if value is None or abs(value) < threshold:
                 continue
             observed = Direction.INCREASES if value > 0 else Direction.DECREASES
             if observed is column.direction:
@@ -412,18 +440,25 @@ class ExpectedRateHolds:
         windows = _windows_with_labels(context)
         frame = pl.concat([f for _, f in windows], how="vertical_relaxed")
         observed = float(frame[LABEL].mean())
-        if observed <= 0:
-            return []
 
-        high, low = max(observed, expected), min(observed, expected)
-        if high / low < self.ratio:
-            return []
+        # Наблюдаемый ноль при ненулевом ожидании — крайнее расхождение, но
+        # только если строк достаточно, чтобы ноль что-то значил.
+        if observed <= 0:
+            if frame.height * expected < SIGMA:
+                raise NotApplicable(
+                    f"при ожидаемой доле {expected:.1%} и {frame.height:,} строках ноль "
+                    "положительных ещё ни о чём не говорит"
+                )
+        else:
+            high, low = max(observed, expected), min(observed, expected)
+            if high / low < self.ratio:
+                return []
         return [
             Signal(
                 Finding.RATE_CONTRADICTS_EXPECTATION,
                 f"ожидалась доля положительного класса {expected:.1%}, наблюдается "
-                f"{observed:.1%} — расхождение в {high / low:.1f} раза. Либо разметка "
-                "или фильтрация теряют строки, либо процесс понят неверно",
+                f"{observed:.1%}. Либо разметка или фильтрация теряют строки, "
+                "либо процесс понят неверно",
                 blocking=True,
             )
         ]

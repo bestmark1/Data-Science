@@ -82,14 +82,27 @@ class ImplausibleSeparation:
     """Минимальная сила связи, ниже которой вопрос не поднимается."""
 
     excess: float = 2.5
-    """Во сколько раз связь должна превосходить типичную среди признаков."""
+    """Во сколько раз связь должна превосходить типичную среди ОСТАЛЬНЫХ.
+
+    Первая версия сравнивала признак с медианой, включавшей его самого. При
+    двух признаках условие становилось невыполнимым: для сил a ≥ b требовалось
+    a ≥ 2.5·(a+b)/2, чего не бывает. Признак, буквально равный таргету, не
+    вызывал ни одного сигнала.
+    """
+
+    blatant: float = 0.45
+    """Сила, при которой вопрос поднимается независимо от остальных.
+
+    Разделение, близкое к идеальному, подозрительно само по себе: сравнивать
+    его не с чем, когда признак в задаче один.
+    """
 
     def run(self, context: Context) -> list[Signal]:
         schema = context.world.schema
         declared = [
             c for c in schema.by_role(Role.FEATURE) if c.availability is Availability.AT_DECISION
         ]
-        if len(declared) < 2:
+        if not declared:
             return []
 
         try:
@@ -111,22 +124,29 @@ class ImplausibleSeparation:
             if value is not None:
                 strengths[column.name] = value
 
-        if len(strengths) < 2:
+        if not strengths:
             return []
 
-        typical = float(np.median(list(strengths.values())))
         signals = []
         for name, value in sorted(strengths.items(), key=lambda kv: -kv[1]):
             if value < self.floor:
                 continue
-            if typical > 0 and value < typical * self.excess:
+            others = [v for other, v in strengths.items() if other != name]
+            typical = float(np.median(others)) if others else 0.0
+            blatant = value >= self.blatant
+            if not blatant and typical > 0 and value < typical * self.excess:
                 continue
+            context_note = (
+                f" при типичной {typical:.2f} среди остальных"
+                if others
+                else " (сравнивать не с чем: признак один)"
+            )
             signals.append(
                 Signal(
                     Finding.FEATURE_AFTER_DECISION,
-                    f"признак {name!r} разделяет классы с силой {value:.2f} при типичной "
-                    f"{typical:.2f} среди остальных. Объявлен доступным в момент решения — "
-                    "проверьте, не вычислен ли он из исхода",
+                    f"признак {name!r} разделяет классы с силой {value:.2f}{context_note}. "
+                    "Объявлен доступным в момент решения — проверьте, не вычислен ли он "
+                    "из исхода",
                     blocking=True,
                 )
             )
