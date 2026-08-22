@@ -19,7 +19,13 @@ from dsx.policy import OverrideLedger
 from dsx.report import Study
 from dsx.roles import Role
 from dsx.samples import SampleLedger
-from dsx.split import Window, entity_overlap, positive_rates, split_by_windows
+from dsx.split import (
+    Window,
+    entity_overlap,
+    extent_of,
+    positive_rates,
+    split_by_windows,
+)
 from dsx.task import ObjectLifetime, OutcomeTiming, TargetKind, TaskSpec
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -85,10 +91,14 @@ def main() -> int:
     print(f"блокирующих: {len(report.blocking)}, пропущено проверок: {len(report.skipped)}")
 
     samples = SampleLedger(OverrideLedger())
-    samples.register(*[p.name for p in split.parts], "train")
-    samples.fit("train", "обучение не проводилось, только аудит")
+    for part in split.parts:
+        samples.register(part.name, extent_of(part, world))
     samples.select("w0", "выбор горизонта и окна")
-    samples.measure("w2")
+    try:
+        samples.measure("w2")
+        print("журнал принял измерение на w2")
+    except Exception as refusal:
+        print(f"журнал отказал: {refusal}")
 
     assumptions = AssumptionRegistry()
     assumptions.record(

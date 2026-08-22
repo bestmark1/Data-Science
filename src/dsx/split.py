@@ -22,6 +22,7 @@ from dsx.evals.world import World
 from dsx.label import LABEL, compute, observable
 from dsx.outcome import OutcomeDefinition
 from dsx.roles import Role
+from dsx.samples import Extent
 
 KNOWN_AT = "__label_known_at"
 
@@ -142,6 +143,27 @@ def entity_overlap(parts: list[Part], world: World, role: Role | None = None) ->
         if shared:
             overlaps[part.name] = len(shared)
     return overlaps
+
+
+def extent_of(part: Part, world: World) -> Extent:
+    """Состав части сплита: единицы решения обучения И оценки вместе.
+
+    Обе половины входят намеренно. Загрязнение идёт не только через оценочные
+    строки: на втором кейсе выборка w2 обучалась на днях, которые в w0 были
+    оценочными, и именно по ним принимался выбор.
+    """
+    keys = world.schema.by_role(Role.ENTITY_ID)
+    if not keys:
+        raise ValueError("состав выборки требует объявленной единицы решения")
+    key = keys[0].name
+    moment = world.schema.decision_time.name
+
+    frame = pl.concat([part.train, part.evaluate], how="vertical_relaxed")
+    return Extent(
+        units=frozenset(frame[key].to_list()),
+        since=frame[moment].min(),
+        until=frame[moment].max(),
+    )
 
 
 def feature_window_overlap(parts: list[Part], world: World, lookback_days: float) -> dict[str, int]:

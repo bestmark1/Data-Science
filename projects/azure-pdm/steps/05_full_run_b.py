@@ -20,7 +20,13 @@ from dsx.policy import OverrideLedger
 from dsx.report import Study
 from dsx.roles import Role
 from dsx.samples import SampleLedger
-from dsx.split import Window, entity_overlap, positive_rates, split_by_windows
+from dsx.split import (
+    Window,
+    entity_overlap,
+    extent_of,
+    positive_rates,
+    split_by_windows,
+)
 from dsx.task import ObjectLifetime, OutcomeTiming, TargetKind, TaskSpec
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -100,18 +106,24 @@ def main() -> int:
 
     print("=== P-10: журнал выборок против перекрытия по времени ===")
     samples = SampleLedger(OverrideLedger())
-    samples.register(*[p.name for p in split.parts])
+    for part in split.parts:
+        samples.register(part.name, extent_of(part, world))
     samples.select("w0", "выбор окна признаков и горизонта")
-    samples.measure("w2")
-    print("журнал принял: выбор на w0, измерение на w2 — разные имена, возражений нет")
+    try:
+        samples.measure("w2")
+        print("журнал принял выбор на w0 и измерение на w2 — возражений нет")
+    except Exception as refusal:
+        print(f"журнал отказал: {refusal}")
 
     by_name = {p.name: p for p in split.parts}
     shared_rows = set(by_name["w0"].train["decision_key"].to_list()) & set(
         by_name["w2"].train["decision_key"].to_list()
     )
     print(
-        f"а на деле обучающие выборки w0 и w2 делят {len(shared_rows):,} решений "
-        f"из {by_name['w0'].train.height:,} — это {len(shared_rows) / by_name['w0'].train.height:.0%}"
+        f"обучающие выборки w0 и w2 делят {len(shared_rows):,} решений из "
+        f"{by_name['w0'].train.height:,} — это "
+        f"{len(shared_rows) / by_name['w0'].train.height:.0%}. Учёт по именам этого "
+        "не видел: имена разные"
     )
 
     w0_eval_days = set(by_name["w0"].evaluate["decided_at"].dt.date().to_list())
@@ -156,8 +168,9 @@ def main() -> int:
     )
     print("роли для компонента отдельно от актива нет: отказы склеены в один исход")
     print(
-        "роли для времени измерения отдельно от времени события нет: телеметрия "
-        "свёрнута в суточные агрегаты, и час измерения потерян"
+        "время измерения отдельной ролью не понадобилось: объявленное окно "
+        "признака делает интервалы сравнимыми без него. Час измерения всё же "
+        "потерян — телеметрия свёрнута в суточные агрегаты"
     )
     print()
 

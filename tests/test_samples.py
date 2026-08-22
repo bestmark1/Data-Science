@@ -2,16 +2,30 @@
 
 from __future__ import annotations
 
+import datetime as dt
+
 import pytest
 from pydantic import ValidationError
 
 from dsx.policy import Blocked, OverrideLedger
-from dsx.samples import Purpose, SampleLedger
+from dsx.samples import Extent, Purpose, SampleLedger
+
+ORIGIN = dt.datetime(2024, 1, 1)
+
+
+def extent(prefix: str, count: int = 100, month: int = 1) -> Extent:
+    """Непересекающийся состав: у каждой выборки свои единицы решения."""
+    return Extent(
+        units=frozenset(f"{prefix}-{i}" for i in range(count)),
+        since=ORIGIN.replace(month=month),
+        until=ORIGIN.replace(month=month + 1),
+    )
 
 
 def ledger(overrides: OverrideLedger | None = None) -> SampleLedger:
     sl = SampleLedger(overrides)
-    sl.register("train", "valid", "test", "holdout")
+    for month, name in enumerate(("train", "valid", "test", "holdout"), start=1):
+        sl.register(name, extent(name, month=month))
     return sl
 
 
@@ -152,3 +166,80 @@ def test_report_shows_what_each_decision_rested_on() -> None:
 
 def test_empty_ledger_is_reported_explicitly() -> None:
     assert "не зафиксировано" in SampleLedger().report_section().lower()
+
+
+# --- состав выборок, а не имена (F-6) --------------------------------------
+
+
+def test_overlapping_samples_are_caught_despite_different_names() -> None:
+    """На втором кейсе w0 и w2 назывались по-разному и делили все строки."""
+    sl = SampleLedger()
+    shared = extent("row", count=200)
+    sl.register("w0", shared)
+    sl.register("w2", shared)
+    sl.select("w0", "выбор окна признаков")
+
+    with pytest.raises(Blocked, match="P1"):
+        sl.measure("w2")
+
+
+def test_overlap_message_states_the_share() -> None:
+    sl = SampleLedger()
+    sl.register("w0", extent("row", count=100))
+    sl.register("w2", extent("row", count=100))
+    sl.fit("w0", "обучение")
+
+    with pytest.raises(Blocked) as excinfo:
+        sl.measure("w2")
+
+    assert "100%" in str(excinfo.value)
+
+
+def test_partial_overlap_is_enough_to_block() -> None:
+    sl = SampleLedger()
+    sl.register("w0", Extent(units=frozenset({"a", "b"}), since=ORIGIN, until=ORIGIN))
+    sl.register("w2", Extent(units=frozenset({"b", "c"}), since=ORIGIN, until=ORIGIN))
+    sl.select("w0", "выбор порога")
+
+    with pytest.raises(Blocked, match="P1"):
+        sl.measure("w2")
+
+
+def test_disjoint_samples_pass() -> None:
+    sl = SampleLedger()
+    sl.register("valid", extent("v"))
+    sl.register("test", extent("t"))
+    sl.select("valid", "выбор порога")
+
+    sl.measure("test")
+
+    assert sl.was_measured("test")
+
+
+def test_undeclared_content_blocks_instead_of_claiming_independence() -> None:
+    """Молчание журнала об именах читалось бы как независимость выборок."""
+    sl = SampleLedger()
+    sl.register("valid")
+    sl.register("test")
+    sl.select("valid", "выбор порога")
+
+    with pytest.raises(Blocked, match="P2"):
+        sl.measure("test")
+
+
+def test_first_measurement_needs_no_extent_when_nothing_was_touched() -> None:
+    """Сравнивать не с чем: требовать состав здесь было бы обрядом."""
+    sl = SampleLedger()
+    sl.register("test")
+
+    sl.measure("test")
+
+    assert sl.was_measured("test")
+
+
+def test_report_names_samples_without_declared_content() -> None:
+    sl = SampleLedger()
+    sl.register("test")
+    sl.measure("test")
+
+    assert "только по именам" in sl.report_section()

@@ -8,6 +8,11 @@
 Выборка расходуется. Обращение к ней ради выбора решения тратит её как
 измерительный инструмент: после этого измерение на ней смещено. Журнал делает
 расход видимым, потому что незаписанный расход неотличим от его отсутствия.
+
+Второй кейс показал, что учёта по именам недостаточно. При скользящих окнах
+выборки w0 и w2 назывались по-разному, а делили сто процентов строк: выбор
+делался на том же, на чём потом измеряли. Имя выборки не описывает её
+содержимое, поэтому выборка объявляет состав.
 """
 
 from __future__ import annotations
@@ -36,6 +41,28 @@ class Purpose(StrEnum):
     выборке."""
 
 
+class Extent(BaseModel):
+    """Состав выборки: какие единицы решения в неё входят и какой период.
+
+    Существует потому, что имя ничего не гарантирует. Две выборки с разными
+    именами могут быть одним и тем же множеством строк.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    units: Annotated[frozenset[str], Field(min_length=1)]
+    """Идентификаторы единиц решения, входящих в выборку."""
+
+    since: dt.datetime
+    until: dt.datetime
+
+    def shared_with(self, other: Extent) -> frozenset[str]:
+        return self.units & other.units
+
+    def __str__(self) -> str:
+        return f"{len(self.units):,} единиц, {self.since:%Y-%m-%d}..{self.until:%Y-%m-%d}"
+
+
 class Access(BaseModel):
     """Одно обращение к выборке."""
 
@@ -59,14 +86,24 @@ class SampleLedger:
     def __init__(self, ledger: OverrideLedger | None = None) -> None:
         self._accesses: list[Access] = []
         self._known: set[str] = set()
+        self._extents: dict[str, Extent] = {}
         self._overrides = ledger or OverrideLedger()
 
     # --- регистрация ------------------------------------------------------
 
-    def register(self, *names: str) -> None:
-        """Объявить существующие выборки. Обращение к незарегистрированной
-        выборке — ошибка: имя, придуманное на ходу, обходит учёт."""
-        self._known.update(names)
+    def register(self, name: str, extent: Extent | None = None) -> None:
+        """Объявить выборку и, по возможности, её состав.
+
+        Обращение к незарегистрированной выборке — ошибка: имя, придуманное на
+        ходу, обходит учёт. Состав необязателен, но без него журнал не сможет
+        утверждать независимость измерения и скажет об этом прямо.
+        """
+        self._known.add(name)
+        if extent is not None:
+            self._extents[name] = extent
+
+    def extent(self, sample: str) -> Extent | None:
+        return self._extents.get(sample)
 
     def _require_known(self, sample: str) -> None:
         if sample not in self._known:
@@ -105,6 +142,8 @@ class SampleLedger:
         """
         self._require_known(sample)
 
+        self._require_independent(sample)
+
         spent = self.selections(sample)
         if spent:
             self._overrides.enforce(
@@ -119,6 +158,44 @@ class SampleLedger:
             )
 
         self._accesses.append(Access(sample=sample, purpose=Purpose.MEASUREMENT, decision=decision))
+
+    def _require_independent(self, sample: str) -> None:
+        """Убедиться, что измерительная выборка не пересекается с теми, на
+        которых учились и выбирали.
+
+        Проверяется состав, а не имя. Имя не описывает содержимое: на втором
+        кейсе выборки w0 и w2 делили все строки до единой.
+        """
+        touched = [
+            a for a in self._accesses if a.sample != sample and a.purpose is not Purpose.MEASUREMENT
+        ]
+        if not touched:
+            return
+
+        mine = self._extents.get(sample)
+        unknown = sorted({a.sample for a in touched if a.sample not in self._extents})
+        if mine is None or unknown:
+            missing = sorted(set(unknown) | ({sample} if mine is None else set()))
+            self._overrides.enforce(
+                "P2",
+                f"состав выборок {missing!r} не объявлен, поэтому независимость "
+                f"измерения на {sample!r} не проверена. Имя выборки её содержимого "
+                "не описывает",
+            )
+            return
+
+        for other in sorted({a.sample for a in touched}):
+            shared = mine.shared_with(self._extents[other])
+            if not shared:
+                continue
+            purposes = sorted({a.purpose.value for a in touched if a.sample == other})
+            self._overrides.enforce(
+                "P1",
+                f"выборки {sample!r} и {other!r} делят {len(shared):,} единиц решения "
+                f"из {len(mine.units):,} ({len(shared) / len(mine.units):.0%}), "
+                f"а {other!r} уже использована для: {', '.join(purposes)}. "
+                "Измерение проводится на том же, на чём принимались решения",
+            )
 
     # --- состояние --------------------------------------------------------
 
@@ -153,6 +230,15 @@ class SampleLedger:
         lines += ["| выборка | назначение | решение |", "|---|---|---|"]
         for access in self._accesses:
             lines.append(f"| {access.sample} | {access.purpose.value} | {access.decision} |")
+
+        undeclared = sorted(n for n in self._known if n not in self._extents)
+        if undeclared:
+            lines.append("")
+            lines.append(
+                "Состав не объявлен у выборок: "
+                + ", ".join(undeclared)
+                + ". Для них независимость измерения проверена только по именам."
+            )
 
         remaining = self.unspent()
         lines.append("")

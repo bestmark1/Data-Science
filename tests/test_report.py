@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import datetime as dt
+
 import pytest
 from pydantic import ValidationError
 
 from dsx.assumptions import Basis
 from dsx.evals.registry import BY_ID
 from dsx.report import Study
+from dsx.samples import Extent
 from harness import report_for
 
 
 def study(title: str = "Проверочное исследование") -> Study:
     subject = Study(title=title)
-    subject.samples.register("train", "valid", "test")
+    for name in ("train", "valid", "test"):
+        subject.samples.register(name)
     return subject
 
 
@@ -140,6 +144,15 @@ def test_assumptions_and_questions_reach_the_report() -> None:
 
 def test_sample_spending_reaches_the_report() -> None:
     subject = study()
+    for name in ("train", "test"):
+        subject.samples.register(
+            name,
+            Extent(
+                units=frozenset(f"{name}-{i}" for i in range(10)),
+                since=dt.datetime(2024, 1, 1),
+                until=dt.datetime(2024, 2, 1),
+            ),
+        )
     subject.samples.fit("train", "обучение модели")
     subject.samples.measure("test")
 
