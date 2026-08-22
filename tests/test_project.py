@@ -236,3 +236,60 @@ def test_cause_assumptions_reach_the_registry() -> None:
     rendered = ProjectForm(**payload).registry().report_section()
 
     assert "таких строк немного" in rendered
+
+
+# --- вопросы порождаются формой, а не догадливостью (ревью Кодекса) --------
+
+
+def test_open_questions_come_from_the_form_not_from_the_registry() -> None:
+    """Чтобы записать неизвестное вручную, надо уже понимать, где оно есть."""
+    questions = form().unverifiable_declarations()
+
+    assert questions, "форма обязана породить вопросы сама"
+    joined = " ".join(questions)
+    assert "lead_days" in joined, "объявленная доступность непроверяема и должна спрашиваться"
+    assert "положительным исходом" in joined
+    assert "объект" in joined
+    assert "ДО просмотра метрик" in joined
+
+
+def test_every_declared_available_feature_becomes_a_question() -> None:
+    payload = yaml.safe_load(FORM)
+    available = [c["name"] for c in payload["columns"] if c.get("availability") == "at_decision"]
+    questions = " ".join(ProjectForm(**payload).unverifiable_declarations())
+
+    assert all(name in questions for name in available)
+
+
+def test_questions_reach_the_report() -> None:
+    result = run(form(), BY_ID["clean-baseline"].build().main)
+
+    rendered = result.study.render()
+
+    assert "Вопросы владельцу данных" in rendered
+    assert "Зелёный прогон не означает" in rendered
+
+
+def test_declarations_bind_the_conclusion() -> None:
+    """Смена горизонта или направления исхода обязана делать вывод устаревшим."""
+    world = BY_ID["clean-baseline"].build().main
+    first = run(form(), world)
+    first.study.conclude("модель лучше правила")
+
+    payload = yaml.safe_load(FORM)
+    payload["outcome"]["positive_class"] = "event_within_deadline"
+    second = ProjectForm(**payload)
+    first.study.declarations = second.model_dump_json()
+
+    assert first.study.is_stale, "объявления обязаны входить в отпечаток протокола"
+
+
+def test_unsupported_task_kind_is_refused_by_the_runner() -> None:
+    """Защита существовала, но не вызывалась."""
+    from dsx.task import UnsupportedTask
+
+    payload = yaml.safe_load(FORM)
+    payload["task"]["target_kind"] = "regression"
+
+    with pytest.raises(UnsupportedTask):
+        run(ProjectForm(**payload), BY_ID["clean-baseline"].build().main)

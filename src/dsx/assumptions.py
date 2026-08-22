@@ -20,7 +20,7 @@ import datetime as dt
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class Basis(StrEnum):
@@ -40,7 +40,21 @@ class Basis(StrEnum):
     потому обязано стать вопросом для того, кто отрасли не знает."""
 
 
-NEEDS_ASKING = frozenset({Basis.DOMAIN_KNOWLEDGE, Basis.OWNER})
+NEEDS_ASKING = frozenset({Basis.DOMAIN_KNOWLEDGE, Basis.OWNER, Basis.DOCUMENT})
+"""Основания, требующие подтверждения у людей на новом месте.
+
+Документ добавлен по итогам третьего кейса. Я прочитал словарь данных, вывел
+из него, когда приходят формы работника, и ошибся: они приходят позже сборки
+претензии в шестидесяти процентах случаев. Прочтение документа — интерпретация,
+а не факт, и проверяется оно перечитыванием вместе с тем, кто документ писал.
+"""
+
+NEEDS_EVIDENCE = frozenset({Basis.DATA, Basis.DOCUMENT})
+"""Основания, обязанные предъявить ссылку.
+
+«Из данных» без расчёта и «из документа» без страницы неотличимы от «мне так
+кажется», но выглядят обоснованными.
+"""
 
 
 class Assumption(BaseModel):
@@ -62,6 +76,16 @@ class Assumption(BaseModel):
     невозможно приоритизировать при перепроверке."""
 
     at: dt.datetime = Field(default_factory=lambda: dt.datetime.now(dt.UTC))
+
+    @model_validator(mode="after")
+    def _evidence_is_required_where_it_exists(self) -> Assumption:
+        if self.basis in NEEDS_EVIDENCE and not (self.evidence or "").strip():
+            raise ValueError(
+                f"основание {self.basis.value!r} обязано предъявить ссылку: расчёт для "
+                "данных, страницу или раздел для документа. Без неё утверждение "
+                "неотличимо от догадки, но выглядит обоснованным"
+            )
+        return self
 
     @property
     def needs_asking(self) -> bool:

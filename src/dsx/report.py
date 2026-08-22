@@ -58,6 +58,14 @@ class Study:
     overrides: OverrideLedger = field(default_factory=OverrideLedger)
     conclusions: list[Conclusion] = field(default_factory=list)
 
+    declarations: str = ""
+    """Объявления проекта целиком. Входят в отпечаток протокола: горизонт,
+    направление исхода и доступность признаков меняют заключение не меньше, чем
+    расход выборок, а прежде их изменение не делало вывод устаревшим."""
+
+    open_questions: tuple[str, ...] = ()
+    """Объявления, которые ядро проверить не может, — вопросы владельцу данных."""
+
     # --- протокол ---------------------------------------------------------
 
     def protocol_digest(self) -> str:
@@ -67,6 +75,7 @@ class Study:
         расход выборок, зафиксированные обходы, найденные дефекты.
         """
         return _digest(
+            self.declarations,
             *(str(a) for a in self.samples.accesses),
             *(str(o) for o in self.overrides.entries),
             *sorted(f.value for f in (self.checks.findings if self.checks else frozenset())),
@@ -109,6 +118,8 @@ class Study:
             parts += ["", self._findings_section(), "", self._skipped_section()]
         parts += [
             "",
+            self._questions_section(),
+            "",
             self.samples.report_section(),
             "",
             self.assumptions.report_section(),
@@ -116,6 +127,23 @@ class Study:
             self.overrides.report_section(),
         ]
         return "\n".join(parts)
+
+    def _questions_section(self) -> str:
+        """Объявления, проверить которые ядро не может.
+
+        Порождаются из формы, а не из догадливости заполняющего. Чтобы записать
+        неизвестное вручную, надо уже понимать, где требуется предметный ответ,
+        — а человек без отраслевого знания этого как раз и не понимает.
+        """
+        lines = ["## Вопросы владельцу данных", ""]
+        if not self.open_questions:
+            lines.append("Форма не разбиралась: список порождается из объявлений проекта.")
+            return "\n".join(lines)
+
+        lines.append("Ядро проверить их не может. Зелёный прогон не означает, что ответы верны.")
+        lines.append("")
+        lines += [f"- {q}" for q in self.open_questions]
+        return "\n".join(lines)
 
     def _conclusion_section(self) -> str:
         lines = ["## Заключение", ""]

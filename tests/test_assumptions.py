@@ -112,3 +112,41 @@ def test_questions_are_generated_not_maintained_by_hand() -> None:
     )
 
     assert len(registry.open_questions()) == 1
+
+
+# --- свидетельство обязательно там, где оно существует (ревью Кодекса) -----
+
+
+def test_data_basis_requires_the_computation() -> None:
+    """«Из данных» без расчёта неотличимо от догадки, но выглядит обоснованным."""
+    with pytest.raises(ValidationError, match="ссылку"):
+        AssumptionRegistry().record(
+            "доля пропусков пренебрежимо мала",
+            basis=Basis.DATA,
+            author="автор",
+            consequence="пропуски смещают оценку",
+        )
+
+
+def test_document_basis_requires_the_reference() -> None:
+    with pytest.raises(ValidationError, match="ссылку"):
+        AssumptionRegistry().record(
+            "формы приходят до сборки претензии",
+            basis=Basis.DOCUMENT,
+            author="автор",
+            consequence="признак знает будущее",
+        )
+
+
+def test_reading_a_document_is_still_a_question() -> None:
+    """Прочтение документа — интерпретация, а не факт. Проверено третьим кейсом."""
+    registry = AssumptionRegistry()
+    registry.record(
+        "формы приходят до сборки претензии",
+        basis=Basis.DOCUMENT,
+        author="автор",
+        consequence="признак знает будущее",
+        evidence="словарь данных, страница 5",
+    )
+
+    assert registry.open_questions()

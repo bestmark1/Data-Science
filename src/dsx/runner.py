@@ -33,6 +33,7 @@ from dsx.split import (
     reserved_extent,
     split_by_windows,
 )
+from dsx.task import require_supported
 from dsx.windows import unverified
 
 RESERVE = "резерв"
@@ -92,6 +93,9 @@ def run(form: ProjectForm, frame: pl.DataFrame, report_dir: Path | None = None) 
     world = World(frames={"main": frame}, schema=form.schema_spec())
     definition = form.outcome.to_definition()
     task = form.task.to_spec()
+    # Защита существовала, но не вызывалась: можно было объявить регрессию или
+    # конкурирующие исходы и получить бинарную метку без единого возражения.
+    require_supported(task)
 
     moment = world.schema.decision_time.name
     origin = frame[moment].min()
@@ -114,6 +118,8 @@ def run(form: ProjectForm, frame: pl.DataFrame, report_dir: Path | None = None) 
     samples.register(RESERVE, reserved_extent(split, world))
 
     study = Study(title=form.title)
+    study.declarations = form.model_dump_json()
+    study.open_questions = form.unverifiable_declarations()
     study.checks = checks
     study.samples = samples
     study.assumptions = form.registry()
