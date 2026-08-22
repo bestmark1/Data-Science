@@ -50,6 +50,7 @@ class Finding(StrEnum):
     DIRECTION_CONTRADICTS_DOMAIN = "direction_contradicts_domain"
     COMPETING_KINDS_COLLAPSED = "competing_kinds_collapsed"
     SIMULTANEITY_UNDECLARED = "simultaneity_undeclared"
+    RATE_CONTRADICTS_EXPECTATION = "rate_contradicts_expectation"
 
 
 class Expectation(BaseModel):

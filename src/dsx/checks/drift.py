@@ -387,10 +387,53 @@ class CompetingKindsDeclared:
         ]
 
 
+@dataclass(frozen=True)
+class ExpectedRateHolds:
+    """N13. Наблюдаемая доля класса расходится с объявленным ожиданием.
+
+    Ожидание объявляется из доменного знания до просмотра данных. Расхождение
+    в разы означает либо ошибку фильтрации и разметки, либо неверное понимание
+    процесса. Без объявления отличить честный дисбаланс от ошибки нечем: доля
+    в один процент выглядит одинаково и там, и там.
+    """
+
+    requirement: str = "N13"
+    premises: frozenset[Premise] = frozenset({Premise.BINARY_TARGET})
+    detects: frozenset[Finding] = frozenset({Finding.RATE_CONTRADICTS_EXPECTATION})
+
+    ratio: float = 2.0
+    """Во сколько раз наблюдаемое может отличаться от ожидаемого."""
+
+    def run(self, context: Context) -> list[Signal]:
+        expected = context.outcome.expected_positive_rate
+        if expected is None:
+            raise NotApplicable("ожидаемая доля класса не объявлена")
+
+        windows = _windows_with_labels(context)
+        frame = pl.concat([f for _, f in windows], how="vertical_relaxed")
+        observed = float(frame[LABEL].mean())
+        if observed <= 0:
+            return []
+
+        high, low = max(observed, expected), min(observed, expected)
+        if high / low < self.ratio:
+            return []
+        return [
+            Signal(
+                Finding.RATE_CONTRADICTS_EXPECTATION,
+                f"ожидалась доля положительного класса {expected:.1%}, наблюдается "
+                f"{observed:.1%} — расхождение в {high / low:.1f} раза. Либо разметка "
+                "или фильтрация теряют строки, либо процесс понят неверно",
+                blocking=True,
+            )
+        ]
+
+
 DRIFT_CHECKS = [
     TargetRateStationarity(),
     ComparableSupport(),
     FeatureRelationStability(),
     DeclaredDirectionHolds(),
     CompetingKindsDeclared(),
+    ExpectedRateHolds(),
 ]

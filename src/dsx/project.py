@@ -125,6 +125,15 @@ class OutcomeForm(BaseModel):
     estimand: Annotated[str, Field(min_length=1)]
     missing_causes: Annotated[list[CauseForm], Field(min_length=1)]
 
+    expected_positive_rate: Annotated[float, Field(gt=0.0, lt=1.0)] | None = None
+    """Ожидаемая доля положительного класса по доменному знанию, до просмотра.
+
+    Необязательно: ожидания может не быть, и выдумывать его хуже, чем не иметь.
+    Но если оно есть, расхождение с наблюдаемым означает либо ошибку фильтрации
+    и разметки, либо неверное понимание процесса — и то и другое дороже ошибки
+    в модели. Тот же приём, что с доменным направлением признака.
+    """
+
     def to_definition(self) -> OutcomeDefinition:
         return OutcomeDefinition(
             event_column=self.event_column,
@@ -132,6 +141,7 @@ class OutcomeForm(BaseModel):
             comparison=self.comparison,
             positive_class=self.positive_class,
             estimand=self.estimand,
+            expected_positive_rate=self.expected_positive_rate,
             missing_causes=[c.to_cause() for c in self.missing_causes],
         )
 

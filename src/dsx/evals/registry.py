@@ -62,7 +62,10 @@ class Bundle:
         return self.case.id
 
 
-def _outcome(comparison: ComparisonMode = ComparisonMode.BY_DATE) -> OutcomeDefinition:
+def _outcome(
+    comparison: ComparisonMode = ComparisonMode.BY_DATE,
+    expected_positive_rate: float | None = None,
+) -> OutcomeDefinition:
     return OutcomeDefinition(
         event_column="event_at",
         deadline_column="deadline_on",
@@ -87,6 +90,7 @@ def _outcome(comparison: ComparisonMode = ComparisonMode.BY_DATE) -> OutcomeDefi
         ],
         estimand="событие произошло позже назначенного срока среди объектов, "
         "которые предполагалось обработать",
+        expected_positive_rate=expected_positive_rate,
     )
 
 
@@ -101,6 +105,7 @@ def _bundle(
     lifetime: ObjectLifetime | None = None,
     reserve: bool = True,
     target_kind: TargetKind | None = None,
+    expected_positive_rate: float | None = None,
 ) -> Bundle:
     return Bundle(
         case=Case(
@@ -112,7 +117,7 @@ def _bundle(
             ),
         ),
         build=build,
-        outcome=_outcome(comparison),
+        outcome=_outcome(comparison, expected_positive_rate),
         lifetime=lifetime,
         reserve=reserve,
         target_kind=target_kind,
@@ -380,6 +385,26 @@ ALL: tuple[Bundle, ...] = (
         lambda: inj.competing_event_kinds(build_world()),
         caught_by={"N12"},
         target_kind=TargetKind.COMPETING,
+    ),
+    _bundle(
+        "rate-contradicts-expectation",
+        "Наблюдаемая доля класса вдесятеро расходится с объявленным ожиданием",
+        "Внешнее ревью формы: без объявленного ожидания отличить честный дисбаланс от "
+        "ошибки фильтрации или разметки нечем — доля в один процент выглядит одинаково "
+        "и там, и там.",
+        {Finding.RATE_CONTRADICTS_EXPECTATION},
+        build_world,
+        caught_by={"N13"},
+        expected_positive_rate=0.01,
+    ),
+    _bundle(
+        "clean-rate-matches-expectation",
+        "Объявленное ожидание доли класса совпадает с наблюдаемым",
+        "Отрицательный контроль к N13: проверка, срабатывающая при любом объявленном "
+        "ожидании, сделала бы объявление бессмысленным.",
+        set(),
+        build_world,
+        expected_positive_rate=0.12,
     ),
     _bundle(
         "clean-direction-matches-domain",
