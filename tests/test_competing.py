@@ -116,9 +116,12 @@ def test_declared_collapse_silences_the_check() -> None:
     assert CompetingKindsDeclared().run(_context(kinds_collapsed=True)) == []
 
 
-def test_declaring_the_collapse_as_unintended_also_silences_it() -> None:
-    """Объявление «склейка не задумана» тоже ответ: дальше решает аналитик."""
-    assert CompetingKindsDeclared().run(_context(kinds_collapsed=False)) == []
+def test_declaring_the_collapse_as_unintended_does_not_silence_it() -> None:
+    """Признание «склейка не задумана» — не ответ, а описание находки."""
+    signals = CompetingKindsDeclared().run(_context(kinds_collapsed=False))
+
+    assert [s.finding for s in signals] == [Finding.COMPETING_KINDS_COLLAPSED]
+    assert "НЕнамеренной" in signals[0].detail
 
 
 def test_competing_target_kind_still_needs_the_simultaneity_answer() -> None:

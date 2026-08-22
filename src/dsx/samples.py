@@ -166,9 +166,10 @@ class SampleLedger:
         Проверяется состав, а не имя. Имя не описывает содержимое: на втором
         кейсе выборки w0 и w2 делили все строки до единой.
         """
-        touched = [
-            a for a in self._accesses if a.sample != sample and a.purpose is not Purpose.MEASUREMENT
-        ]
+        # Прежние ИЗМЕРЕНИЯ тоже расходуют состав: измерить одни и те же строки
+        # дважды под разными именами — ровно тот обход, ради которого учёт по
+        # содержимому и вводился.
+        touched = [a for a in self._accesses if a.sample != sample]
         if not touched:
             return
 

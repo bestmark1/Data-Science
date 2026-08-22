@@ -46,12 +46,30 @@ def test_denying_an_existing_process_is_caught() -> None:
 
 
 def test_claiming_a_stream_that_is_not_there_is_caught() -> None:
-    sparse = CLEAN.build()
-    thinned = sparse.replace_main(sparse.main.filter(pl.col("decided_at").dt.day() == 1))
+    """Признак потока — ритм, а не плотность: разрежаем НЕРАВНОМЕРНО."""
+    import numpy as np
+
+    world = CLEAN.build()
+    days = world.main.select(pl.col("decided_at").dt.date().alias("day")).unique()["day"]
+    rng = np.random.default_rng(11)
+    kept = set(rng.choice(days.to_list(), size=days.len() // 6, replace=False).tolist())
+    thinned = world.replace_main(
+        world.main.filter(pl.col("decided_at").dt.date().is_in(list(kept)))
+    )
 
     discrepancies = verify(thinned, task(is_stream=True))
 
     assert any(d.premise is Premise.STREAM for d in discrepancies)
+
+
+def test_regular_but_sparse_collection_is_still_a_stream() -> None:
+    """Сбор по первым числам месяца ритмичен, и проверки полноты периода к нему
+    применимы. Прежняя эвристика требовала девяноста процентов календарных дней
+    и выключала эти проверки на любом ритме реже ежедневного."""
+    world = CLEAN.build()
+    monthly = world.replace_main(world.main.filter(pl.col("decided_at").dt.day() == 1))
+
+    assert not [d for d in verify(monthly, task(is_stream=True)) if d.premise is Premise.STREAM]
 
 
 def test_absent_status_column_means_no_process() -> None:

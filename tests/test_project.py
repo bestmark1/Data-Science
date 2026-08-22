@@ -27,6 +27,8 @@ FORM = textwrap.dedent("""
         source_of_claim: "генератор мира"
         window_lookback_days: 0
         window_source: "код мира"
+      - {name: size, role: ignored}
+      - {name: region, role: ignored}
     outcome:
       event_column: event_at
       deadline_column: deadline_on
@@ -166,3 +168,71 @@ def test_template_is_a_valid_shape_even_though_filled_with_placeholders() -> Non
     payload = _yaml.safe_load(Path("templates/project.yaml").read_text(encoding="utf-8"))
 
     ProjectForm(**payload)
+
+
+# --- незаявленные колонки (ревью Кодекса) ----------------------------------
+
+
+def test_undeclared_column_blocks() -> None:
+    """Ядро видит только объявленное: незаявленная колонка невидима проверкам."""
+    from dsx.evals.case import Finding
+
+    payload = yaml.safe_load(FORM)
+    payload["columns"] = [c for c in payload["columns"] if c["name"] != "region"]
+    result = run(ProjectForm(**payload), BY_ID["clean-baseline"].build().main)
+
+    findings = {s.finding for s in result.checks.signals}
+    assert Finding.UNDECLARED_COLUMN in findings
+
+
+def test_ignored_role_is_a_valid_answer() -> None:
+    """«Колонка есть, и она не нужна» — ответ. Промолчать — нет."""
+    from dsx.evals.case import Finding
+
+    result = run(form(), BY_ID["clean-baseline"].build().main)
+
+    assert Finding.UNDECLARED_COLUMN not in {s.finding for s in result.checks.signals}
+
+
+def test_blank_evidence_is_refused() -> None:
+    """Пробел неотличим от незаполненного поля, а выглядит заполненным."""
+    payload = yaml.safe_load(FORM)
+    payload["assumptions"][0]["consequence"] = "   "
+
+    with pytest.raises(ValidationError, match="пробелами"):
+        ProjectForm(**payload)
+
+
+def test_duplicate_window_names_are_refused() -> None:
+    payload = yaml.safe_load(FORM)
+    payload["split"]["windows"][1]["name"] = payload["split"]["windows"][0]["name"]
+
+    with pytest.raises(ValidationError, match="различны"):
+        ProjectForm(**payload)
+
+
+def test_measurement_time_must_play_its_role() -> None:
+    """Иначе окно можно сверить само с собой, направив measured_at на решение."""
+    payload = yaml.safe_load(FORM)
+    for column in payload["columns"]:
+        if column.get("role") == "feature":
+            column["measured_at"] = "decided_at"
+
+    with pytest.raises(ValueError, match="не объявлена ролью"):
+        ProjectForm(**payload).schema_spec()
+
+
+def test_cause_assumptions_reach_the_registry() -> None:
+    """Допущения из контракта исхода — такие же допущения проекта."""
+    payload = yaml.safe_load(FORM)
+    payload["outcome"]["missing_causes"].append(
+        {
+            "name": "причина, неотличимая по данным",
+            "meaning": "not_occurred",
+            "assumption": "принимается, что таких строк немного",
+        }
+    )
+
+    rendered = ProjectForm(**payload).registry().report_section()
+
+    assert "таких строк немного" in rendered

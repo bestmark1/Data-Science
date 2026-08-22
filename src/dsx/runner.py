@@ -17,6 +17,7 @@ from pathlib import Path
 
 import polars as pl
 
+from dsx.assumptions import Basis
 from dsx.checks import ALL_CHECKS, Context, run_checks
 from dsx.checks.base import Report as CheckReport
 from dsx.evals.world import World
@@ -116,6 +117,18 @@ def run(form: ProjectForm, frame: pl.DataFrame, report_dir: Path | None = None) 
     study.checks = checks
     study.samples = samples
     study.assumptions = form.registry()
+
+    # Объявления, которые ядро проверить не может, обязаны хотя бы попасть в
+    # отчёт: иначе они украшение. Одновременность видов по таблице решений не
+    # проверяется — нарушение происходит раньше, при её сборке.
+    if task.simultaneous_kinds is not None:
+        study.assumptions.record(
+            f"одновременное наступление нескольких видов события: {task.simultaneous_kinds.value}",
+            basis=Basis.DOMAIN_KNOWLEDGE,
+            author="форма проекта",
+            consequence="если допущение неверно, часть строк отнесена к одному виду "
+            "произвольно, и исход этого вида смещён",
+        )
 
     result = Result(world=world, split=split, checks=checks, samples=samples, study=study)
 

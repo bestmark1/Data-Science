@@ -36,6 +36,7 @@ from dsx.roles import (
     Availability,
     ColumnSpec,
     Direction,
+    Evidence,
     FeatureWindow,
     Role,
     Schema,
@@ -56,7 +57,7 @@ class ColumnForm(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    name: Annotated[str, Field(min_length=1)]
+    name: Evidence
     role: Role
     temporal: TemporalKind | None = None
     availability: Availability = Availability.UNKNOWN
@@ -176,7 +177,7 @@ class WindowForm(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    name: Annotated[str, Field(min_length=1)]
+    name: Evidence
     start_day: int
     """Смещение от первого решения, в днях."""
 
@@ -201,6 +202,18 @@ class SplitForm(BaseModel):
     Обязательно: измерительная выборка отрезается до начала работы, иначе она
     выбирается по уже увиденным метрикам (F-9).
     """
+
+    @model_validator(mode="after")
+    def _window_names_are_unique(self) -> SplitForm:
+        """Одноимённые окна затирают друг друга в учёте выборок и в долях.
+
+        Загрязнённое окно исчезало бы из проверки независимости только из-за
+        повторённого имени.
+        """
+        names = [w.name for w in self.windows]
+        if len(names) != len(set(names)):
+            raise ValueError(f"имена окон должны быть различны, объявлено: {names}")
+        return self
 
     @model_validator(mode="after")
     def _reserve_is_beyond_every_window(self) -> SplitForm:
@@ -228,10 +241,10 @@ class AssumptionForm(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    statement: Annotated[str, Field(min_length=1)]
+    statement: Evidence
     basis: Basis
-    author: Annotated[str, Field(min_length=1)]
-    consequence: Annotated[str, Field(min_length=1)]
+    author: Evidence
+    consequence: Evidence
     evidence: str | None = None
 
 
@@ -240,7 +253,7 @@ class ProjectForm(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    title: Annotated[str, Field(min_length=1)]
+    title: Evidence
     columns: Annotated[list[ColumnForm], Field(min_length=1)]
     outcome: OutcomeForm
     task: TaskForm
@@ -254,6 +267,22 @@ class ProjectForm(BaseModel):
 
     def registry(self) -> AssumptionRegistry:
         registry = AssumptionRegistry()
+
+        # Допущения, принятые из-за неразличимости причин отсутствия события,
+        # — такие же допущения проекта. Прежде они жили только в контракте
+        # исхода и в реестр не попадали, то есть в отчёте их не было.
+        for cause in self.outcome.missing_causes:
+            if cause.assumption and cause.assumption.strip():
+                registry.record(
+                    cause.assumption,
+                    basis=Basis.DOMAIN_KNOWLEDGE,
+                    author="контракт исхода",
+                    consequence=(
+                        f"причина {cause.name!r} неотличима по данным, и её строки "
+                        f"размечаются как {cause.meaning.value}"
+                    ),
+                )
+
         for item in self.assumptions:
             registry.record(
                 item.statement,

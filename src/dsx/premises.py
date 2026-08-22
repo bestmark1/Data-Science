@@ -64,24 +64,51 @@ def _process_observed(world: World) -> tuple[bool, str]:
     return True, f"статус {column!r} присутствует, значений: {distinct}"
 
 
-def _stream_observed(world: World, gap_share: float = 0.1) -> tuple[bool, str]:
+def _stream_observed(world: World, irregularity: float = 3.0) -> tuple[bool, str]:
     """Собираются ли наблюдения регулярным потоком.
 
-    Признак потока — покрытие календаря: наблюдения есть в большинстве дней
-    периода. Событийные решения оставляют календарь дырявым.
+    Признак потока — РЕГУЛЯРНОСТЬ, а не ежедневность. Первая версия требовала
+    наблюдений в девяноста процентах календарных дней и объявляла не-потоком
+    сбор по рабочим дням (около 71%), еженедельный и любой иной ритм. После
+    согласованного `is_stream=false` проверки полноты периода выключались, и
+    настоящий пропуск недели в таком потоке оставался незамеченным.
+
+    Регулярность меряется разбросом промежутков между днями наблюдений:
+    у потока они одинаковы, у событийного сбора — нет.
     """
     column = world.schema.decision_time.name
     if column not in world.main.columns:
         return False, f"колонка решения {column!r} отсутствует в данных"
 
-    daily = world.main.select(pl.col(column).dt.date().alias("day")).group_by("day").agg(pl.len())
-    lo, hi = world.main[column].min(), world.main[column].max()
-    span_days = max((hi - lo).days + 1, 1)
-    coverage = daily.height / span_days
+    days = (
+        world.main.select(pl.col(column).dt.date().alias("day"))
+        .unique()
+        .sort("day")
+        .get_column("day")
+    )
+    if days.len() < 4:
+        return False, f"дней с наблюдениями всего {days.len()}: о ритме говорить рано"
 
-    if coverage >= 1 - gap_share:
-        return True, f"наблюдения есть в {coverage:.0%} дней периода"
-    return False, f"наблюдения есть лишь в {coverage:.0%} дней периода"
+    gaps = days.diff().drop_nulls().dt.total_days()
+    typical = float(gaps.median())
+    if typical <= 0:
+        return False, "промежутки между днями наблюдений вырождены"
+
+    worst = float(gaps.quantile(0.9))
+    longest = float(gaps.max())
+    # Худший промежуток называется всегда: ритмичный в среднем сбор может иметь
+    # разреженное начало, и медиана этого не показывает. Сам разрыв — предмет
+    # отдельной проверки полноты периода, но знать о нём нужно уже здесь.
+    tail = f", самый длинный {longest:g} дн" if longest > typical * irregularity else ""
+    if worst <= typical * irregularity:
+        return True, (
+            f"наблюдения идут ритмично: типичный промежуток {typical:g} дн, "
+            f"девяностый процентиль {worst:g} дн{tail}"
+        )
+    return False, (
+        f"промежутки между наблюдениями неровные: типичный {typical:g} дн, "
+        f"девяностый процентиль {worst:g} дн{tail}"
+    )
 
 
 def verify(world: World, task: TaskSpec) -> list[Discrepancy]:

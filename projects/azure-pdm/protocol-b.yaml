@@ -21,6 +21,10 @@ columns:
     role: measured_at
     temporal: instant
 
+  # Остатки сборки сетки решений.
+  - {name: day, role: ignored}
+  - {name: machineID, role: ignored}
+
   # Скользящие признаки: семь суток с отступом в шесть часов. Отступ появился
   # после F-11 — без него окно захватывало показания, снятые после решения.
   - {name: volt_mean_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", measured_at: measured_at}

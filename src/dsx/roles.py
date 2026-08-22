@@ -16,7 +16,23 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+
+
+def _not_blank(value: str) -> str:
+    """Пробельная строка не является ответом.
+
+    `min_length=1` пропускал " " во все поля свидетельств: источник
+    утверждения, автора допущения, его следствие. Заполненное пробелом поле
+    неотличимо от незаполненного, а выглядит заполненным.
+    """
+    if not value.strip():
+        raise ValueError("поле заполнено пробелами: это не ответ")
+    return value
+
+
+Evidence = Annotated[str, Field(min_length=1), AfterValidator(_not_blank)]
+"""Строка, которой предъявляют свидетельство: источник, автор, следствие."""
 
 
 class Role(StrEnum):
@@ -90,7 +106,7 @@ class FeatureWindow(BaseModel):
     Ненулевой отступ — обычный способ учесть задержку поставки данных.
     """
 
-    source_of_claim: Annotated[str, Field(min_length=1)]
+    source_of_claim: Evidence
     """Чем подтверждено окно: код построения признака, владелец, документ.
 
     Без источника поле заполняется по памяти, и объявление перестаёт быть
@@ -154,7 +170,7 @@ class ColumnSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    name: Annotated[str, Field(min_length=1)]
+    name: Evidence
     role: Role
     temporal: TemporalKind | None = None
     availability: Availability = Availability.UNKNOWN
@@ -174,7 +190,7 @@ class ColumnSpec(BaseModel):
     """Колонка с моментом получения значения. None означает, что сверить
     объявленное окно с данными нечем, и оно остаётся объявлением."""
 
-    source_of_claim: str | None = None
+    source_of_claim: Evidence | None = None
     """Чем подтверждена объявленная доступность: владелец, схема, документ, лог.
 
     Без источника поле заполняется словами «скорее всего доступно», и требование
@@ -247,6 +263,26 @@ class Schema(BaseModel):
         names = [c.name for c in self.columns]
         if len(names) != len(set(names)):
             raise ValueError("дубликаты имён колонок")
+        return self
+
+    @model_validator(mode="after")
+    def _measured_at_points_at_a_measurement_time(self) -> Schema:
+        """Колонка времени измерения обязана быть объявлена соответствующей ролью.
+
+        Иначе `measured_at` можно направить на момент решения, и агрегат за
+        девяносто дней пройдёт сверку как окно в семь: код сравнит окно сам с
+        собой.
+        """
+        moments = {c.name for c in self.columns if c.role is Role.MEASURED_AT}
+        for column in self.columns:
+            if column.measured_at is None:
+                continue
+            if column.measured_at not in moments:
+                raise ValueError(
+                    f"признак {column.name!r} называет временем измерения "
+                    f"{column.measured_at!r}, но эта колонка не объявлена ролью "
+                    f"{Role.MEASURED_AT.value!r}"
+                )
         return self
 
     @model_validator(mode="after")

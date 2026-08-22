@@ -47,6 +47,9 @@ def test_every_declared_finding_is_covered_by_some_case() -> None:
         # Проверяется напрямую в test_split.py: отсутствие резерва — свойство
         # построенного сплита, а не данных. Мир при этом любой.
         Finding.NO_RESERVED_MEASUREMENT_SAMPLE,
+        # Проверяется напрямую в test_project.py: незаявленная колонка —
+        # свойство пары "таблица + объявленная схема", а не самой таблицы.
+        Finding.UNDECLARED_COLUMN,
     }
     assert uncovered <= protocol_scope, f"не покрыты кейсами: {uncovered - protocol_scope}"
 

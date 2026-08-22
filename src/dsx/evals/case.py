@@ -51,6 +51,7 @@ class Finding(StrEnum):
     COMPETING_KINDS_COLLAPSED = "competing_kinds_collapsed"
     SIMULTANEITY_UNDECLARED = "simultaneity_undeclared"
     RATE_CONTRADICTS_EXPECTATION = "rate_contradicts_expectation"
+    UNDECLARED_COLUMN = "undeclared_column"
 
 
 class Expectation(BaseModel):

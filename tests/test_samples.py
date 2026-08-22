@@ -243,3 +243,27 @@ def test_report_names_samples_without_declared_content() -> None:
     sl.measure("test")
 
     assert "только по именам" in sl.report_section()
+
+
+def test_measuring_the_same_content_twice_under_different_names_is_blocked() -> None:
+    """Ровно тот обход, ради которого учёт по содержимому и вводился."""
+    sl = SampleLedger()
+    shared = extent("row", count=150)
+    sl.register("a", shared)
+    sl.register("b", shared)
+    sl.measure("a")
+
+    with pytest.raises(Blocked, match="P1"):
+        sl.measure("b")
+
+
+def test_fitting_on_the_measurement_rows_is_blocked() -> None:
+    """Обучение на тех же строках делает измерение бессмысленным."""
+    sl = SampleLedger()
+    shared = extent("row", count=150)
+    sl.register("train", shared)
+    sl.register("test", shared)
+    sl.fit("train", "обучение модели")
+
+    with pytest.raises(Blocked, match="P1"):
+        sl.measure("test")
