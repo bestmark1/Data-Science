@@ -126,3 +126,33 @@ def test_skipped_check_names_the_unmet_premise() -> None:
     report = run_checks([OnlyForProcess()], Context(bundle.build(), bundle.outcome, task))
 
     assert "process" in str(report.skipped[0])
+
+
+# --- сила связи при цензуре (ревью Кодекса) --------------------------------
+
+
+def test_association_ignores_rows_without_a_label() -> None:
+    """Пустая метка — не ноль. Считать её нулём значит выдумать наблюдение."""
+    import polars as pl
+
+    from dsx.checks.empirical import association
+
+    values = pl.Series("x", list(range(100)))
+    labels = pl.Series("y", [1] * 25 + [0] * 25 + [None] * 50, dtype=pl.Int8)
+
+    value = association(values, labels)
+
+    assert value is not None
+    assert -0.5 <= value <= 0.5, f"связь вне обещанного диапазона: {value}"
+
+
+def test_association_matches_when_nulls_are_removed_by_hand() -> None:
+    import polars as pl
+
+    from dsx.checks.empirical import association
+
+    values = pl.Series("x", list(range(120)))
+    labels = pl.Series("y", ([1, 0, None] * 40), dtype=pl.Int8)
+    mask = labels.is_not_null()
+
+    assert association(values, labels) == association(values.filter(mask), labels.filter(mask))

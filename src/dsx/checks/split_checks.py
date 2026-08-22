@@ -109,12 +109,16 @@ class FeatureWindowOverlap:
                 )
             ]
 
-        reach = max((c.window.lookback_days + c.window.lag_days for c in features), default=0.0)
+        # Пересечение зависит только от ПРОТЯЖЁННОСТИ окна: отступ сдвигает оба
+        # интервала одинаково и при сравнении сокращается. Первая версия
+        # складывала его с протяжённостью и объявляла пересекающимися два
+        # мгновенных измерения, разнесённые во времени.
+        reach = max((c.window.lookback_days for c in features), default=0.0)
         if reach == 0.0:
             return []  # все признаки мгновенные: пересекаться нечему
 
         overlaps = feature_window_overlap(split.parts, context.world, reach)
-        widest = max(features, key=lambda c: c.window.lookback_days + c.window.lag_days)
+        widest = max(features, key=lambda c: c.window.lookback_days)
         return [
             Signal(
                 Finding.FEATURE_WINDOW_OVERLAP,

@@ -35,7 +35,11 @@ def association(values: pl.Series, labels: pl.Series) -> float | None:
     изменился, а не что связь ослабла. Именно это на этапе 0 трижды
     переворачивало вывод.
     """
-    mask = values.is_not_null()
+    # Отсеиваются пропуски С ОБЕИХ сторон. Пустая метка означает исход, который
+    # не наблюдался, — считать её нулём значит выдумать наблюдение. Первая
+    # версия маскировала только признак и на цензурированных данных выдавала
+    # связь 1.51 при обещанном пределе 0.5.
+    mask = values.is_not_null() & labels.is_not_null()
     values, labels = values.filter(mask), labels.filter(mask)
     if values.len() < 50 or values.n_unique() < 2:
         return None

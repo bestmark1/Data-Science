@@ -200,3 +200,28 @@ def test_missing_reserve_blocks() -> None:
 
     assert [s.finding for s in signals] == [Finding.NO_RESERVED_MEASUREMENT_SAMPLE]
     assert signals[0].blocking
+
+
+def test_extent_accepts_integer_identifiers() -> None:
+    """Целочисленные ключи встречаются чаще строковых (ревью Кодекса)."""
+    import datetime as dt
+
+    import polars as pl
+
+    from dsx.evals.world import World
+    from dsx.roles import ColumnSpec, Role, Schema, TemporalKind
+    from dsx.split import _extent_of_frame
+
+    frame = pl.DataFrame(
+        {"id": [1, 2, 3], "decided_at": [dt.datetime(2024, 1, i + 1) for i in range(3)]}
+    )
+    schema = Schema(
+        columns=[
+            ColumnSpec(name="id", role=Role.ENTITY_ID),
+            ColumnSpec(name="decided_at", role=Role.DECISION_TIME, temporal=TemporalKind.INSTANT),
+        ]
+    )
+
+    extent = _extent_of_frame(frame, World(frames={"main": frame}, schema=schema))
+
+    assert extent.units == frozenset({"1", "2", "3"})

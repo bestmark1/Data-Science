@@ -197,8 +197,11 @@ def _extent_of_frame(frame: pl.DataFrame, world: World) -> Extent:
         raise ValueError("состав выборки требует объявленной единицы решения")
     key = keys[0].name
     moment = world.schema.decision_time.name
+    # Идентификаторы приводятся к строке здесь и только здесь: целочисленные
+    # ключи встречаются чаще строковых, и падение на регистрации выборок
+    # означало бы, что ядро работает лишь на данных с текстовыми ключами.
     return Extent(
-        units=frozenset(frame[key].to_list()),
+        units=frozenset(str(value) for value in frame[key].to_list()),
         since=frame[moment].min(),
         until=frame[moment].max(),
     )

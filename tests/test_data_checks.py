@@ -136,3 +136,23 @@ def test_one_shot_declaration_contradicted_by_data_is_refused() -> None:
     signals = [s for s in report.signals if s.finding is Finding.SURROGATE_KEY_AS_ENTITY]
 
     assert signals and "противоречит" in signals[0].detail
+
+
+def test_feature_window_overlap_ignores_the_lag() -> None:
+    """Отступ сдвигает оба интервала одинаково и при сравнении сокращается."""
+    from dsx.checks.split_checks import FeatureWindowOverlap
+    from dsx.evals import injectors as inj
+    from dsx.evals.registry import Bundle
+    from dsx.evals.world import build_world
+    from dsx.task import ObjectLifetime
+
+    base = BY_ID["clean-recurring-narrow-windows"]
+    bundle = Bundle(
+        case=base.case,
+        build=lambda: inj.declare_feature_windows(inj.repeated_object(build_world()), 0, 90),
+        outcome=base.outcome,
+        lifetime=ObjectLifetime.RECURRING,
+    )
+    context = context_for(bundle)
+
+    assert FeatureWindowOverlap().run(context) == [], "мгновенные измерения не пересекаются"

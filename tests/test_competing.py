@@ -44,14 +44,34 @@ def test_a_competing_event_censors_instead_of_being_a_negative() -> None:
         assert outcome.observable < outcome.frame.height
 
 
-def test_censored_rows_are_empty_not_zero() -> None:
-    outcomes = compute_by_kind(world(), BUNDLE.outcome)
-    first = outcomes[0]
-    others = first.frame.filter(
-        (frame_kind := first.frame["event_kind"]).is_not_null() & (frame_kind != first.kind)
+def test_competing_event_inside_the_deadline_censors() -> None:
+    """Конкурирующее событие в горизонте обрывает наблюдение за целевым видом."""
+    import polars as pl
+
+    first = compute_by_kind(world(), BUNDLE.outcome)[0]
+    inside = first.frame.filter(
+        pl.col("event_kind").is_not_null()
+        & (pl.col("event_kind") != first.kind)
+        & (pl.col("event_at") <= pl.col("deadline_on"))
     )
 
-    assert others[LABEL].null_count() == others.height
+    assert inside.height
+    assert inside[LABEL].null_count() == inside.height
+
+
+def test_competing_event_after_the_deadline_does_not_censor() -> None:
+    """К концу срока уже видно, что целевого события не было."""
+    import polars as pl
+
+    first = compute_by_kind(world(), BUNDLE.outcome)[0]
+    outside = first.frame.filter(
+        pl.col("event_kind").is_not_null()
+        & (pl.col("event_kind") != first.kind)
+        & (pl.col("event_at") > pl.col("deadline_on"))
+    )
+
+    assert outside.height, "кейс обязан содержать конкурентов за горизонтом"
+    assert outside[LABEL].null_count() == 0
 
 
 def test_collapse_loses_more_than_it_looks() -> None:

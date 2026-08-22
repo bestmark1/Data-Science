@@ -81,8 +81,14 @@ def compute_by_kind(world: World, definition: OutcomeDefinition) -> list[KindOut
     base = compute(world, definition)
     results = []
     for kind in kinds:
-        # Событие другого вида оборвало наблюдение: исход этого вида неизвестен.
-        censored = (pl.col(kind_column).is_not_null()) & (pl.col(kind_column) != kind)
+        # Событие другого вида обрывает наблюдение, только если случилось ДО
+        # конца срока. Конкурирующий отказ после горизонта наблюдению не мешает:
+        # к концу срока уже видно, что целевого отказа не было.
+        censored = (
+            pl.col(kind_column).is_not_null()
+            & (pl.col(kind_column) != kind)
+            & (pl.col(definition.event_column) <= pl.col(definition.deadline_column))
+        )
         marked = base.with_columns(
             pl.when(censored).then(None).otherwise(pl.col(LABEL)).alias(LABEL)
         )
