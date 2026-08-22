@@ -115,7 +115,10 @@ def main() -> int:
     study.checks = report
     study.samples = samples
     study.assumptions = assumptions
-    study.conclude("протокол A проходится, но контракт исхода заполнен фиктивно (F-1)")
+    study.conclude(
+        "протокол A проходится; F-1 и F-3 исправлены, но пересечение окон "
+        "признаков не проверяется (F-5)"
+    )
 
     (PROJECT / "report").mkdir(exist_ok=True)
     (PROJECT / "report" / "protocol_a.md").write_text(study.render(), encoding="utf-8")
