@@ -1,0 +1,21 @@
+source: Workers' Compensation Board, штат Нью-Йорк
+license: 'CC0: Public Domain (объявлена источником)'
+url: https://www.kaggle.com/datasets/new-york-state/nys-assembled-workers'-compensation-claims
+retrieved_at: '2026-08-22'
+files:
+- name: NYSWCB_AssembledWorkersCompensationClaims_DataDictionary.pdf
+  sha256: c2e836acc9616ec078d55d35b87322189d7708be67a6606915f3469e7d7e53c1
+  bytes: 182292
+- name: NYSWCB_AssembledWorkersCompensationClaims_Overview.pdf
+  sha256: efcbcc22c5a92b93c057bf25cc54f21c7a652c5cfa6820f63e78298eadcd7917
+  bytes: 306124
+- name: assembled-workers-compensation-claims-beginning-2000.csv
+  sha256: 9bf53f288fc2875673636437da3d0dd730909978c7755a29ac8db6e6a8b0e610
+  bytes: 1666192030
+- name: new-york-state_nys-assembled-workers_-compensation-claims.zip
+  sha256: 075b773578beb3f19ccff435122c9089a628f7897858dbac1a65f366077c5f8f
+  bytes: 228700769
+- name: socrata_metadata.json
+  sha256: 3111cd0679ab3de1c5ddb6b5639f61a9b9d55eecfed07d63f659a25afb28692f
+  bytes: 78828
+derived: []

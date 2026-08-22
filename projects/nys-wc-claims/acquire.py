@@ -49,9 +49,16 @@ def main() -> int:
         return 1
 
     RAW.mkdir(parents=True, exist_ok=True)
-    print(f"Загружаю {SLUG} ...")
-    archive = download_dataset(SLUG, RAW, credentials=credentials)
-    print(f"Архив получен: {archive.stat().st_size / 1048576:.1f} МБ")
+    existing = sorted(RAW.glob("*.zip"))
+    if existing:
+        # Повторная загрузка полутора гигабайт ради упавшего последнего шага —
+        # цена, которую платить незачем. Целостность обеспечивает манифест.
+        archive = existing[0]
+        print(f"Архив уже получен: {archive.name}, {archive.stat().st_size / 1048576:.1f} МБ")
+    else:
+        print(f"Загружаю {SLUG} ...")
+        archive = download_dataset(SLUG, RAW, credentials=credentials)
+        print(f"Архив получен: {archive.stat().st_size / 1048576:.1f} МБ")
 
     files = extract_archive(archive, RAW, max_uncompressed_bytes=MAX_UNCOMPRESSED)
     for path in sorted(files):
