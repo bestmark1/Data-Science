@@ -80,13 +80,33 @@ class _StripAuthOnCrossHost(urllib.request.HTTPRedirectHandler):
         return new_request
 
 
+_SLUG_ALLOWED = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_'")
+"""Разрешённые символы идентификатора датасета.
+
+Апостроф допущен потому, что встречается в настоящих идентификаторах Kaggle
+(`nys-assembled-workers'-compensation-claims`). В URL он попадает только после
+процентного кодирования, а в имя файла — не попадает вовсе.
+
+Точка и слэш не допущены намеренно: с ними идентификатор мог бы увести запись
+за пределы каталога данных.
+"""
+
+
 def _validate_slug(slug: str) -> str:
     owner, _, name = slug.partition("/")
     parts_ok = owner and name and "/" not in name
-    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
-    if not parts_ok or not set(owner + name) <= allowed:
+    if not parts_ok or not set(owner + name) <= _SLUG_ALLOWED:
         raise ValueError(f"недопустимый идентификатор датасета: {slug!r}")
     return slug
+
+
+def _archive_name(slug: str) -> str:
+    """Имя архива: только буквы, цифры и подчёркивание.
+
+    Идентификатор в имя файла напрямую не переносится — имя должно оставаться
+    предсказуемым независимо от того, что допущено в идентификаторе.
+    """
+    return "".join(c if c.isalnum() or c == "-" else "_" for c in slug) + ".zip"
 
 
 def download_dataset(slug: str, destination: Path, *, credentials: tuple[str, str]) -> Path:
@@ -97,13 +117,13 @@ def download_dataset(slug: str, destination: Path, *, credentials: tuple[str, st
     """
     _validate_slug(slug)
     destination.mkdir(parents=True, exist_ok=True)
-    archive = destination / f"{slug.replace('/', '_')}.zip"
+    archive = destination / _archive_name(slug)
     partial = archive.with_suffix(".zip.part")
 
     username, key = credentials
     token = base64.b64encode(f"{username}:{key}".encode()).decode()
     request = urllib.request.Request(
-        f"{_API_ROOT}/datasets/download/{slug}",
+        f"{_API_ROOT}/datasets/download/{urllib.parse.quote(slug, safe='/')}",
         headers={"Authorization": f"Basic {token}"},
     )
     opener = urllib.request.build_opener(_StripAuthOnCrossHost)
@@ -133,10 +153,17 @@ def download_dataset(slug: str, destination: Path, *, credentials: tuple[str, st
     return archive
 
 
-def extract_archive(archive: Path, destination: Path) -> list[Path]:
+def extract_archive(
+    archive: Path, destination: Path, *, max_uncompressed_bytes: int = _MAX_UNCOMPRESSED_BYTES
+) -> list[Path]:
     """Распаковать архив, возвращая пути извлечённых файлов.
 
     Пути проверяются до записи: архив не должен писать вне целевого каталога.
+
+    Лимит распакованного размера защищает от архива, который в тысячи раз
+    больше себя самого. Поднять его можно, но только вызывающей стороной и
+    осознанно: умолчание, растущее вслед за первым не поместившимся датасетом,
+    перестаёт быть лимитом.
     """
     destination.mkdir(parents=True, exist_ok=True)
     resolved_root = destination.resolve()
@@ -144,8 +171,12 @@ def extract_archive(archive: Path, destination: Path) -> list[Path]:
 
     with zipfile.ZipFile(archive) as bundle:
         total = sum(info.file_size for info in bundle.infolist())
-        if total > _MAX_UNCOMPRESSED_BYTES:
-            raise UnsafeArchive(f"распакованный размер {total} байт превышает лимит")
+        if total > max_uncompressed_bytes:
+            raise UnsafeArchive(
+                f"распакованный размер {total / (1 << 30):.1f} ГиБ превышает лимит "
+                f"{max_uncompressed_bytes / (1 << 30):.1f} ГиБ. Если размер ожидаем, "
+                "передайте max_uncompressed_bytes явно с обоснованием"
+            )
 
         for info in bundle.infolist():
             target = (resolved_root / info.filename).resolve()

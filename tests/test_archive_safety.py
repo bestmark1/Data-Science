@@ -41,3 +41,36 @@ def test_absolute_path_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(UnsafeArchive, match="выходит за каталог"):
         extract_archive(archive, tmp_path / "out")
+
+
+def test_oversized_archive_is_refused_by_default(tmp_path: Path, monkeypatch) -> None:
+    """Архив, распакованный в тысячи раз больше себя, не должен пройти молча."""
+    archive = tmp_path / "big.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("payload.csv", "a" * 2_000_000)
+
+    with pytest.raises(UnsafeArchive, match="превышает лимит"):
+        extract_archive(archive, tmp_path / "out", max_uncompressed_bytes=1_000_000)
+
+
+def test_limit_can_be_raised_by_the_caller(tmp_path: Path) -> None:
+    """Поднять лимит можно, но только осознанно и на стороне вызова."""
+    archive = tmp_path / "big.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("payload.csv", "a" * 2_000_000)
+
+    extracted = extract_archive(archive, tmp_path / "out", max_uncompressed_bytes=4_000_000)
+
+    assert [p.name for p in extracted] == ["payload.csv"]
+
+
+def test_refusal_names_both_sizes(tmp_path: Path) -> None:
+    """Сообщение обязано сказать, сколько получилось и сколько разрешено."""
+    archive = tmp_path / "big.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("payload.csv", "a" * 2_000_000)
+
+    with pytest.raises(UnsafeArchive) as excinfo:
+        extract_archive(archive, tmp_path / "out", max_uncompressed_bytes=1_000_000)
+
+    assert "ГиБ" in str(excinfo.value) and "явно" in str(excinfo.value)
