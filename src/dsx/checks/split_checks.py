@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import polars as pl
+
 from dsx.checks.base import Context, NotApplicable, Signal
 from dsx.evals.case import Finding
 from dsx.roles import Role
@@ -127,6 +129,54 @@ class FeatureWindowOverlap:
 
 
 @dataclass(frozen=True)
+class ReservedMeasurementSample:
+    """P5. Измерительная выборка не зарезервирована.
+
+    Скользящие окна строятся вложенно: обучение каждого следующего включает
+    оценочные строки предыдущих. Поэтому окна пересекаются по составу — на
+    втором кейсе 42% и 61%, — и ни одно не годится в измерительный инструмент
+    после того, как хоть одно использовалось для выбора. Выбор же неизбежен:
+    горизонт, окно признаков, порог.
+
+    Резерв разводит два вопроса. Окна отвечают, устойчива ли связь во времени,
+    и для этого нужны все окна. Резерв отвечает, сколько это стоит, и для
+    этого нужна выборка, не участвовавшая ни в чём.
+    """
+
+    requirement: str = "P5"
+    premises: frozenset[Premise] = frozenset({Premise.UNIVERSAL})
+    detects: frozenset[Finding] = frozenset({Finding.NO_RESERVED_MEASUREMENT_SAMPLE})
+
+    def run(self, context: Context) -> list[Signal]:
+        split = _require_split(context)
+        if split.reserved is not None and split.reserved.height:
+            return []
+        if not split.parts:
+            raise NotApplicable("сплит пуст: резервировать нечего")
+
+        moment = context.world.schema.decision_time.name
+        last_stop = max(p.window.stop for p in split.parts)
+        beyond = context.world.main.filter(pl.col(moment) >= last_stop).height
+        if not beyond:
+            raise NotApplicable(
+                "за пределами последнего окна решений нет: период слишком короток, "
+                "чтобы что-то резервировать"
+            )
+
+        return [
+            Signal(
+                Finding.NO_RESERVED_MEASUREMENT_SAMPLE,
+                f"измерительная выборка не зарезервирована. Окна "
+                f"{[p.name for p in split.parts]!r} строятся вложенно и потому "
+                "пересекаются по составу: измерение на любом из них после выбора "
+                "на другом смещено. Отрежьте период, не входящий ни в одно окно, "
+                "до начала работы",
+                blocking=True,
+            )
+        ]
+
+
+@dataclass(frozen=True)
 class LabelImmaturity:
     """A12. Исход части объектов оценочного окна ещё не наблюдаем.
 
@@ -161,4 +211,9 @@ class LabelImmaturity:
         return signals
 
 
-SPLIT_CHECKS = [EntityOverlapAcrossSplits(), FeatureWindowOverlap(), LabelImmaturity()]
+SPLIT_CHECKS = [
+    EntityOverlapAcrossSplits(),
+    FeatureWindowOverlap(),
+    ReservedMeasurementSample(),
+    LabelImmaturity(),
+]

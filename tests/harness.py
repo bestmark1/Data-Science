@@ -45,8 +45,9 @@ def context_for(bundle):
         Window(f"w{i}", lo + dt.timedelta(days=300 + i * 45), lo + dt.timedelta(days=345 + i * 45))
         for i in range(3)
     ]
+    reserve_from = lo + dt.timedelta(days=480) if bundle.reserve else None
     try:
-        split = split_by_windows(world, bundle.outcome, windows, snapshot)
+        split = split_by_windows(world, bundle.outcome, windows, snapshot, reserve_from)
     except Exception:
         split = None
     return Context(world, bundle.outcome, task_for(world, bundle.lifetime), split)

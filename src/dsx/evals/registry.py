@@ -38,6 +38,13 @@ class Bundle:
     build: Callable[[], World]
     outcome: OutcomeDefinition
 
+    reserve: bool = True
+    """Резервировать ли измерительную выборку при построении сплита.
+
+    Правильный протокол резервирует, поэтому умолчание такое. Кейс, где
+    резерва нет, объявляет это явно.
+    """
+
     lifetime: ObjectLifetime | None = None
     """Жизненный цикл объекта, объявленный автором кейса.
 
@@ -86,6 +93,7 @@ def _bundle(
     comparison: ComparisonMode = ComparisonMode.BY_DATE,
     caught_by: set[str] | None = None,
     lifetime: ObjectLifetime | None = None,
+    reserve: bool = True,
 ) -> Bundle:
     return Bundle(
         case=Case(
@@ -99,6 +107,7 @@ def _bundle(
         build=build,
         outcome=_outcome(comparison),
         lifetime=lifetime,
+        reserve=reserve,
     )
 
 

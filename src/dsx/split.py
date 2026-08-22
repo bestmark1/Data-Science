@@ -79,6 +79,17 @@ class SplitResult:
     immature: dict[str, int] = field(default_factory=dict)
     """Объекты оценочного окна, чей исход не наблюдаем к концу наблюдения."""
 
+    reserved: pl.DataFrame | None = None
+    """Измерительная выборка, отрезанная до начала работы и не входящая ни в
+    одно окно.
+
+    Второй кейс показал, что скользящие окна строятся вложенно и потому
+    пересекаются по составу: 42% на одном протоколе, 61% на другом. Ни одно из
+    них не годится в измерительный инструмент после того, как хоть одно
+    использовалось для выбора, а выбор неизбежен. Резерв разводит два вопроса:
+    окна отвечают, устойчива ли связь во времени, резерв — сколько это стоит.
+    """
+
     def part(self, name: str) -> Part:
         return next(p for p in self.parts if p.name == name)
 
@@ -88,15 +99,31 @@ def split_by_windows(
     definition: OutcomeDefinition,
     windows: list[Window],
     snapshot: dt.datetime,
+    reserve_from: dt.datetime | None = None,
 ) -> SplitResult:
     """Построить обучающие и оценочные части по временным окнам.
 
     Для каждого окна обучение — объекты, чей исход был известен до его начала.
     Оценка — объекты, решение по которым принято внутри окна.
+
+    `reserve_from` отрезает измерительную выборку: решения с этого момента не
+    попадают ни в одно окно. Момент задаётся до начала работы, иначе резерв
+    выбирается по уже увиденным метрикам и перестаёт быть инструментом.
     """
     labelled = with_label_known_at(world, definition, snapshot)
     decision = world.schema.decision_time.name
     result = SplitResult()
+
+    if reserve_from is not None:
+        late = [w.name for w in windows if w.stop > reserve_from]
+        if late:
+            raise ValueError(
+                f"окна {late!r} заходят за границу резерва {reserve_from:%Y-%m-%d}: "
+                "измерительная выборка перестала бы быть независимой"
+            )
+        reserved = labelled.filter((pl.col(decision) >= reserve_from) & pl.col(LABEL).is_not_null())
+        result.reserved = reserved
+        labelled = labelled.filter(pl.col(decision) < reserve_from)
 
     for window in windows:
         train = labelled.filter(pl.col(LABEL).is_not_null() & (pl.col(KNOWN_AT) < window.start))
@@ -145,6 +172,13 @@ def entity_overlap(parts: list[Part], world: World, role: Role | None = None) ->
     return overlaps
 
 
+def reserved_extent(result: SplitResult, world: World) -> Extent | None:
+    """Состав зарезервированной измерительной выборки."""
+    if result.reserved is None or result.reserved.height == 0:
+        return None
+    return _extent_of_frame(result.reserved, world)
+
+
 def extent_of(part: Part, world: World) -> Extent:
     """Состав части сплита: единицы решения обучения И оценки вместе.
 
@@ -152,13 +186,16 @@ def extent_of(part: Part, world: World) -> Extent:
     строки: на втором кейсе выборка w2 обучалась на днях, которые в w0 были
     оценочными, и именно по ним принимался выбор.
     """
+    frame = pl.concat([part.train, part.evaluate], how="vertical_relaxed")
+    return _extent_of_frame(frame, world)
+
+
+def _extent_of_frame(frame: pl.DataFrame, world: World) -> Extent:
     keys = world.schema.by_role(Role.ENTITY_ID)
     if not keys:
         raise ValueError("состав выборки требует объявленной единицы решения")
     key = keys[0].name
     moment = world.schema.decision_time.name
-
-    frame = pl.concat([part.train, part.evaluate], how="vertical_relaxed")
     return Extent(
         units=frozenset(frame[key].to_list()),
         since=frame[moment].min(),

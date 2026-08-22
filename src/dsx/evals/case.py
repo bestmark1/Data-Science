@@ -43,6 +43,7 @@ class Finding(StrEnum):
     PREMISE_MISMATCH = "premise_mismatch"
     UNDECLARED_FEATURE_WINDOW = "undeclared_feature_window"
     FEATURE_WINDOW_OVERLAP = "feature_window_overlap"
+    NO_RESERVED_MEASUREMENT_SAMPLE = "no_reserved_measurement_sample"
 
 
 class Expectation(BaseModel):

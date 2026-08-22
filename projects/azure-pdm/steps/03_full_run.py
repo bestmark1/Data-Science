@@ -24,6 +24,7 @@ from dsx.split import (
     entity_overlap,
     extent_of,
     positive_rates,
+    reserved_extent,
     split_by_windows,
 )
 from dsx.task import ObjectLifetime, OutcomeTiming, TargetKind, TaskSpec
@@ -64,9 +65,11 @@ def main() -> int:
         Window(f"w{i}", lo + dt.timedelta(days=180 + i * 60), lo + dt.timedelta(days=240 + i * 60))
         for i in range(3)
     ]
+    # Резерв отрезается до построения окон и не входит ни в одно из них (F-9).
+    reserve_from = lo + dt.timedelta(days=400)
 
     print(f"период визитов: {lo:%Y-%m-%d} .. {hi:%Y-%m-%d} ({span} дней)")
-    split = split_by_windows(world, definition, windows, snapshot)
+    split = split_by_windows(world, definition, windows, snapshot, reserve_from)
     print(f"выпало между выборками: {split.dropped_not_yet_known:,}")
     for part in split.parts:
         print(f"  {part.name}: обучение {part.train.height:5,}  оценка {part.evaluate.height:4,}")
@@ -93,12 +96,10 @@ def main() -> int:
     samples = SampleLedger(OverrideLedger())
     for part in split.parts:
         samples.register(part.name, extent_of(part, world))
+    samples.register("резерв", reserved_extent(split, world))
     samples.select("w0", "выбор горизонта и окна")
-    try:
-        samples.measure("w2")
-        print("журнал принял измерение на w2")
-    except Exception as refusal:
-        print(f"журнал отказал: {refusal}")
+    samples.measure("резерв")
+    print(f"измерение проведено на резерве: {samples.extent('резерв')}")
 
     assumptions = AssumptionRegistry()
     assumptions.record(

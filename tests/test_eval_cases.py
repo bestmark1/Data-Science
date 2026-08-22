@@ -44,6 +44,9 @@ def test_every_declared_finding_is_covered_by_some_case() -> None:
         # Проверяется напрямую в test_premises.py: расхождение объявления с
         # данными — свойство пары "мир + объявленная задача", а не мира.
         Finding.PREMISE_MISMATCH,
+        # Проверяется напрямую в test_split.py: отсутствие резерва — свойство
+        # построенного сплита, а не данных. Мир при этом любой.
+        Finding.NO_RESERVED_MEASUREMENT_SAMPLE,
     }
     assert uncovered <= protocol_scope, f"не покрыты кейсами: {uncovered - protocol_scope}"
 

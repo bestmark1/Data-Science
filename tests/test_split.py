@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pytest
+
+from dsx.checks.base import Context
 from dsx.evals.registry import BY_ID
 from dsx.label import LABEL, compute, observable
 from dsx.split import (
     KNOWN_AT,
+    SplitResult,
     Window,
     entity_overlap,
     positive_rates,
@@ -145,3 +149,54 @@ def test_overlap_of_decision_units_is_leakage_even_for_recurring_objects() -> No
     assert context.split is not None
 
     assert entity_overlap(context.split.parts, context.world, role=Role.ENTITY_ID)
+
+
+def test_reserved_sample_is_disjoint_from_every_window() -> None:
+    """F-9: окна вложены и пересекаются, резерв не пересекается ни с чем."""
+    from harness import context_for
+
+    context = context_for(BY_ID["clean-baseline"])
+    split = context.split
+    assert split.reserved is not None and split.reserved.height
+
+    reserved = set(split.reserved["entity_id"].to_list())
+    for part in split.parts:
+        assert not reserved & set(part.train["entity_id"].to_list())
+        assert not reserved & set(part.evaluate["entity_id"].to_list())
+
+
+def test_windows_reaching_past_the_reserve_are_refused() -> None:
+    """Резерв, в который заходит окно, независимым не является."""
+    import datetime as dt
+
+    from harness import context_for
+
+    bundle = BY_ID["clean-baseline"]
+    world = bundle.build()
+    lo = world.main["decided_at"].min()
+    windows = [Window("w", lo + dt.timedelta(days=300), lo + dt.timedelta(days=500))]
+
+    with pytest.raises(ValueError, match="заходят за границу резерва"):
+        split_by_windows(
+            world,
+            bundle.outcome,
+            windows,
+            world.main["decided_at"].max(),
+            lo + dt.timedelta(days=480),
+        )
+    assert context_for(bundle).split is not None
+
+
+def test_missing_reserve_blocks() -> None:
+    from dsx.checks.split_checks import ReservedMeasurementSample
+    from dsx.evals.case import Finding
+    from harness import context_for
+
+    context = context_for(BY_ID["clean-baseline"])
+    without = SplitResult(parts=context.split.parts)
+    stripped = Context(context.world, context.outcome, context.task, without)
+
+    signals = ReservedMeasurementSample().run(stripped)
+
+    assert [s.finding for s in signals] == [Finding.NO_RESERVED_MEASUREMENT_SAMPLE]
+    assert signals[0].blocking

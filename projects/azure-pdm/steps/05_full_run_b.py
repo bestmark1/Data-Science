@@ -25,6 +25,7 @@ from dsx.split import (
     entity_overlap,
     extent_of,
     positive_rates,
+    reserved_extent,
     split_by_windows,
 )
 from dsx.task import ObjectLifetime, OutcomeTiming, TargetKind, TaskSpec
@@ -74,13 +75,14 @@ def main() -> int:
         Window(f"w{i}", lo + dt.timedelta(days=150 + i * 60), lo + dt.timedelta(days=210 + i * 60))
         for i in range(3)
     ]
+    reserve_from = lo + dt.timedelta(days=340)
 
     print(f"решений: {frame.height:,}, машин: {frame['machine_key'].n_unique()}")
     print(f"период: {lo:%Y-%m-%d} .. {hi:%Y-%m-%d}")
     print(f"окно признаков: {LOOKBACK_DAYS} дн, горизонт исхода: {HORIZON_DAYS} дн")
     print()
 
-    split = split_by_windows(world, definition, windows, snapshot)
+    split = split_by_windows(world, definition, windows, snapshot, reserve_from)
     print(f"выпало между выборками: {split.dropped_not_yet_known:,}")
     for part in split.parts:
         print(f"  {part.name}: обучение {part.train.height:6,}  оценка {part.evaluate.height:5,}")
@@ -108,12 +110,15 @@ def main() -> int:
     samples = SampleLedger(OverrideLedger())
     for part in split.parts:
         samples.register(part.name, extent_of(part, world))
+    samples.register("резерв", reserved_extent(split, world))
     samples.select("w0", "выбор окна признаков и горизонта")
     try:
         samples.measure("w2")
         print("журнал принял выбор на w0 и измерение на w2 — возражений нет")
     except Exception as refusal:
-        print(f"журнал отказал: {refusal}")
+        print(f"журнал отказал в измерении на w2: {refusal}")
+    samples.measure("резерв")
+    print(f"измерение проведено на резерве: {samples.extent('резерв')}")
 
     by_name = {p.name: p for p in split.parts}
     shared_rows = set(by_name["w0"].train["decision_key"].to_list()) & set(
