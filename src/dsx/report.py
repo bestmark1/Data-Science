@@ -63,6 +63,10 @@ class Study:
     направление исхода и доступность признаков меняют заключение не меньше, чем
     расход выборок, а прежде их изменение не делало вывод устаревшим."""
 
+    measurement: object | None = None
+    """Вердикт измерения, если оно проводилось. Входит в отпечаток протокола:
+    заключение, полученное при другом измерении, обязано отличаться видимо."""
+
     open_questions: tuple[str, ...] = ()
     """Объявления, которые ядро проверить не может, — вопросы владельцу данных."""
 
@@ -76,6 +80,7 @@ class Study:
         """
         return _digest(
             self.declarations,
+            str(self.measurement.statement()) if self.measurement is not None else "",
             *(str(a) for a in self.samples.accesses),
             *(str(o) for o in self.overrides.entries),
             *sorted(f.value for f in (self.checks.findings if self.checks else frozenset())),
@@ -116,6 +121,8 @@ class Study:
         parts = [f"# {self.title}", "", self._conclusion_section()]
         if self.checks is not None:
             parts += ["", self._findings_section(), "", self._skipped_section()]
+        if self.measurement is not None:
+            parts += ["", self.measurement.report_section()]
         parts += [
             "",
             self._questions_section(),
