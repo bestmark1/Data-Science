@@ -29,6 +29,10 @@ from dsx.policy import Blocked, OverrideLedger
 class Purpose(StrEnum):
     """Зачем к выборке обращались."""
 
+    AUDIT = "audit"
+    """Чтение ради проверок. Выборку не расходует: аудит не принимает решений
+    и потому не смещает измерение."""
+
     FITTING = "fitting"
     """Обучение. Расходует выборку как обучающую, но не как измерительную."""
 
@@ -87,20 +91,27 @@ class SampleLedger:
         self._accesses: list[Access] = []
         self._known: set[str] = set()
         self._extents: dict[str, Extent] = {}
+        self._frames: dict[str, object] = {}
         self._overrides = ledger or OverrideLedger()
 
     # --- регистрация ------------------------------------------------------
 
-    def register(self, name: str, extent: Extent | None = None) -> None:
-        """Объявить выборку и, по возможности, её состав.
+    def register(self, name: str, extent: Extent | None = None, frame: object = None) -> None:
+        """Объявить выборку, её состав и, если журнал ею владеет, сами данные.
 
         Обращение к незарегистрированной выборке — ошибка: имя, придуманное на
         ходу, обходит учёт. Состав необязателен, но без него журнал не сможет
         утверждать независимость измерения и скажет об этом прямо.
+
+        `frame` передаётся тогда, когда данные должны быть доступны ТОЛЬКО
+        через журнал. Тогда чтение и запись расхода становятся одной операцией,
+        и обойти учёт нельзя не по невнимательности, а вовсе.
         """
         self._known.add(name)
         if extent is not None:
             self._extents[name] = extent
+        if frame is not None:
+            self._frames[name] = frame
 
     def extent(self, sample: str) -> Extent | None:
         return self._extents.get(sample)
@@ -114,6 +125,40 @@ class SampleLedger:
             )
 
     # --- обращения --------------------------------------------------------
+
+    def checkout(self, sample: str, purpose: Purpose, decision: str) -> object:
+        """Выдать данные выборки, записав расход тем же действием.
+
+        Единственный способ получить кадр, которым владеет журнал. Прежде
+        данные лежали публичным полем результата сплита, а журнал был отдельным
+        объектом, который надо не забыть позвать. Механизм, зависящий от
+        памяти зовущего, в этом проекте ломался дважды.
+        """
+        self._require_known(sample)
+        if sample not in self._frames:
+            raise Blocked(
+                "P2",
+                f"журнал не владеет данными выборки {sample!r}: выдать нечего. "
+                "Либо выборка зарегистрирована без данных, либо имя ошибочно",
+            )
+
+        match purpose:
+            case Purpose.AUDIT:
+                pass  # аудит решений не принимает и выборку не расходует
+            case Purpose.FITTING:
+                self.fit(sample, decision)
+            case Purpose.SELECTION:
+                self.select(sample, decision)
+            case Purpose.MEASUREMENT:
+                self.measure(sample, decision)
+
+        if purpose is Purpose.AUDIT:
+            self._accesses.append(Access(sample=sample, purpose=Purpose.AUDIT, decision=decision))
+        return self._frames[sample]
+
+    def owns(self, sample: str) -> bool:
+        """Владеет ли журнал данными выборки."""
+        return sample in self._frames
 
     def fit(self, sample: str, decision: str) -> None:
         self._require_known(sample)
@@ -169,7 +214,9 @@ class SampleLedger:
         # Прежние ИЗМЕРЕНИЯ тоже расходуют состав: измерить одни и те же строки
         # дважды под разными именами — ровно тот обход, ради которого учёт по
         # содержимому и вводился.
-        touched = [a for a in self._accesses if a.sample != sample]
+        touched = [
+            a for a in self._accesses if a.sample != sample and a.purpose is not Purpose.AUDIT
+        ]
         if not touched:
             return
 

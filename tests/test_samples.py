@@ -267,3 +267,65 @@ def test_fitting_on_the_measurement_rows_is_blocked() -> None:
 
     with pytest.raises(Blocked, match="P1"):
         sl.measure("test")
+
+
+# --- журнал владеет данными (совет второго Клода) --------------------------
+
+
+def test_checkout_records_the_spend_by_the_same_action() -> None:
+    """Чтение и запись расхода — одна операция, а не две."""
+    import polars as pl
+
+    sl = SampleLedger()
+    frame = pl.DataFrame({"x": [1, 2, 3]})
+    sl.register("test", extent("t"), frame=frame)
+
+    got = sl.checkout("test", Purpose.MEASUREMENT, "итоговая оценка")
+
+    assert got.equals(frame)
+    assert sl.was_measured("test")
+
+
+def test_second_checkout_for_measurement_is_blocked() -> None:
+    """Посмотреть метрику, подкрутить порог, посмотреть снова — самое лёгкое
+    действие, как только скоринг доступен."""
+    import polars as pl
+
+    sl = SampleLedger()
+    sl.register("test", extent("t"), frame=pl.DataFrame({"x": [1]}))
+    sl.checkout("test", Purpose.MEASUREMENT, "итоговая оценка")
+
+    with pytest.raises(Blocked, match="P1"):
+        sl.checkout("test", Purpose.MEASUREMENT, "ещё разок")
+
+
+def test_selection_after_measurement_through_checkout_is_blocked() -> None:
+    import polars as pl
+
+    sl = SampleLedger()
+    sl.register("test", extent("t"), frame=pl.DataFrame({"x": [1]}))
+    sl.checkout("test", Purpose.MEASUREMENT, "итоговая оценка")
+
+    with pytest.raises(Blocked, match="P7"):
+        sl.checkout("test", Purpose.SELECTION, "подкручиваю порог")
+
+
+def test_audit_does_not_spend_the_sample() -> None:
+    """Аудит решений не принимает и потому измерение не смещает."""
+    import polars as pl
+
+    sl = SampleLedger()
+    sl.register("test", extent("t"), frame=pl.DataFrame({"x": [1]}))
+
+    sl.checkout("test", Purpose.AUDIT, "проверки постановки")
+
+    assert not sl.is_spent("test")
+    sl.checkout("test", Purpose.MEASUREMENT, "итоговая оценка")
+
+
+def test_checkout_of_a_sample_without_data_is_refused() -> None:
+    sl = SampleLedger()
+    sl.register("test", extent("t"))
+
+    with pytest.raises(Blocked, match="не владеет данными"):
+        sl.checkout("test", Purpose.MEASUREMENT, "итоговая оценка")

@@ -132,7 +132,8 @@ def test_run_produces_split_reserve_and_report(tmp_path: Path) -> None:
     result = run(form(), BY_ID["clean-baseline"].build().main, tmp_path)
 
     assert [p.name for p in result.split.parts] == ["w0", "w1"]
-    assert result.split.reserved is not None and result.split.reserved.height
+    assert result.split.reserved_rows
+    assert result.split.reserved is None, "данные резерва обязаны уйти в журнал"
     assert (tmp_path / "report.md").exists()
 
 

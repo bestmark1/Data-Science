@@ -70,9 +70,10 @@ def main() -> int:
     print("машин по обе стороны:", objects_across_splits(result) or "нет", "(ожидаемо)")
 
     result.samples.select("w0", "выбор горизонта и окна")
-    result.samples.measure("резерв")
-    result.study.conclude("протокол A проходится; измерение на зарезервированной выборке")
-    print("измерение на резерве:", result.samples.extent("резерв"))
+    # Измерять нечем: предсказаний нет. Данные резерва лежат в журнале и
+    # выдаются только через checkout, который запишет расход тем же действием.
+    result.study.conclude("протокол A проходится; измерения нет — предсказаний не строилось")
+    print("резерв не израсходован:", result.samples.extent("резерв"))
     return 0
 
 

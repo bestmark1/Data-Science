@@ -57,10 +57,9 @@ class Result:
             lines.append(
                 f"  {part.name}: обучение {part.train.height:6,}  оценка {part.evaluate.height:5,}"
             )
-        reserved = self.split.reserved
         immature = self.split.reserved_immature
         lines.append(
-            f"  {RESERVE}: {reserved.height if reserved is not None else 0:,}"
+            f"  {RESERVE}: {self.split.reserved_rows:,}"
             + (f" (из них незрелых {immature:,})" if immature else "")
         )
         lines.append(
@@ -139,7 +138,14 @@ def run(
     samples = SampleLedger(overrides)
     for part in split.parts:
         samples.register(part.name, extent_of(part, world))
-    samples.register(RESERVE, reserved_extent(split, world))
+
+    # Резерв передаётся журналу ВМЕСТЕ С ДАННЫМИ и снимается с результата
+    # сплита. После этого получить его можно только через checkout, который
+    # записывает расход тем же действием. Публичное поле оставляло обход
+    # открытым: посмотреть метрику, подкрутить порог, посмотреть снова.
+    samples.register(RESERVE, reserved_extent(split, world), frame=split.reserved)
+    split.reserved_rows = split.reserved.height if split.reserved is not None else 0
+    split.reserved = None
 
     study = Study(title=form.title)
     study.overrides = overrides
