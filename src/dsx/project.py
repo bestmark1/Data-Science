@@ -356,6 +356,25 @@ class ProjectForm(BaseModel):
             )
         return tuple(questions)
 
+    def declaration_count(self) -> int:
+        """Сколько решений форма фиксирует.
+
+        Считается по единицам выбора, а не по полям: колонка со всеми своими
+        свойствами — одно решение, каждое поле контракта исхода — одно,
+        каждое окно — одно. Нужен для доли непроверяемого: длина списка
+        вопросов сама по себе ни о чём не говорит.
+        """
+        return (
+            len(self.columns)
+            + 5  # event_column, deadline_column, comparison, positive_class, estimand
+            + len(self.outcome.missing_causes)
+            + 5  # target_kind, outcome_timing, has_process, is_stream, object_lifetime
+            + len(self.split.windows)
+            + 2  # reserve_from_day, reserve_until_day
+            + len(self.assumptions)
+            + 1  # observed_until
+        )
+
     def schema_spec(self) -> Schema:
         return Schema(columns=[c.to_spec() for c in self.columns])
 
