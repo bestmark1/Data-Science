@@ -295,3 +295,27 @@ def test_unsupported_task_kind_is_refused_by_the_runner() -> None:
 
     with pytest.raises(UnsupportedTask):
         run(ProjectForm(**payload), BY_ID["clean-baseline"].build().main)
+
+
+def test_override_reaches_the_checks_from_the_working_path() -> None:
+    """Журнал обходов существовал, но runner его не передавал."""
+    from dsx.evals.case import Finding
+    from dsx.policy import OverrideLedger
+
+    payload = yaml.safe_load(FORM)
+    payload["columns"] = [c for c in payload["columns"] if c["name"] != "region"]
+    world = BY_ID["clean-baseline"].build().main
+
+    blocked = run(ProjectForm(**payload), world)
+    assert any(
+        s.blocking and s.finding is Finding.UNDECLARED_COLUMN for s in blocked.checks.signals
+    )
+
+    ledger = OverrideLedger()
+    ledger.override("S8", reason="колонка проверена вручную и не нужна", author="автор")
+    passed = run(ProjectForm(**payload), world, overrides=ledger)
+
+    assert not any(
+        s.blocking and s.finding is Finding.UNDECLARED_COLUMN for s in passed.checks.signals
+    )
+    assert "колонка проверена вручную" in passed.study.render()

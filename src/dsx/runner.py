@@ -96,8 +96,21 @@ class Result:
         return "\n".join(lines)
 
 
-def run(form: ProjectForm, frame: pl.DataFrame, report_dir: Path | None = None) -> Result:
-    """Прогнать проект: сплит, проверки, учёт выборок, отчёт."""
+def run(
+    form: ProjectForm,
+    frame: pl.DataFrame,
+    report_dir: Path | None = None,
+    overrides: OverrideLedger | None = None,
+) -> Result:
+    """Прогнать проект: сплит, проверки, учёт выборок, отчёт.
+
+    `overrides` — журнал осознанных обходов. Без него блокирующий сигнал
+    остаётся блокирующим, и это верно: обход обязан быть записан с причиной и
+    автором, иначе он не отличается от невнимательности.
+
+    Прежде параметра не было вовсе: `run_checks` журнал уважал, но рабочий путь
+    его не передавал, и механизм был недостижим из проекта.
+    """
     world = World(frames={"main": frame}, schema=form.schema_spec())
     definition = form.outcome.to_definition()
     task = form.task.to_spec()
@@ -120,14 +133,16 @@ def run(form: ProjectForm, frame: pl.DataFrame, report_dir: Path | None = None) 
     split = split_by_windows(
         world, definition, form.split.to_windows(origin), snapshot, reserve_from, reserve_until
     )
-    checks = run_checks(list(ALL_CHECKS), Context(world, definition, task, split))
+    overrides = overrides or OverrideLedger()
+    checks = run_checks(list(ALL_CHECKS), Context(world, definition, task, split), overrides)
 
-    samples = SampleLedger(OverrideLedger())
+    samples = SampleLedger(overrides)
     for part in split.parts:
         samples.register(part.name, extent_of(part, world))
     samples.register(RESERVE, reserved_extent(split, world))
 
     study = Study(title=form.title)
+    study.overrides = overrides
     study.declarations = form.model_dump_json()
     study.open_questions = form.unverifiable_declarations()
     study.checks = checks
