@@ -101,10 +101,54 @@ class TargetRateStationarity:
     detects: frozenset[Finding] = frozenset({Finding.NON_STATIONARY_TARGET})
 
     ratio: float = 1.5
-    """Во сколько раз доли могут различаться, прежде чем это станет вопросом."""
+    """Во сколько раз доли МЕЖДУ ОКНАМИ могут различаться. Небольшие колебания
+    во времени нормальны, и порог по кратности здесь уместен."""
+
+    def _reserve_signals(
+        self, context: Context, windows: list[tuple[str, pl.DataFrame]]
+    ) -> list[Signal]:
+        """Отличается ли доля класса в резерве от окон.
+
+        Здесь порог по кратности НЕ применяется, и это не небрежность. Резерв —
+        измерительный инструмент: инструмент, откалиброванный на другой
+        популяции, смещает итоговое число независимо от величины сдвига.
+        Достаточно того, что разница различима на фоне шума.
+
+        На третьем кейсе резерв дал 11.9% против 8.7–9.1% в окнах. Кратность
+        1.37 порога 1.5 не достигала, а разница составляла сорок стандартных
+        ошибок, и модель систематически занижала риск.
+        """
+        split = _require_split(context)
+        if split.reserved is None:
+            return []
+        reserved = _observable(split.reserved)
+        if reserved.height < MIN_ROWS or not windows:
+            return []
+
+        pooled = pl.concat([f for _, f in windows], how="vertical_relaxed")
+        in_windows = float(pooled[LABEL].mean())
+        in_reserve = float(reserved[LABEL].mean())
+        spread = math.sqrt(
+            _rate_error(in_windows, pooled.height) ** 2
+            + _rate_error(in_reserve, reserved.height) ** 2
+        )
+        if abs(in_reserve - in_windows) < SIGMA * spread:
+            return []
+
+        return [
+            Signal(
+                Finding.NON_STATIONARY_TARGET,
+                f"доля положительного класса в РЕЗЕРВЕ {in_reserve:.1%}, а в окнах "
+                f"{in_windows:.1%}. Резерв — измерительный инструмент: измеренное на нём "
+                "описывает другую популяцию, и модель, обученная на окнах, будет на нём "
+                "систематически смещена",
+                blocking=True,
+            )
+        ]
 
     def run(self, context: Context) -> list[Signal]:
         windows = _windows_with_labels(context)
+        signals = self._reserve_signals(context, windows)
         rates = {name: float(frame[LABEL].mean()) for name, frame in windows}
         sizes = {name: frame.height for name, frame in windows}
 
@@ -115,10 +159,8 @@ class TargetRateStationarity:
         # Нулевая доля в одном окне при ненулевой в другом — расхождение
         # бесконечной кратности, а не повод к раннему возврату. Первая версия
         # трактовала самый крайний случай как отсутствие дефекта.
-        if low > 0 and high / low < self.ratio:
-            return []
-        if high <= 0:
-            return []
+        if (low > 0 and high / low < self.ratio) or high <= 0:
+            return signals
 
         # Кратность сама по себе ничего не значит: при редком исходе два
         # события против трёх дают полуторную разницу, будучи шумом.
@@ -126,7 +168,7 @@ class TargetRateStationarity:
             _rate_error(low, sizes[low_name]) ** 2 + _rate_error(high, sizes[high_name]) ** 2
         )
         if high - low < SIGMA * spread:
-            return []
+            return signals
 
         shown = ", ".join(f"{name}: {value:.1%}" for name, value in sorted(rates.items()))
         times = (
@@ -135,13 +177,14 @@ class TargetRateStationarity:
             else "бесконечное число раз (в окне нет ни одного положительного)"
         )
         return [
+            *signals,
             Signal(
                 Finding.NON_STATIONARY_TARGET,
                 f"доля положительного класса различается между окнами в "
                 f"{times} ({shown}). Модель, обученная на одной доле "
                 "и оценённая на другой, сравнивается не сама с собой",
                 blocking=True,
-            )
+            ),
         ]
 
 

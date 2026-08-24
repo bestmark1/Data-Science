@@ -147,3 +147,56 @@ def test_single_missing_value_is_not_a_finding() -> None:
 def test_harness_is_reachable(moment: dt.datetime) -> None:
     """Страховка: файл обязан видеть стенд, иначе тесты выше молча не запустятся."""
     assert context_for(BY_ID["clean-baseline"]).split is not None
+
+
+# --- резерв как измерительный инструмент -----------------------------------
+
+
+def _reserve_with_rate(context, rate: float, rows: int = 4000):
+    """Подменить резерв выборкой с заданной долей класса."""
+    import numpy as np
+
+    rng = np.random.default_rng(3)
+    labels = (rng.random(rows) < rate).astype("int8")
+    context.split.reserved = pl.DataFrame({LABEL: labels, "__outcome_reason": ["observed"] * rows})
+    return context
+
+
+def test_reserve_with_a_shifted_base_rate_is_reported() -> None:
+    """Инструмент, откалиброванный на другой популяции, смещает итог."""
+    context = context_for(BY_ID["clean-baseline"])
+    windows = float(
+        pl.concat([p.evaluate for p in context.split.parts], how="vertical_relaxed")[LABEL].mean()
+    )
+    _reserve_with_rate(context, windows * 1.35)
+
+    signals = TargetRateStationarity().run(context)
+
+    assert [s.finding for s in signals] == [Finding.NON_STATIONARY_TARGET]
+    assert "РЕЗЕРВЕ" in signals[0].detail
+    assert signals[0].blocking
+
+
+def test_reserve_with_the_same_base_rate_is_silent() -> None:
+    """Отрицательный контроль: проверка не должна кричать на совпадающей доле."""
+    context = context_for(BY_ID["clean-baseline"])
+    windows = float(
+        pl.concat([p.evaluate for p in context.split.parts], how="vertical_relaxed")[LABEL].mean()
+    )
+    _reserve_with_rate(context, windows)
+
+    assert TargetRateStationarity().run(context) == []
+
+
+def test_ratio_threshold_does_not_gate_the_reserve_comparison() -> None:
+    """Кратность 1.35 порога 1.5 не достигает, но сорок стандартных ошибок —
+    это разница, а не колебание."""
+    context = context_for(BY_ID["clean-baseline"])
+    windows = float(
+        pl.concat([p.evaluate for p in context.split.parts], how="vertical_relaxed")[LABEL].mean()
+    )
+    _reserve_with_rate(context, windows * 1.35, rows=40000)
+
+    signals = TargetRateStationarity().run(context)
+
+    assert signals, "порог по кратности к резерву неприменим"
