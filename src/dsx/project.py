@@ -205,6 +205,27 @@ class SplitForm(BaseModel):
     выбирается по уже увиденным метрикам (F-9).
     """
 
+    reserve_until_day: int | None = None
+    """Верхняя граница резерва, если она нужна.
+
+    Необязательна: её отсутствие ловится проверкой незрелости, а не
+    объявлением. Требовать ответ имеет смысл там, где проверить нечем; здесь
+    есть чем.
+
+    Нужна, когда наблюдение обрывается раньше, чем последнее решение успевает
+    созреть: без неё в резерв попадает незрелый хвост, и измерение по
+    размеченной части становится отбором полных случаев.
+    """
+
+    @model_validator(mode="after")
+    def _reserve_bounds_are_ordered(self) -> SplitForm:
+        if self.reserve_until_day is not None and self.reserve_until_day <= self.reserve_from_day:
+            raise ValueError(
+                f"конец резерва ({self.reserve_until_day}) не позже его начала "
+                f"({self.reserve_from_day})"
+            )
+        return self
+
     @model_validator(mode="after")
     def _window_names_are_unique(self) -> SplitForm:
         """Одноимённые окна затирают друг друга в учёте выборок и в долях.

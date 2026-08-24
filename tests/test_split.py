@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+import polars as pl
 import pytest
 
 from dsx.checks.base import Context
@@ -314,3 +315,38 @@ def test_known_at_respects_the_declared_comparison() -> None:
 
     assert direct == moment, "при прямом сравнении ответ известен сразу за сроком"
     assert by_date == dt.datetime(2024, 3, 6), "посуточное — с началом следующей даты"
+
+
+def test_reserve_upper_bound_keeps_the_immature_tail_out() -> None:
+    """Без верхней границы в резерв попадает хвост, который нечем измерить."""
+    import datetime as dt
+
+    from dsx.label import REASON, OutcomeReason
+    from harness import context_for
+
+    bundle = BY_ID["label-immaturity"]
+    world = bundle.build()
+    lo = world.main["decided_at"].min()
+    snapshot = max(world.main["decided_at"].max(), world.main["event_at"].max())
+    windows = [Window("w0", lo + dt.timedelta(days=300), lo + dt.timedelta(days=345))]
+
+    without = split_by_windows(
+        world, bundle.outcome, windows, snapshot, lo + dt.timedelta(days=400)
+    )
+    within = split_by_windows(
+        world,
+        bundle.outcome,
+        windows,
+        snapshot,
+        lo + dt.timedelta(days=400),
+        lo + dt.timedelta(days=430),
+    )
+
+    assert without.reserved_immature > 0, "кейс обязан содержать незрелый хвост"
+    assert within.reserved.height < without.reserved.height
+    assert within.outside_everything > 0
+    assert (
+        within.reserved.filter(pl.col(REASON) == OutcomeReason.IMMATURE.value).height
+        <= without.reserved_immature
+    )
+    assert context_for(bundle).split is not None

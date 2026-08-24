@@ -26,8 +26,10 @@ def main() -> int:
     print(result.summary())
     print("объектов по обе стороны:", objects_across_splits(result) or "нет")
 
-    result.samples.measure(RESERVE)
-    print("измерение на резерве:", result.samples.extent(RESERVE))
+    # Измерение НЕ проводится: моделей здесь не строится, и вызывать measure()
+    # ради красивой строки в выводе значило бы записать расход выборки, которого
+    # не было. Резерв остаётся нерасходованным до настоящего измерения.
+    print("резерв зарегистрирован и не израсходован:", result.samples.extent(RESERVE))
     return 0
 
 

@@ -63,7 +63,15 @@ class Result:
             f"  {RESERVE}: {reserved.height if reserved is not None else 0:,}"
             + (f" (из них незрелых {immature:,})" if immature else "")
         )
-        lines.append(f"выпало между выборками: {self.split.dropped_not_yet_known:,}")
+        lines.append(
+            "выпало между выборками: "
+            + str(self.split.dropped_by_window or self.split.dropped_not_yet_known)
+        )
+        if self.split.outside_everything:
+            lines.append(
+                f"вне всех выборок: {self.split.outside_everything:,} "
+                f"(незрелых {self.split.outside_immature:,})"
+            )
         lines.append("незрелых: " + (str(self.split.immature) if self.split.immature else "нет"))
         lines.append(
             "доли положительных: "
@@ -103,9 +111,14 @@ def run(form: ProjectForm, frame: pl.DataFrame, report_dir: Path | None = None) 
     # события нельзя: это последнее СЛУЧИВШЕЕСЯ событие, а не конец сбора.
     snapshot = form.observed_until
     reserve_from = origin + dt.timedelta(days=form.split.reserve_from_day)
+    reserve_until = (
+        origin + dt.timedelta(days=form.split.reserve_until_day)
+        if form.split.reserve_until_day is not None
+        else None
+    )
 
     split = split_by_windows(
-        world, definition, form.split.to_windows(origin), snapshot, reserve_from
+        world, definition, form.split.to_windows(origin), snapshot, reserve_from, reserve_until
     )
     checks = run_checks(list(ALL_CHECKS), Context(world, definition, task, split))
 

@@ -97,6 +97,13 @@ class SplitResult:
     immature: dict[str, int] = field(default_factory=dict)
     """Объекты оценочного окна, чей исход не наблюдаем к концу наблюдения."""
 
+    outside_everything: int = 0
+    """Строки за верхней границей резерва: ни в обучении, ни в оценке, ни в
+    измерении."""
+
+    outside_immature: int = 0
+    """Из них незрелых."""
+
     reserved_immature: int = 0
     """Строки резерва, чей исход ещё не наблюдаем."""
 
@@ -121,6 +128,7 @@ def split_by_windows(
     windows: list[Window],
     snapshot: dt.datetime,
     reserve_from: dt.datetime | None = None,
+    reserve_until: dt.datetime | None = None,
 ) -> SplitResult:
     """Построить обучающие и оценочные части по временным окнам.
 
@@ -147,6 +155,16 @@ def split_by_windows(
         # там, где она должна быть честной. Незрелость внутри резерва видна
         # отдельно и попадает в отчёт.
         reserved = labelled.filter(pl.col(decision) >= reserve_from)
+        if reserve_until is not None:
+            # Хвост за верхней границей не принадлежит ничему. Он остаётся
+            # видимым отдельным числом: строки, которые нельзя ни обучить, ни
+            # оценить, ни измерить, — это не пустое место, а цена горизонта.
+            beyond = reserved.filter(pl.col(decision) >= reserve_until)
+            result.outside_everything = beyond.height
+            result.outside_immature = beyond.filter(
+                pl.col(REASON) == OutcomeReason.IMMATURE.value
+            ).height
+            reserved = reserved.filter(pl.col(decision) < reserve_until)
         result.reserved = reserved
         result.reserved_immature = reserved.filter(
             pl.col(REASON) == OutcomeReason.IMMATURE.value
