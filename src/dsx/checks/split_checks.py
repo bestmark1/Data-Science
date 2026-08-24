@@ -212,6 +212,24 @@ class LabelImmaturity:
                     blocking=True,
                 )
             )
+
+        # Резерв проверяется наравне с окнами. Прежде он не проверялся вовсе, и
+        # на третьем кейсе половина измерительной выборки оказалась незрелой:
+        # измеряя по размеченной части, получили бы долю 11.95% вместо 9.2%.
+        reserved = split.reserved
+        if reserved is not None and reserved.height and split.reserved_immature:
+            share = split.reserved_immature / reserved.height
+            if share >= self.tolerance:
+                signals.append(
+                    Signal(
+                        Finding.LABEL_IMMATURITY,
+                        f"в резерве исход {split.reserved_immature:,} объектов "
+                        f"({share:.1%}) не наблюдаем. Измерение по размеченной части — "
+                        "отбор полных случаев: остаются объекты с короткими сроками, и "
+                        "метрика завышается",
+                        blocking=True,
+                    )
+                )
         return signals
 
 

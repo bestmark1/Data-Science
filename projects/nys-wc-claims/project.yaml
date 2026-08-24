@@ -1,140 +1,122 @@
-# ФОРМА ТРЕТЬЕГО КЕЙСА — заполняется вами.
+# ФОРМА ТРЕТЬЕГО КЕЙСА
 #
-# Что уже заполнено мной и почему:
-#   - имена колонок: они определяются кодом сборки (build.py), а не решением;
-#   - temporal: date — установлено проверкой: все 16 временных колонок хранят
-#     календарную дату, время суток нулевое везде.
+# Заполнено по решениям, принятым в диалоге. Каждое непроверяемое объявление
+# порождает вопрос владельцу данных автоматически — см. раздел отчёта
+# «Вопросы владельцу данных».
 #
-# Всё остальное — вопросы к вам. Каждый помечен ВОПРОС. Руководство с
-# различающими вопросами: docs/filling-the-form.md
-#
-# Источник объявлений — настоящий: NYSWCB_...DataDictionary.pdf в data/raw.
-# Ссылайтесь на него, а не на «гипотетического владельца».
+# Что ещё не решено, помечено ЗАПОЛНИТЕ.
 
-title: "NYS Workers' Compensation Claims"
+title: "NYS Workers' Compensation Claims: слушание в 180 дней после сборки"
 
-# --- ДОПУЩЕНИЯ: заполняются ПЕРВЫМИ -----------------------------------------
-# ВОПРОС: что вы принимаете на веру про эти данные? Минимум одно.
-# basis: data | owner | document | domain_knowledge
-# consequence обязательно: что окажется неверным, если допущение ложно.
-#
-# Подсказка о том, что здесь стоит обдумать: в данных нет идентификатора
-# работника. Две претензии одного человека неотличимы от претензий разных
-# людей.
+# --- ДОПУЩЕНИЯ ---------------------------------------------------------------
 
 assumptions:
-  - statement: "ЗАПОЛНИТЕ"
-    basis: domain_knowledge
-    author: "ЗАПОЛНИТЕ"
-    consequence: "ЗАПОЛНИТЕ"
+  - statement: "доля выбывших претензий, неотличимых от отсутствия необходимости в слушании, составляет около 1.5%"
+    basis: data
+    author: "автор"
+    evidence: "расчёт по current_status: CASE CANCELLED — 27 374 из 1 804 676 строк"
+    consequence: "если выбытий больше, часть строк размечена как «слушания не было», хотя исход неизвестен; при доле положительных 9.2% полтора процента составляют шестую часть класса"
+
+  - statement: "две претензии одного работника неотличимы от претензий разных людей"
+    basis: data
+    author: "автор"
+    evidence: "в схеме нет идентификатора работника: 54 колонки словаря, ни одна не описывает лицо"
+    consequence: "повторные обращения одного человека попадут в разные окна как разные объекты, и утечка между обучением и оценкой останется невидимой"
+
+  - statement: "свойства работника и травмы известны Совету к моменту сборки претензии"
+    basis: document
+    author: "автор"
+    evidence: "словарь данных описывает их как атрибуты претензии, а не как результат разбирательства"
+    consequence: "если часть из них уточняется в ходе дела, признак знает будущее, и оценка завышена"
 
 # --- СХЕМА -------------------------------------------------------------------
-# Роли: entity_id, natural_key, decision_time, event_time, deadline,
-#       available_at, measured_at, status, outcome_component, feature, ignored
-#
-# ВОПРОС по каждой колонке: чем она является в вашей постановке?
-#
-# ВАЖНО. Словарь данных описывает почти все неврéменные поля как значения НА
-# МОМЕНТ ВЫГРУЗКИ, а не на момент решения. Претензия, собранная в 2005 году,
-# несёт статус 2021 года. Отличить такое поле от значения на момент решения по
-# данным нельзя — только по словарю.
 
 columns:
-  # --- ключ и момент решения
-  - {name: claim_id, role: ЗАПОЛНИТЕ}                       # уникален по всем строкам
-  - {name: assembled_at, role: ЗАПОЛНИТЕ, temporal: date}   # дата сборки претензии Советом
+  - {name: claim_id, role: entity_id}
+  - {name: assembled_at, role: decision_time, temporal: date}
+  - {name: first_hearing_at, role: outcome_component, temporal: date}
+  - {name: horizon_180d, role: deadline, temporal: date}
 
-  # --- сроки-кандидаты. ВОПРОС: какой горизонт осмыслен? Один объявите
-  #     deadline, остальные — ignored.
-  - {name: horizon_30d, role: ЗАПОЛНИТЕ, temporal: date}
-  - {name: horizon_90d, role: ЗАПОЛНИТЕ, temporal: date}
-  - {name: horizon_180d, role: ЗАПОЛНИТЕ, temporal: date}
-  - {name: horizon_365d, role: ЗАПОЛНИТЕ, temporal: date}
+  # Горизонты-кандидаты, не выбранные в качестве срока.
+  - {name: horizon_30d, role: ignored, temporal: date}
+  - {name: horizon_90d, role: ignored, temporal: date}
+  - {name: horizon_365d, role: ignored, temporal: date}
 
-  # --- события после сборки. ВОПРОС: какое из них ваш исход?
-  #     Заполненность: оспаривание 8.2%, PPD со шкалой 11.9%, PPD без шкалы
-  #     2.4%, полная нетрудоспособность 0.1%, соглашение 5.3%, апелляция 3.6%.
-  - {name: controverted_at, role: ЗАПОЛНИТЕ, temporal: date}       # страховщик оспорил
-  - {name: ppd_scheduled_at, role: ЗАПОЛНИТЕ, temporal: date}      # частичная стойкая, по шкале
-  - {name: ppd_nonscheduled_at, role: ЗАПОЛНИТЕ, temporal: date}   # частичная стойкая, вне шкалы
-  - {name: ptd_at, role: ЗАПОЛНИТЕ, temporal: date}                # полная стойкая
-  - {name: section32_at, role: ЗАПОЛНИТЕ, temporal: date}          # соглашение об отказе
-  - {name: first_appeal_at, role: ЗАПОЛНИТЕ, temporal: date}       # первая апелляция
-  - {name: first_hearing_at, role: ЗАПОЛНИТЕ, temporal: date}      # первое слушание
-  - {name: established_at, role: ЗАПОЛНИТЕ, temporal: date}        # претензия установлена (ANCR)
+  # Признаки: обстоятельства травмы и административное окружение.
+  - {name: age_at_injury, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # возраст на момент травмы
+  - {name: birth_year, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # год рождения
+  - {name: gender, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # пол
+  - {name: zip_code, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # индекс места жительства
+  - {name: county, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # округ, где произошла травма
+  - {name: weekly_wage, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # средний недельный заработок
+  - {name: wcio_body_code, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # код части тела WCIO
+  - {name: wcio_body, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # часть тела WCIO
+  - {name: wcio_nature_code, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # код характера травмы WCIO
+  - {name: wcio_nature, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # характер травмы WCIO
+  - {name: wcio_cause_code, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # код причины травмы WCIO
+  - {name: wcio_cause, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # причина травмы WCIO
+  - {name: is_accident, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # несчастный случай
+  - {name: is_occupational_disease, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # профзаболевание
+  - {name: covid_related, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # связь с COVID-19
+  - {name: industry_code, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # код отрасли NAICS
+  - {name: industry, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # отрасль
+  - {name: claim_type, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # категория работника: WC, VF, VW
+  - {name: district, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # округ Совета
+  - {name: medical_fee_region, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # регион медицинского тарифа
+  - {name: carrier_name, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # страховщик
+  - {name: carrier_type, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # тип страховщика
+  - {name: alternative_dispute_resolution, role: feature, availability: at_decision, source_of_claim: "словарь данных WCB, NYSWCB_...DataDictionary.pdf", window_lookback_days: 0, window_source: "код сборки build.py: значение берётся из строки претензии как есть"}  # альтернативное разрешение споров
 
-  # --- до сборки. ВОПРОС: доступны ли они в момент решения и чем это подтверждено?
-  - {name: accident_at, role: ЗАПОЛНИТЕ, temporal: date}
-  - {name: c2_received_at, role: ЗАПОЛНИТЕ, temporal: date}   # форма работодателя
-  - {name: c3_received_at, role: ЗАПОЛНИТЕ, temporal: date}   # форма работника
+  # События после сборки и даты, недоступные в момент решения.
+  - {name: c2_received_at, role: ignored, temporal: date}  # форма работодателя: заполнена у 1.1%, у 37.5% из них позже сборки
+  - {name: c3_received_at, role: ignored, temporal: date}  # форма работника: у 60.5% приходит ПОЗЖЕ сборки
+  - {name: established_at, role: ignored, temporal: date}  # установление претензии: в 100% случаев позже сборки
+  - {name: controverted_at, role: ignored, temporal: date}  # оспаривание страховщиком — событие после сборки
+  - {name: ppd_scheduled_at, role: ignored, temporal: date}  # частичная стойкая по шкале — событие после сборки
+  - {name: ppd_nonscheduled_at, role: ignored, temporal: date}  # частичная стойкая вне шкалы — событие после сборки
+  - {name: ptd_at, role: ignored, temporal: date}  # полная стойкая — событие после сборки
+  - {name: section32_at, role: ignored, temporal: date}  # соглашение: в 99.8% случаев ПОСЛЕ слушания
+  - {name: first_appeal_at, role: ignored, temporal: date}  # апелляция — событие после сборки
+  - {name: accident_at, role: ignored, temporal: date}  # доступна, но как дата признаком не годится: нужна производная
 
-  # --- свойства работника и травмы
-  - {name: age_at_injury, role: ЗАПОЛНИТЕ}
-  - {name: birth_year, role: ЗАПОЛНИТЕ}
-  - {name: gender, role: ЗАПОЛНИТЕ}
-  - {name: zip_code, role: ЗАПОЛНИТЕ}
-  - {name: county, role: ЗАПОЛНИТЕ}
-  - {name: weekly_wage, role: ЗАПОЛНИТЕ}
-  - {name: wcio_body_code, role: ЗАПОЛНИТЕ}
-  - {name: wcio_body, role: ЗАПОЛНИТЕ}
-  - {name: wcio_nature_code, role: ЗАПОЛНИТЕ}
-  - {name: wcio_nature, role: ЗАПОЛНИТЕ}
-  - {name: wcio_cause_code, role: ЗАПОЛНИТЕ}
-  - {name: wcio_cause, role: ЗАПОЛНИТЕ}
-  - {name: is_accident, role: ЗАПОЛНИТЕ}
-  - {name: is_occupational_disease, role: ЗАПОЛНИТЕ}
-  - {name: covid_related, role: ЗАПОЛНИТЕ}
-  - {name: industry_code, role: ЗАПОЛНИТЕ}
-  - {name: industry, role: ЗАПОЛНИТЕ}
-
-  # --- административное окружение
-  - {name: claim_type, role: ЗАПОЛНИТЕ}            # WC, VF, VW
-  - {name: district, role: ЗАПОЛНИТЕ}
-  - {name: medical_fee_region, role: ЗАПОЛНИТЕ}
-  - {name: carrier_name, role: ЗАПОЛНИТЕ}
-  - {name: carrier_type, role: ЗАПОЛНИТЕ}
-  - {name: alternative_dispute_resolution, role: ЗАПОЛНИТЕ}
-
-  # --- ЗНАЧЕНИЯ НА МОМЕНТ ВЫГРУЗКИ. Словарь описывает их как текущее состояние
-  #     претензии, а не как состояние на момент сборки.
-  - {name: current_status, role: ЗАПОЛНИТЕ}                  # 11 значений
-  - {name: injury_type, role: ЗАПОЛНИТЕ}                     # 8 значений
-  - {name: highest_process, role: ЗАПОЛНИТЕ}
-  - {name: hearing_count, role: ЗАПОЛНИТЕ}
-  - {name: closed_count, role: ЗАПОЛНИТЕ}                    # сколько раз закрывали
-  - {name: ime4_count, role: ЗАПОЛНИТЕ}
-  - {name: has_representative, role: ЗАПОЛНИТЕ}
-  - {name: days_assembled_to_established, role: ЗАПОЛНИТЕ}
+  # Значения на момент выгрузки. Признаками быть не могут: описывают
+  # претензию после того, как она прожила годы.
+  - {name: current_status, role: ignored}  # статус на момент выгрузки; использован для ОЦЕНКИ допущения, не как признак
+  - {name: injury_type, role: ignored}  # тип травмы по итогу дела
+  - {name: highest_process, role: ignored}  # высший достигнутый процесс
+  - {name: hearing_count, role: ignored}  # число слушаний за всю жизнь дела
+  - {name: closed_count, role: ignored}  # сколько раз дело закрывали
+  - {name: ime4_count, role: ignored}  # число независимых экспертиз
+  - {name: has_representative, role: ignored}  # наличие представителя
+  - {name: days_assembled_to_established, role: ignored}  # интервал до установления: известен только после
 
 # --- КОНТРАКТ ИСХОДА ---------------------------------------------------------
 
 outcome:
-  event_column: ЗАПОЛНИТЕ        # какое событие является исходом
-  deadline_column: ЗАПОЛНИТЕ     # какой из horizon_* является сроком
-  comparison: ЗАПОЛНИТЕ          # by_date | direct
-  positive_class: ЗАПОЛНИТЕ      # event_after_deadline | event_within_deadline
-  estimand: "ЗАПОЛНИТЕ словами"
-  # expected_positive_rate: 0.05  # ожидаемая доля, если ожидание есть
+  event_column: first_hearing_at
+  deadline_column: horizon_180d
+  comparison: by_date
+  positive_class: event_within_deadline
+  estimand: "первое слушание по претензии состоится в течение 180 дней после её сборки Советом"
+  expected_positive_rate: ЗАПОЛНИТЕ
 
-  # ВОПРОС: почему события могло не быть? Различимая причина называет
-  # status_value, неразличимая ОБЯЗАНА назвать assumption.
   missing_causes:
-    - name: "ЗАПОЛНИТЕ"
-      meaning: ЗАПОЛНИТЕ         # not_occurred | unobserved | excluded
-      assumption: "ЗАПОЛНИТЕ, если причина неотличима по данным"
+    - name: "слушание не понадобилось либо состоится позже срока"
+      meaning: not_occurred
+      assumption: "доля выбывших претензий, для которых слушания не будет никогда, около 1.5% и учтена отдельным допущением"
 
 # --- ТИП ЗАДАЧИ --------------------------------------------------------------
 
 task:
   target_kind: binary
   outcome_timing: delayed
-  has_process: ЗАПОЛНИТЕ         # есть ли колонка статуса процесса
-  is_stream: ЗАПОЛНИТЕ           # ритмичен ли сбор решений
-  object_lifetime: ЗАПОЛНИТЕ     # one_shot | recurring
+  has_process: false      # колонка статуса объявлена ignored: она на момент выгрузки
+  is_stream: true         # сбор по рабочим дням: медиана промежутка 1 дн, максимум 3
+  object_lifetime: ЗАПОЛНИТЕ
 
-# --- СПЛИТ: заполняется ПОСЛЕДНИМ --------------------------------------------
-# Смещения в днях от первой претензии. Период сборки: 2000-01-01 .. 2021-06-04.
-# Резерв обязателен и не должен пересекаться ни с одним окном.
+# --- СПЛИТ -------------------------------------------------------------------
+# Период сборки: 2015-01-01 .. 2021-06-04, 2346 дней.
+# Метки созревают до дня 2166 (2346 минус горизонт 180).
 
 split:
   windows:

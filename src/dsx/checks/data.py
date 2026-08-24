@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import polars as pl
 
-from dsx.checks.base import Context, Signal
+from dsx.checks.base import Context, NotApplicable, Signal
 from dsx.evals.case import Finding
 from dsx.roles import Role
 from dsx.task import ObjectLifetime, Premise
@@ -273,6 +273,50 @@ class PostTreatmentMissingness:
         return signals
 
 
+@dataclass(frozen=True)
+class EventBeforeDecision:
+    """A13. Событие датировано раньше момента решения.
+
+    Исходом этого решения оно быть не может: решение ещё не принято. Правило
+    сравнения со сроком проверяло только верхнюю границу, и такая строка молча
+    становилась положительной — на третьем кейсе так вели себя две претензии,
+    у которых слушание прошло до сборки дела.
+
+    Две строки из миллиона — мелочь по величине и не мелочь по природе: это
+    либо ошибка выгрузки, либо признак того, что момент решения выбран не там,
+    где он на самом деле происходит.
+    """
+
+    requirement: str = "A13"
+    premises: frozenset[Premise] = frozenset({Premise.UNIVERSAL})
+    detects: frozenset[Finding] = frozenset({Finding.EVENT_BEFORE_DECISION})
+
+    def run(self, context: Context) -> list[Signal]:
+        frame = context.world.main
+        event = context.outcome.event_column
+        decided = context.world.schema.decision_time.name
+        if event not in frame.columns or decided not in frame.columns:
+            raise NotApplicable("колонка события или момента решения отсутствует в данных")
+
+        premature = frame.filter(pl.col(event).is_not_null() & (pl.col(event) < pl.col(decided)))
+        if premature.is_empty():
+            return []
+
+        worst = premature.select(
+            (pl.col(decided) - pl.col(event)).dt.total_days().max().alias("d")
+        ).item()
+        return [
+            Signal(
+                Finding.EVENT_BEFORE_DECISION,
+                f"у {premature.height:,} строк событие {event!r} датировано раньше момента "
+                f"решения (худший случай на {worst:,} дн). Исходом этого решения оно быть "
+                "не может: либо выгрузка испорчена, либо момент решения выбран не там, где "
+                "он происходит",
+                blocking=True,
+            )
+        ]
+
+
 def _daily_volume(context: Context) -> pl.DataFrame | None:
     """Число наблюдений по дням момента решения."""
     column = context.world.schema.decision_time.name
@@ -294,4 +338,5 @@ DATA_CHECKS = [
     TruncatedTail(),
     MissingPeriod(),
     PostTreatmentMissingness(),
+    EventBeforeDecision(),
 ]

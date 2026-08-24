@@ -398,6 +398,15 @@ ALL: tuple[Bundle, ...] = (
         expected_positive_rate=0.01,
     ),
     _bundle(
+        "event-before-decision",
+        "Событие датировано раньше момента решения",
+        "Третий кейс: две претензии со слушанием до сборки дела молча становились "
+        "положительными. Правило сравнения со сроком проверяло только верхнюю границу.",
+        {Finding.EVENT_BEFORE_DECISION},
+        lambda: inj.event_before_decision(build_world()),
+        caught_by={"A13"},
+    ),
+    _bundle(
         "clean-excluded-from-population",
         "Часть объектов исключена из популяции",
         "Исключение — не дефект, а законное состояние. Кейс существует потому, что до "

@@ -52,6 +52,7 @@ class Finding(StrEnum):
     SIMULTANEITY_UNDECLARED = "simultaneity_undeclared"
     RATE_CONTRADICTS_EXPECTATION = "rate_contradicts_expectation"
     UNDECLARED_COLUMN = "undeclared_column"
+    EVENT_BEFORE_DECISION = "event_before_decision"
 
 
 class Expectation(BaseModel):

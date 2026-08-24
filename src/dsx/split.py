@@ -83,8 +83,16 @@ class Part:
 class SplitResult:
     parts: list[Part] = field(default_factory=list)
     dropped_not_yet_known: int = 0
-    """Объекты, решение по которым принято до отсечки, а исход стал известен
-    после. В обучение попасть не могут."""
+    """Объекты, выпавшие перед ПЕРВЫМ окном. Сохранено ради совместимости
+    отчётов; полная картина — в `dropped_by_window`."""
+
+    dropped_by_window: dict[str, int] = field(default_factory=dict)
+    """Выпавшие перед каждым окном по отдельности.
+
+    Первая версия считала зазор только перед первым окном, и строка отчёта
+    «выпало между выборками» была неполной: у последующих окон зазоры свои и
+    другой величины.
+    """
 
     immature: dict[str, int] = field(default_factory=dict)
     """Объекты оценочного окна, чей исход не наблюдаем к концу наблюдения."""
@@ -159,10 +167,13 @@ def split_by_windows(
         if immature:
             result.immature[window.name] = immature
 
+    for window in windows:
+        before_cutoff = labelled.filter(pl.col(decision) < window.start)
+        result.dropped_by_window[window.name] = before_cutoff.filter(
+            pl.col(KNOWN_AT) >= window.start
+        ).height
     if windows:
-        first = windows[0]
-        before_cutoff = labelled.filter(pl.col(decision) < first.start)
-        result.dropped_not_yet_known = before_cutoff.filter(pl.col(KNOWN_AT) >= first.start).height
+        result.dropped_not_yet_known = result.dropped_by_window[windows[0].name]
 
     return result
 

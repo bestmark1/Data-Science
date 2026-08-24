@@ -256,6 +256,18 @@ class ProjectForm(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     title: Evidence
+
+    observed_until: dt.datetime
+    """Конец наблюдения: до какого момента исходы регистрировались.
+
+    Не выводится из данных. Максимум даты события — это последнее СЛУЧИВШЕЕСЯ
+    событие, а не конец сбора: между ними лежит период, в котором событий не
+    было, и он неотличим от периода, которого в выгрузке нет. На третьем кейсе
+    разница составила десять дней, и незрелость занижалась на пять тысяч строк.
+    """
+
+    observed_until_source: Evidence
+    """Чем подтверждён конец наблюдения: дата выгрузки, регламент, владелец."""
     columns: Annotated[list[ColumnForm], Field(min_length=1)]
     outcome: OutcomeForm
     task: TaskForm
@@ -310,6 +322,11 @@ class ProjectForm(BaseModel):
         questions.append(
             "Были ли границы окон и резерва выбраны ДО просмотра метрик? (иначе резерв "
             "независим лишь формально)"
+        )
+        questions.append(
+            f"Верно ли, что исходы регистрировались до {self.observed_until:%Y-%m-%d}? "
+            f"Объявлено со ссылкой на {self.observed_until_source!r} (иначе незрелость "
+            "занижена, и часть строк размечена как наблюдение)"
         )
         if self.task.kinds_collapsed is not None:
             questions.append(

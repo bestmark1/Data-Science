@@ -15,6 +15,8 @@ from dsx.runner import RESERVE, run
 
 FORM = textwrap.dedent("""
     title: "Проверочный проект"
+    observed_until: 2025-01-01T00:00:00
+    observed_until_source: "конец генерации проверочного мира"
     columns:
       - {name: entity_id, role: entity_id}
       - {name: decided_at, role: decision_time, temporal: instant}

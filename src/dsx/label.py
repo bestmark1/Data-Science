@@ -61,6 +61,14 @@ class OutcomeReason(StrEnum):
     CONFLATED = "conflated"
     """Неразличимые причины имеют разный смысл: разметить нельзя."""
 
+    BEFORE_DECISION = "before_decision"
+    """Событие датировано раньше момента решения.
+
+    Исходом этого решения оно быть не может: решение ещё не принято. Правило
+    сравнения со сроком проверяло только верхнюю границу, и такая строка молча
+    становилась положительной.
+    """
+
 
 def compute(
     world: World, definition: OutcomeDefinition, snapshot: dt.datetime | None = None
@@ -152,14 +160,24 @@ def compute(
             missing_label = pl.when(matches).then(meaning_expr(meaning)).otherwise(missing_label)
             missing_reason = pl.when(matches).then(reason_expr(meaning)).otherwise(missing_reason)
 
+    # Нижняя граница: событие не может быть исходом решения, принятого позже.
+    decided = pl.col(world.schema.decision_time.name)
+    premature = pl.col(definition.event_column).is_not_null() & (
+        pl.col(definition.event_column) < decided
+    )
+
     absent = pl.col(definition.event_column).is_null()
     return frame.with_columns(
-        pl.when(absent)
+        pl.when(premature)
+        .then(None)
+        .when(absent)
         .then(missing_label)
         .otherwise(observed.cast(pl.Int8))
         .cast(pl.Int8)
         .alias(LABEL),
-        pl.when(absent)
+        pl.when(premature)
+        .then(pl.lit(OutcomeReason.BEFORE_DECISION.value))
+        .when(absent)
         .then(missing_reason)
         .otherwise(pl.lit(OutcomeReason.OBSERVED.value))
         .alias(REASON),

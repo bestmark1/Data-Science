@@ -244,8 +244,15 @@ def entity_overlap(world: World, share: float = 0.1, seed: int = 19) -> World:
     count = min(early.height, int(world.main.height * share))
     idx = rng.choice(early.height, count, replace=False)
 
+    # Сдвигаются ВСЕ времена строки, а не только момент решения. Первая версия
+    # двигала решение вперёд, оставляя событие на месте, и порождала второй
+    # дефект: событие раньше решения. Нашла это проверка A13, добавленная
+    # позже, — то есть инжектор полтора кейса ломал две вещи вместо одной.
+    shift = pl.duration(days=int(span.days // 2))
     repeats = early[idx.tolist()].with_columns(
-        (pl.col("decided_at") + pl.duration(days=int(span.days // 2))).alias("decided_at")
+        (pl.col("decided_at") + shift).alias("decided_at"),
+        (pl.col("event_at") + shift).alias("event_at"),
+        (pl.col("deadline_on") + shift).alias("deadline_on"),
     )
     return world.replace_main(pl.concat([world.main, repeats]).sort("decided_at"))
 
@@ -439,6 +446,28 @@ def excluded_from_population(world: World, share: float = 0.12, seed: int = 31) 
             .then(pl.lit("aborted"))
             .otherwise(pl.col("status"))
             .alias("status"),
+        )
+        .drop("_pick")
+    )
+
+
+def event_before_decision(world: World, count: int = 25, seed: int = 37) -> World:
+    """Датировать событие раньше момента решения.
+
+    Исходом решения такое событие быть не может. Прежде правило сравнения
+    проверяло только верхнюю границу, и строка молча становилась положительной.
+    """
+    rng = np.random.default_rng(seed)
+    frame = world.main
+    picked = np.zeros(frame.height, dtype=bool)
+    picked[rng.choice(frame.height, size=count, replace=False)] = True
+    return world.replace_main(
+        frame.with_columns(pl.Series("_pick", picked))
+        .with_columns(
+            pl.when(pl.col("_pick"))
+            .then(pl.col("decided_at").dt.offset_by("-5d"))
+            .otherwise(pl.col("event_at"))
+            .alias("event_at")
         )
         .drop("_pick")
     )

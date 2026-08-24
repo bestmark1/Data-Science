@@ -99,12 +99,9 @@ def run(form: ProjectForm, frame: pl.DataFrame, report_dir: Path | None = None) 
 
     moment = world.schema.decision_time.name
     origin = frame[moment].min()
-    # Конец наблюдения, а не последнего решения: события наблюдаются и после
-    # того, как решения перестали приниматься, и снимок по решениям объявил бы
-    # известные исходы незрелыми.
-    event_column = definition.event_column
-    last_event = frame[event_column].max() if event_column in frame.columns else None
-    snapshot = max(frame[moment].max(), last_event) if last_event else frame[moment].max()
+    # Конец наблюдения объявляется формой. Выводить его из максимума даты
+    # события нельзя: это последнее СЛУЧИВШЕЕСЯ событие, а не конец сбора.
+    snapshot = form.observed_until
     reserve_from = origin + dt.timedelta(days=form.split.reserve_from_day)
 
     split = split_by_windows(
