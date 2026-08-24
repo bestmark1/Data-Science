@@ -280,3 +280,178 @@ def measure_against_baseline(
             "ошибка калибровки", cal_model, cal_rule, cal_low, cal_high, lower_is_better=True
         ),
     )
+
+
+# --- разбор смещения по сегментам (N10) ------------------------------------
+
+
+@dataclass(frozen=True)
+class Segment:
+    """Один сегмент: сколько строк, что обещано, что наблюдалось."""
+
+    feature: str
+    value: str
+    rows: int
+    predicted: float
+    observed: float
+
+    @property
+    def bias(self) -> float:
+        """Насколько обещанное расходится с наблюдённым. Знак важен."""
+        return self.predicted - self.observed
+
+    def __str__(self) -> str:
+        side = "завышает" if self.bias > 0 else "занижает"
+        return (
+            f"{self.feature}={self.value!r}: {self.rows:,} строк, обещано "
+            f"{self.predicted:.3f}, наблюдалось {self.observed:.3f} — "
+            f"{side} на {abs(self.bias):.3f}"
+        )
+
+
+def segment_bias(
+    frame: pl.DataFrame,
+    scores: pl.Series,
+    features: list[str],
+    min_rows: int = 200,
+) -> list[Segment]:
+    """Смещение по сегментам, упорядоченное по ВЕЛИЧИНЕ, а не по объёму.
+
+    Требование N10. Порядок по объёму прячет самое дорогое: крупный сегмент
+    со смещением 0.01 неинтересен, мелкий со смещением 0.4 определяет, кому
+    модель систематически вредит.
+
+    Сегменты меньше `min_rows` не рассматриваются: на них смещение неотличимо
+    от случайности, и включать их значило бы наполнить список шумом.
+    """
+    labelled = frame.with_columns(scores.alias("__score")).filter(pl.col(LABEL).is_not_null())
+    found: list[Segment] = []
+
+    for feature in features:
+        if feature not in labelled.columns:
+            continue
+        grouped = (
+            labelled.group_by(feature)
+            .agg(
+                pl.len().alias("rows"),
+                pl.col("__score").mean().alias("predicted"),
+                pl.col(LABEL).mean().alias("observed"),
+            )
+            .filter(pl.col("rows") >= min_rows)
+        )
+        found += [
+            Segment(
+                feature=feature,
+                value=str(row[feature]),
+                rows=int(row["rows"]),
+                predicted=float(row["predicted"]),
+                observed=float(row["observed"]),
+            )
+            for row in grouped.iter_rows(named=True)
+        ]
+
+    return sorted(found, key=lambda s: -abs(s.bias))
+
+
+def segment_section(segments: list[Segment], show: int = 10) -> str:
+    """Раздел отчёта: самые смещённые сегменты."""
+    lines = ["## Смещение по сегментам", ""]
+    if not segments:
+        lines.append("Сегментов достаточного объёма не нашлось.")
+        return "\n".join(lines)
+
+    lines.append(
+        f"Сегментов рассмотрено: {len(segments):,}. Упорядочены по величине смещения, "
+        "а не по объёму: крупный сегмент с малым смещением дешевле мелкого с большим."
+    )
+    lines.append("")
+    lines += [f"- {segment}" for segment in segments[:show]]
+    return "\n".join(lines)
+
+
+# --- устойчивость знака по окнам (N7, P5) ----------------------------------
+
+
+@dataclass(frozen=True)
+class Stability:
+    """Знак превосходства по окнам: держится ли вывод во времени."""
+
+    per_window: dict[str, Comparison]
+
+    @property
+    def signs(self) -> set[bool]:
+        return {c.difference > 0 for c in self.per_window.values() if c.decisive}
+
+    @property
+    def steady(self) -> bool:
+        """Один и тот же знак во всех окнах, где он вообще различим."""
+        return len(self.signs) <= 1
+
+    def statement(self) -> str:
+        decisive = [name for name, c in self.per_window.items() if c.decisive]
+        if not decisive:
+            return (
+                "ни в одном окне превосходство не показано: вывод о пользе модели "
+                "не опирается ни на что"
+            )
+        if not self.steady:
+            return (
+                f"знак превосходства МЕНЯЕТСЯ между окнами ({', '.join(decisive)}): "
+                "вывод держится не на модели, а на выборе окна"
+            )
+        return f"знак превосходства одинаков во всех различимых окнах: {', '.join(decisive)}"
+
+    def report_section(self) -> str:
+        lines = ["## Устойчивость по окнам", ""]
+        lines += [f"- {name}: {c}" for name, c in sorted(self.per_window.items())]
+        lines += ["", self.statement()]
+        return "\n".join(lines)
+
+
+def stability_across_windows(
+    ledger: SampleLedger,
+    scores_by_window: dict[str, pl.Series],
+    rule: BaselineRule,
+    decision: str = "оценка устойчивости по окнам",
+) -> Stability:
+    """Сравнить модель с правилом в каждом окне отдельно.
+
+    Заменяет требование N7. Прежняя формулировка велела переобучать модель на
+    нескольких окнах истории — это обучение, и ядру оно не принадлежит. Здесь
+    требуется предъявить предсказания ПО ОКНАМ и измерить, держится ли знак:
+    доказательство, а не оркестровка.
+
+    Расходует окна как выборки выбора: смотреть пооконные метрики и решать по
+    ним — это выбор, а не аудит.
+    """
+    per_window: dict[str, Comparison] = {}
+    for window, scores in scores_by_window.items():
+        frame = ledger.checkout(window, Purpose.SELECTION, decision)
+        assert isinstance(frame, pl.DataFrame)
+        if scores.len() != frame.height:
+            raise ValueError(
+                f"в окне {window!r} предсказаний {scores.len():,}, а строк "
+                f"{frame.height:,}: оценки не выровнены"
+            )
+
+        observable = frame[LABEL].is_not_null().to_numpy()
+        labels = frame[LABEL].fill_null(0).to_numpy().astype(np.int64)[observable]
+        model = scores.to_numpy().astype(np.float64)[observable]
+        baseline = rule.score(frame).to_numpy().astype(np.float64)[observable]
+
+        rng = np.random.default_rng(SEED)
+        differences = np.empty(BOOTSTRAP)
+        for i in range(BOOTSTRAP):
+            pick = rng.integers(0, labels.size, labels.size)
+            differences[i] = discrimination(model[pick], labels[pick]) - discrimination(
+                baseline[pick], labels[pick]
+            )
+        low, high = _interval(differences)
+        per_window[window] = Comparison(
+            "разрешающая способность",
+            discrimination(model, labels),
+            discrimination(baseline, labels),
+            low,
+            high,
+        )
+    return Stability(per_window=per_window)

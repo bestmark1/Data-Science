@@ -137,7 +137,9 @@ def run(
 
     samples = SampleLedger(overrides)
     for part in split.parts:
-        samples.register(part.name, extent_of(part, world))
+        # Оценочная часть окна отдаётся журналу: смотреть пооконные метрики и
+        # решать по ним — это выбор, и он обязан расходовать выборку.
+        samples.register(part.name, extent_of(part, world), frame=part.evaluate)
 
     # Резерв передаётся журналу ВМЕСТЕ С ДАННЫМИ и снимается с результата
     # сплита. После этого получить его можно только через checkout, который

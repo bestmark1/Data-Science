@@ -205,3 +205,100 @@ def test_verdict_reaches_the_report_and_binds_the_conclusion() -> None:
     assert "Измерение" in study.render()
     assert study.protocol_digest() != before
     assert study.is_stale
+
+
+# --- сегменты (N10) --------------------------------------------------------
+
+
+def _with_segments(seed: int = 9) -> pl.DataFrame:
+    """Мир, где модель систематически завышает риск для одной небольшой группы."""
+    rng = np.random.default_rng(seed)
+    group = np.where(rng.random(ROWS) < 0.08, "редкая", "обычная")
+    base = rng.random(ROWS) * 0.3
+    label = (rng.random(ROWS) < base).astype(np.int8)
+    score = np.where(group == "редкая", np.clip(base + 0.4, 0, 1), base)
+    return pl.DataFrame({LABEL: label, "group": group, "score": score, "size": rng.random(ROWS)})
+
+
+def test_segments_are_ordered_by_bias_not_by_size() -> None:
+    """Порядок по объёму прячет самое дорогое."""
+    from dsx.measure import segment_bias
+
+    frame = _with_segments()
+    segments = segment_bias(frame, frame["score"], ["group"], min_rows=100)
+
+    assert segments[0].value == "редкая", "самый смещённый сегмент обязан быть первым"
+    assert segments[0].rows < segments[1].rows, "и он же меньше по объёму"
+    assert segments[0].bias > 0.3
+
+
+def test_small_segments_are_not_reported() -> None:
+    """На них смещение неотличимо от случайности."""
+    from dsx.measure import segment_bias
+
+    frame = _with_segments()
+
+    assert segment_bias(frame, frame["score"], ["group"], min_rows=ROWS) == []
+
+
+def test_segment_section_names_the_ordering_rule() -> None:
+    from dsx.measure import segment_bias, segment_section
+
+    frame = _with_segments()
+    rendered = segment_section(segment_bias(frame, frame["score"], ["group"], min_rows=100))
+
+    assert "не по объёму" in rendered
+
+
+# --- устойчивость по окнам (N7, P5) ----------------------------------------
+
+
+def _windowed_ledger(flip: bool) -> tuple[SampleLedger, dict[str, pl.Series]]:
+    """Три окна. При flip знак превосходства в третьем меняется на обратный."""
+    sl = SampleLedger()
+    scores: dict[str, pl.Series] = {}
+    for index, name in enumerate(("w0", "w1", "w2")):
+        frame = world(seed=index + 1)
+        sl.register(
+            name,
+            Extent(
+                units=frozenset(f"{name}-{i}" for i in range(frame.height)),
+                since=dt.datetime(2024, 1, 1),
+                until=dt.datetime(2024, 6, 1),
+            ),
+            frame=frame,
+        )
+        useful = frame["risk"]
+        scores[name] = (1 - useful) if (flip and name == "w2") else useful
+    return sl, scores
+
+
+def test_steady_sign_across_windows() -> None:
+    from dsx.measure import stability_across_windows
+
+    sl, scores = _windowed_ledger(flip=False)
+    result = stability_across_windows(sl, scores, CONSTANT)
+
+    assert result.steady
+    assert "одинаков" in result.statement()
+
+
+def test_flipping_sign_is_reported() -> None:
+    """Вывод, держащийся на выборе окна, — не вывод."""
+    from dsx.measure import stability_across_windows
+
+    sl, scores = _windowed_ledger(flip=True)
+    result = stability_across_windows(sl, scores, CONSTANT)
+
+    assert not result.steady
+    assert "МЕНЯЕТСЯ" in result.statement()
+
+
+def test_window_stability_spends_the_windows() -> None:
+    """Смотреть пооконные метрики и решать по ним — это выбор, а не аудит."""
+    from dsx.measure import stability_across_windows
+
+    sl, scores = _windowed_ledger(flip=False)
+    stability_across_windows(sl, scores, CONSTANT)
+
+    assert all(sl.is_spent(name) for name in ("w0", "w1", "w2"))
