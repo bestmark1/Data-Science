@@ -108,14 +108,3 @@ def compute_by_kind(
             )
         )
     return results
-
-
-def collapse_cost(world: World, definition: OutcomeDefinition) -> str:
-    """Что теряется при сведении видов в один исход, словами и числами."""
-    outcomes = compute_by_kind(world, definition)
-    lines = [
-        f"  {o.kind}: положительных {o.positives:,}, наблюдаемых {o.observable:,}, "
-        f"оборвано конкурентами {o.censored_by_others:,}"
-        for o in outcomes
-    ]
-    return "\n".join(lines)
