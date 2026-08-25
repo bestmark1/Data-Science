@@ -141,3 +141,28 @@ def test_every_override_appears_in_the_report() -> None:
 
     assert section.count("- ") == 2
     assert "A8" in section and "P3" in section
+
+
+def test_every_requirement_can_be_overridden() -> None:
+    """Блокирующая проверка, которую нельзя обойти, — механизм без выхода.
+
+    N2i объявляла себя этим именем и блокировала, а журнал обходов такого
+    имени не принимал: обойти её было нельзя в принципе.
+    """
+    from dsx.checks import ALL_CHECKS
+    from dsx.policy import Override
+
+    for requirement in sorted({c.requirement for c in ALL_CHECKS}):
+        Override(requirement=requirement, reason="проверка шаблона имени", author="тест")
+
+
+def test_requirement_shape_is_still_narrow() -> None:
+    """Послабление не должно превратиться в приём чего угодно."""
+    import pytest
+    from pydantic import ValidationError
+
+    from dsx.policy import Override
+
+    for bad in ("n2i", "NN2", "2N", "N2I", "N222i", "N2ix"):
+        with pytest.raises(ValidationError):
+            Override(requirement=bad, reason="проверка шаблона имени", author="тест")

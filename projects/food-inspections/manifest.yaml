@@ -1,0 +1,12 @@
+source: Chicago Department of Public Health, портал открытых данных города
+license: 'CC0: Public Domain (объявлена источником)'
+url: https://www.kaggle.com/datasets/chicago/chi-restaurant-inspections
+retrieved_at: '2026-08-25'
+files:
+- name: Food_Inspections.csv
+  sha256: 5c0c343eedf55fe34f9e052f6175e275ada9c0511db8f547ba3933ff6b08fcab
+  bytes: 184756352
+- name: chicago_chi-restaurant-inspections.zip
+  sha256: e4f4e4d090b25b179dc096aeed4b7c32bb77be4a420df714e7e16d4cb207917a
+  bytes: 37352767
+derived: []

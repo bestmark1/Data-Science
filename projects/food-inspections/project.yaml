@@ -1,0 +1,129 @@
+# ФОРМА ПЯТОГО КЕЙСА
+#
+# Три смысловых решения приняты агентом и названы в допущениях. Все три
+# попадают в список вопросов владельцу автоматически.
+
+title: "Chicago food inspections: провал следующей инспекции в 180 дней"
+
+# Конец наблюдения. Объявленной даты среза у выгрузки нет; взята последняя
+# дата инспекции, и это записано допущением.
+observed_until: 2017-08-29T00:00:00
+observed_until_source: "последняя дата инспекции в выгрузке; объявленного среза у источника нет"
+
+# --- ДОПУЩЕНИЯ ---------------------------------------------------------------
+
+assumptions:
+  - statement: "единицей решения является инспекция, а объектом — заведение под лицензией"
+    basis: domain_knowledge
+    author: "агент, решение принято за заполняющего"
+    consequence: "если сеть заведений действует как единый объект, инспекции разных точек одной сети зависимы, и утечка между окнами остаётся невидимой"
+
+  - statement: "закрытие заведения выводит его из популяции, а несостоявшаяся инспекция оставляет исход ненаблюдаемым"
+    basis: domain_knowledge
+    author: "агент, решение принято за заполняющего"
+    consequence: "если Out of Business означает не закрытие, а смену владельца, строки зря исключены; если No Entry на деле означает отказ впустить, это признак риска, а не пропуск"
+
+  - statement: "конец наблюдения совпадает с последней датой инспекции"
+    basis: data
+    author: "автор"
+    evidence: "расчёт: максимум inspected_at — 2017-08-28; объявленной даты среза у источника нет"
+    consequence: "если сбор оборвался раньше, часть следующих инспекций не попала в выгрузку, и заведения размечены как не провалившиеся, хотя исход неизвестен"
+
+  - statement: "признаки истории заведения известны в момент текущей инспекции"
+    basis: data
+    author: "автор"
+    evidence: "построены сдвигом на строку назад внутри лицензии: в них входят только инспекции, состоявшиеся ДО текущей"
+    consequence: "если сдвиг ошибочен, признак содержит текущий исход, и оценка завышена"
+
+# --- СХЕМА -------------------------------------------------------------------
+
+columns:
+  - {name: inspection_id, role: entity_id}
+  - {name: license_id, role: natural_key}
+  - {name: inspected_at, role: decision_time, temporal: date}
+  - {name: next_failure_at, role: outcome_component, temporal: date}
+  - {name: horizon_180d, role: deadline, temporal: date}
+  # Статус относится к СОБЫТИЮ, то есть к следующей инспекции: именно он
+  # объясняет, почему провала не случилось. Первая версия объявляла статусом
+  # результат текущей инспекции, и ядро отказалось размечать — верно, потому
+  # что причины отсутствия описывали не её.
+  - {name: next_result, role: status}
+
+  # Горизонты-кандидаты, не выбранные сроком.
+  - {name: horizon_90d, role: ignored, temporal: date}
+  - {name: horizon_365d, role: ignored, temporal: date}
+
+  # Признаки, известные в момент текущей инспекции. История построена сдвигом
+  # назад внутри лицензии; время последнего наблюдения объявлено, поэтому окно
+  # сверяется с данными, а не принимается на слово.
+  - {name: previous_inspected_at, role: measured_at, temporal: date}
+  - {name: failures_before, role: feature, availability: at_decision, source_of_claim: "код сборки: провалы до текущей инспекции", window_lookback_days: 2800, window_source: "код сборки build.py, история от начала наблюдения", measured_at: previous_inspected_at}
+  - {name: inspections_before, role: feature, availability: at_decision, source_of_claim: "код сборки: число инспекций до текущей", window_lookback_days: 2800, window_source: "код сборки build.py, история от начала наблюдения", measured_at: previous_inspected_at}
+  - {name: previous_failed, role: feature, availability: at_decision, source_of_claim: "код сборки: результат предыдущей инспекции", window_lookback_days: 2800, window_source: "код сборки build.py", measured_at: previous_inspected_at}
+  - {name: days_since_previous, role: feature, availability: at_decision, source_of_claim: "код сборки: дни от предыдущей инспекции", window_lookback_days: 2800, window_source: "код сборки build.py", measured_at: previous_inspected_at}
+
+  # Свойства заведения, известные до инспекции.
+  - {name: facility_type, role: feature, availability: at_decision, source_of_claim: "реестр заведений города", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: risk, role: feature, availability: at_decision, source_of_claim: "категория риска присваивается городом заранее", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: zip_code, role: feature, availability: at_decision, source_of_claim: "адрес заведения", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: inspection_type, role: feature, availability: at_decision, source_of_claim: "тип назначен городом при планировании инспекции", window_lookback_days: 0, window_source: "код сборки build.py"}
+  # Результат ТЕКУЩЕЙ инспекции известен к концу её проведения, то есть в момент
+  # решения о следующей.
+  - {name: result, role: feature, availability: at_decision, source_of_claim: "исход текущей инспекции, известен по её завершении", window_lookback_days: 0, window_source: "код сборки build.py"}
+
+  # Значения, известные только ПОСЛЕ момента решения.
+  - {name: next_inspected_at, role: ignored}  # дата следующей инспекции — из будущего
+  - {name: business_name, role: ignored}      # название сети: см. первое допущение
+  - {name: trade_name, role: ignored}
+
+# --- КОНТРАКТ ИСХОДА ---------------------------------------------------------
+
+outcome:
+  event_column: next_failure_at
+  deadline_column: horizon_180d
+  comparison: by_date
+  positive_class: event_within_deadline
+  estimand: "заведение провалит следующую инспекцию в течение 180 дней после текущей"
+
+  missing_causes:
+    - name: "заведение закрыто"
+      meaning: excluded
+      status_value: "Out of Business"
+    - name: "заведение не найдено по адресу"
+      meaning: excluded
+      status_value: "Business Not Located"
+    - name: "инспектор не попал внутрь"
+      meaning: unobserved
+      status_value: "No Entry"
+    - name: "заведение не было готово к инспекции"
+      meaning: unobserved
+      status_value: "Not Ready"
+    - name: "следующая инспекция пройдена"
+      meaning: not_occurred
+      status_value: "Pass"
+    - name: "следующая инспекция пройдена с условиями"
+      meaning: not_occurred
+      status_value: "Pass w/ Conditions"
+    - name: "следующей инспекции не было к сроку"
+      meaning: not_occurred
+      assumption: "отсутствие следующей инспекции означает отсутствие провала, а не то, что провал был и остался незамеченным; инспекции назначаются городом, и их частота сама зависит от прошлых провалов — это допущение и есть предмет предсказания P-4 об информативности момента наблюдения"
+
+# --- ТИП ЗАДАЧИ --------------------------------------------------------------
+
+task:
+  target_kind: binary
+  outcome_timing: delayed
+  has_process: true          # result — колонка статуса процесса
+  is_stream: true            # инспекции идут непрерывно восемь лет
+  object_lifetime: recurring # заведение инспектируется годами: почти пять раз в среднем
+
+# --- СПЛИТ -------------------------------------------------------------------
+# Период 2010-01-04 .. 2017-08-28, это 2793 дня. Метки зреют до дня 2613.
+
+split:
+  windows:
+    - {name: w0, start_day: 1500, stop_day: 1740}
+    - {name: w1, start_day: 1740, stop_day: 1980}
+    - {name: w2, start_day: 1980, stop_day: 2220}
+  reserve_from_day: 2220
+  reserve_until_day: 2613
