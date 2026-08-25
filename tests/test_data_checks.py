@@ -190,3 +190,36 @@ def test_override_lets_a_legitimate_unknown_through() -> None:
 
     assert not report.blocking
     assert report.signals, "находка обязана остаться видимой, а не исчезнуть"
+
+
+def test_null_status_share_is_computed_not_zeroed() -> None:
+    """Сравнение с пустым значением через `==` давало null вместо истины.
+
+    Доля статуса считалась по пустой выборке и выходила нулевой, после чего
+    порог «больше нуля в полтора раза» выполнялся всегда: проверка становилась
+    генератором ложных тревог на любом пропуске с пустым статусом.
+    """
+    import polars as pl
+
+    from dsx.checks.data import PostTreatmentMissingness
+
+    context = context_for(BY_ID["clean-baseline"])
+    frame = context.world.main
+    # Половина строк без статуса; пропуск признака ровно у них.
+    half = frame.height // 2
+    spoiled = frame.with_columns(
+        pl.when(pl.int_range(pl.len()) < half)
+        .then(None)
+        .otherwise(pl.col("status"))
+        .alias("status"),
+        pl.when(pl.int_range(pl.len()) < half).then(None).otherwise(pl.col("size")).alias("size"),
+    )
+    world = context.world.replace_main(spoiled)
+
+    signals = PostTreatmentMissingness().run(
+        Context(world, context.outcome, context.task, context.split)
+    )
+
+    assert signals, "концентрация пропуска на пустом статусе — настоящая находка"
+    assert "в данных 50%" in signals[0].detail, "доля пустого статуса считается, а не зануляется"
+    assert "в данных 0%" not in signals[0].detail

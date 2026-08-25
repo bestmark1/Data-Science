@@ -260,13 +260,19 @@ class PostTreatmentMissingness:
                 .sort("share", descending=True)
             )
             top = share.row(0, named=True)
-            overall = frame.filter(pl.col(status) == top[status]).height / frame.height
+            # Сравнение с пустым значением через `==` даёт null, а не истину:
+            # доля считалась по пустой выборке и выходила нулевой, после чего
+            # порог «больше нуля в полтора раза» выполнялся всегда. На пятом
+            # кейсе это дало ложную тревогу с невозможным числом 0%.
+            value = top[status]
+            matches = pl.col(status).is_null() if value is None else pl.col(status) == value
+            overall = frame.filter(matches).height / frame.height
             if top["share"] >= self.concentration and top["share"] > overall * 1.5:
                 signals.append(
                     Signal(
                         Finding.POST_TREATMENT_MISSINGNESS,
                         f"пропуск признака {column.name!r} на {top['share']:.0%} приходится "
-                        f"на статус {top[status]!r} (доля статуса в данных {overall:.0%}): "
+                        f"на статус {value!r} (доля статуса в данных {overall:.0%}): "
                         "пропуск объясняется исходом, а не свойством объекта",
                     )
                 )
