@@ -1,0 +1,98 @@
+# ФОРМА ЧЕТВЁРТОГО КЕЙСА
+#
+# Заполнено по решениям, принятым в диалоге. Каждое непроверяемое объявление
+# порождает вопрос владельцу данных автоматически.
+
+title: "Subscription churn: отмена подписки в 180 дней после оформления"
+
+# Конец наблюдения. Отдельного источника у датасета нет: ни метаданных выгрузки,
+# ни объявленной даты среза. Взята последняя дата в данных, и это ДОПУЩЕНИЕ,
+# записанное ниже: если сбор оборвался раньше последнего события, незрелость
+# занижена.
+observed_until: 2022-01-01T00:00:00
+observed_until_source: "последняя дата в выгрузке; объявленного среза у источника нет"
+
+# --- ДОПУЩЕНИЯ ---------------------------------------------------------------
+
+assumptions:
+  - statement: "конец наблюдения совпадает с последней датой в выгрузке"
+    basis: data
+    author: "автор"
+    evidence: "расчёт: максимум signed_up_at и cancelled_at — 2021-12-31; объявленной даты среза у источника нет"
+    consequence: "если сбор оборвался раньше, часть отмен не попала в выгрузку, и подписки размечены как неотменённые, хотя исход неизвестен"
+
+  - statement: "отсутствие даты отмены означает действующую подписку, а не пробел в регистрации"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "77.9% строк без отмены; если часть из них — потерянные записи, доля класса занижена, и модель учится на искажённой популяции"
+
+  - statement: "возраст и пол известны продавцу в момент оформления подписки"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если они уточняются позже, признак знает будущее; проверить это в выгрузке нечем — времени изменения записи в ней нет"
+
+  - statement: "происхождение данных не объявлено источником"
+    basis: document
+    author: "автор"
+    evidence: "описание Kaggle: «подписка на финансовые сервисы», происхождение не названо"
+    consequence: "если выгрузка учебная, кейс теряет силу для проверки переносимости на настоящий беспорядок"
+
+# --- СХЕМА -------------------------------------------------------------------
+
+columns:
+  - {name: customer_id, role: entity_id}
+  - {name: signed_up_at, role: decision_time, temporal: instant}
+  - {name: cancelled_at, role: outcome_component, temporal: instant}
+  - {name: horizon_180d, role: deadline, temporal: instant}
+
+  # Горизонты-кандидаты, не выбранные сроком.
+  - {name: horizon_30d, role: ignored, temporal: instant}
+  - {name: horizon_90d, role: ignored, temporal: instant}
+  - {name: horizon_365d, role: ignored, temporal: instant}
+
+  # Признаки, доступные в момент оформления. Окна нулевой длины: это атрибуты
+  # записи, а не агрегаты по интервалу. Сверить их нечем — времени изменения
+  # записи в выгрузке нет.
+  - {name: age, role: feature, availability: at_decision, source_of_claim: "customer_info.csv, атрибут клиента", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: gender, role: feature, availability: at_decision, source_of_claim: "customer_info.csv, атрибут клиента", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: product, role: feature, availability: at_decision, source_of_claim: "customer_product.csv, выбранный продукт", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: price, role: feature, availability: at_decision, source_of_claim: "product_info.csv, справочник", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: billing_cycle, role: feature, availability: at_decision, source_of_claim: "product_info.csv, справочник", window_lookback_days: 0, window_source: "код сборки build.py"}
+
+  # Название продукта дублирует его идентификатор: два значения на два продукта.
+  - {name: name, role: ignored}
+
+# --- КОНТРАКТ ИСХОДА ---------------------------------------------------------
+
+outcome:
+  event_column: cancelled_at
+  deadline_column: horizon_180d
+  comparison: direct        # обе колонки хранят момент, приводить к дате незачем
+  positive_class: event_within_deadline
+  estimand: "подписка будет отменена в течение 180 дней после её оформления"
+
+  missing_causes:
+    - name: "подписка действует к концу срока"
+      meaning: not_occurred
+      assumption: "отсутствие записи об отмене означает действующую подписку, а не потерянную запись; доля таких строк 77.9%, и ошибка регистрации в них была бы дорогой"
+
+# --- ТИП ЗАДАЧИ --------------------------------------------------------------
+
+task:
+  target_kind: binary
+  outcome_timing: delayed
+  has_process: false        # колонки статуса в выгрузке нет
+  is_stream: true           # подписки оформляются непрерывно пять лет
+  object_lifetime: one_shot # одна подписка на клиента, повторов нет (поправка A-2)
+
+# --- СПЛИТ -------------------------------------------------------------------
+# Период 2017-01-01 .. 2021-12-31, это 1825 дней. Метки зреют до дня 1645
+# (1825 минус горизонт 180).
+
+split:
+  windows:
+    - {name: w0, start_day: 900, stop_day: 1080}    # 2019-06-19 .. 2019-12-16
+    - {name: w1, start_day: 1080, stop_day: 1260}   # 2019-12-16 .. 2020-06-13
+    - {name: w2, start_day: 1260, stop_day: 1440}   # 2020-06-13 .. 2020-12-10
+  reserve_from_day: 1440                            # с 2020-12-10
+  reserve_until_day: 1645                           # по 2021-07-03, дальше незрело

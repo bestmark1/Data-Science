@@ -45,8 +45,11 @@ def test_zero_share_in_one_window_is_not_silence() -> None:
 
     signals = TargetRateStationarity().run(context)
 
-    assert [s.finding for s in signals] == [Finding.NON_STATIONARY_TARGET]
-    assert "бесконечное" in signals[0].detail
+    # Сигналов два, и оба верны: обнуление первого окна создаёт и бесконечную
+    # кратность, и монотонный рост.
+    assert {s.finding for s in signals} == {Finding.NON_STATIONARY_TARGET}
+    assert any("бесконечное" in s.detail for s in signals)
+    assert any("однонаправленно" in s.detail for s in signals)
 
 
 # --- N4: устойчивость связи ------------------------------------------------
@@ -200,3 +203,43 @@ def test_ratio_threshold_does_not_gate_the_reserve_comparison() -> None:
     signals = TargetRateStationarity().run(context)
 
     assert signals, "порог по кратности к резерву неприменим"
+
+
+# --- медленный однонаправленный дрейф --------------------------------------
+
+
+def _windows_with_rates(context, rates: list[float], rows: int = 6000):
+    import numpy as np
+
+    rng = np.random.default_rng(7)
+    for part, rate in zip(context.split.parts, rates, strict=False):
+        labels = (rng.random(rows) < rate).astype("int8")
+        part.evaluate = pl.DataFrame({LABEL: labels, "__outcome_reason": ["observed"] * rows})
+    context.split.reserved = None
+    return context
+
+
+def test_slow_monotone_drift_is_reported() -> None:
+    """Соседние окна различаются мало, а накопленный дрейф велик."""
+    context = _windows_with_rates(context_for(BY_ID["clean-baseline"]), [0.056, 0.065, 0.076])
+
+    signals = TargetRateStationarity().run(context)
+
+    assert any("однонаправленно" in s.detail for s in signals), (
+        "кратность 1.36 порога 1.5 не достигает, но направление и величина различимы"
+    )
+
+
+def test_unordered_wobble_is_not_a_trend() -> None:
+    """Отрицательный контроль: колебание без направления дрейфом не является."""
+    context = _windows_with_rates(context_for(BY_ID["clean-baseline"]), [0.065, 0.056, 0.064])
+
+    assert not any("однонаправленно" in s.detail for s in TargetRateStationarity().run(context))
+
+
+def test_tiny_monotone_difference_is_not_a_trend() -> None:
+    """Направление есть, различимости нет: три окна упорядочиваются случайно
+    с вероятностью около трети."""
+    context = _windows_with_rates(context_for(BY_ID["clean-baseline"]), [0.0600, 0.0601, 0.0602])
+
+    assert not any("однонаправленно" in s.detail for s in TargetRateStationarity().run(context))

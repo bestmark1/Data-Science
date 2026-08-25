@@ -146,9 +146,52 @@ class TargetRateStationarity:
             )
         ]
 
+    def _trend_signals(self, windows: list[tuple[str, pl.DataFrame]]) -> list[Signal]:
+        """Медленный однонаправленный дрейф, невидимый сравнению по кратности.
+
+        Соседние окна различаются мало, а накопленное за период различие велико.
+        На четвёртом кейсе доля отмен росла с 4.45% до 7.64% — на 72% за пять
+        лет, — при отношении соседних окон 1.14 и пороге 1.5. Проверка молчала,
+        и дрейф поймал только резерв, потому что лежал в конце.
+
+        Требуется одновременно направленность и различимость: три окна,
+        упорядоченные случайно, дают монотонность с вероятностью около трети,
+        поэтому одной её мало.
+        """
+        if len(windows) < 3:
+            return []
+
+        rates = [float(frame[LABEL].mean()) for _, frame in windows]
+        sizes = [frame.height for _, frame in windows]
+        rising = all(b > a for a, b in zip(rates, rates[1:], strict=False))
+        falling = all(b < a for a, b in zip(rates, rates[1:], strict=False))
+        if not (rising or falling):
+            return []
+
+        spread = math.sqrt(
+            _rate_error(rates[0], sizes[0]) ** 2 + _rate_error(rates[-1], sizes[-1]) ** 2
+        )
+        if abs(rates[-1] - rates[0]) < SIGMA * spread:
+            return []
+
+        shown = ", ".join(
+            f"{name}: {rate:.1%}" for (name, _), rate in zip(windows, rates, strict=False)
+        )
+        direction = "растёт" if rising else "падает"
+        return [
+            Signal(
+                Finding.NON_STATIONARY_TARGET,
+                f"доля положительного класса однонаправленно {direction} по окнам "
+                f"({shown}). Соседние окна различаются мало, и сравнение по кратности "
+                "этого не видит, но накопленный дрейф смещает модель тем сильнее, чем "
+                "дальше от обучения делается предсказание",
+                blocking=True,
+            )
+        ]
+
     def run(self, context: Context) -> list[Signal]:
         windows = _windows_with_labels(context)
-        signals = self._reserve_signals(context, windows)
+        signals = self._reserve_signals(context, windows) + self._trend_signals(windows)
         rates = {name: float(frame[LABEL].mean()) for name, frame in windows}
         sizes = {name: frame.height for name, frame in windows}
 
