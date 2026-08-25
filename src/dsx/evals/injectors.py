@@ -471,3 +471,22 @@ def event_before_decision(world: World, count: int = 25, seed: int = 37) -> Worl
         )
         .drop("_pick")
     )
+
+
+def sentinel_as_value(world: World, token: str = "NA", share: float = 0.3, seed: int = 41) -> World:
+    """Записать отсутствие строкой вместо пустого значения.
+
+    Возникает не в данных, а при их чтении: читатель CSV принимает «NA»
+    значением, и колонка выглядит заполненной. На четвёртом кейсе так вышло с
+    датой отмены подписки, и доля класса получилась 100% вместо 22.1%.
+    """
+    rng = np.random.default_rng(seed)
+    frame = world.main
+    picked = rng.random(frame.height) < share
+    return world.replace_main(
+        frame.with_columns(pl.Series("_pick", picked))
+        .with_columns(
+            pl.when(pl.col("_pick")).then(pl.lit(token)).otherwise(pl.col("region")).alias("region")
+        )
+        .drop("_pick")
+    )

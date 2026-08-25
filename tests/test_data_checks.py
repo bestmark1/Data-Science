@@ -156,3 +156,37 @@ def test_feature_window_overlap_ignores_the_lag() -> None:
     context = context_for(bundle)
 
     assert FeatureWindowOverlap().run(context) == [], "мгновенные измерения не пересекаются"
+
+
+# --- отсутствие, записанное строкой (A14) ----------------------------------
+
+
+def test_sentinel_string_is_caught() -> None:
+    """Ошибка возникает при чтении файла и портит все проверки разом."""
+    from dsx.checks.data import SentinelAsValue
+
+    signals = SentinelAsValue().run(context_for(BY_ID["sentinel-as-value"]))
+
+    assert [s.finding for s in signals] == [Finding.SENTINEL_AS_VALUE]
+    assert "NA" in signals[0].detail
+    assert signals[0].blocking
+
+
+def test_clean_world_has_no_sentinels() -> None:
+    from dsx.checks.data import SentinelAsValue
+
+    assert SentinelAsValue().run(context_for(BY_ID["clean-baseline"])) == []
+
+
+def test_override_lets_a_legitimate_unknown_through() -> None:
+    """«UNKNOWN» бывает законной категорией, но объявленной, а не молчаливой."""
+    from dsx.checks import run_checks
+    from dsx.checks.data import SentinelAsValue
+    from dsx.policy import OverrideLedger
+
+    ledger = OverrideLedger()
+    ledger.override("A14", reason="UNKNOWN — законная категория справочника", author="автор")
+    report = run_checks([SentinelAsValue()], context_for(BY_ID["sentinel-as-value"]), ledger)
+
+    assert not report.blocking
+    assert report.signals, "находка обязана остаться видимой, а не исчезнуть"

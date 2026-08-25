@@ -273,6 +273,85 @@ class PostTreatmentMissingness:
         return signals
 
 
+SENTINELS = frozenset(
+    {
+        "NA",
+        "N/A",
+        "NULL",
+        "None",
+        "none",
+        "null",
+        "nan",
+        "NaN",
+        "-",
+        "--",
+        "?",
+        "",
+        " ",
+        "Unknown",
+        "UNKNOWN",
+        "unknown",
+        "missing",
+        "MISSING",
+        "9999",
+        "-1",
+        "-999",
+    }
+)
+"""Строки, которыми обычно записывают отсутствие.
+
+Перечень закрытый и намеренно широкий. Пропустить настоящую заглушку дороже,
+чем один раз объявить законное значение обходом.
+"""
+
+
+@dataclass(frozen=True)
+class SentinelAsValue:
+    """A14. Отсутствие записано строкой и прочитано значением.
+
+    В выгрузке четвёртого кейса дата отмены подписки хранила строку «NA».
+    Читатель CSV принял её значением, колонка выглядела заполненной у всех, и
+    доля отмен получилась 100% вместо 22.1%.
+
+    Ошибка того же рода, что и все остальные в этом проекте: отсутствие,
+    неотличимое от присутствия. Отличие в том, что она возникает раньше всех
+    проверок — при чтении файла, — и потому портит их разом.
+
+    Законная категория «UNKNOWN» тоже сюда попадает. Это не ложная тревога:
+    значение, означающее «не знаем», обязано быть объявленным, иначе оно молча
+    участвует в обучении наравне с настоящими.
+    """
+
+    requirement: str = "A14"
+    premises: frozenset[Premise] = frozenset({Premise.UNIVERSAL})
+    detects: frozenset[Finding] = frozenset({Finding.SENTINEL_AS_VALUE})
+
+    def run(self, context: Context) -> list[Signal]:
+        frame = context.world.main
+        signals = []
+        for column in context.world.schema.columns:
+            if column.name not in frame.columns:
+                continue
+            series = frame[column.name]
+            if series.dtype != pl.String:
+                continue
+            found = sorted(set(series.drop_nulls().unique().to_list()) & SENTINELS)
+            if not found:
+                continue
+            rows = int(series.is_in(found).sum())
+            signals.append(
+                Signal(
+                    Finding.SENTINEL_AS_VALUE,
+                    f"колонка {column.name!r} содержит {found!r} в {rows:,} строках. "
+                    "Это обычные способы записать отсутствие: если они означают пропуск, "
+                    "превратите их в пустое значение при СБОРКЕ таблицы, а если это "
+                    "законные значения — зафиксируйте обход с причиной",
+                    blocking=True,
+                )
+            )
+        return signals
+
+
 @dataclass(frozen=True)
 class EventBeforeDecision:
     """A13. Событие датировано раньше момента решения.
@@ -339,4 +418,5 @@ DATA_CHECKS = [
     MissingPeriod(),
     PostTreatmentMissingness(),
     EventBeforeDecision(),
+    SentinelAsValue(),
 ]
