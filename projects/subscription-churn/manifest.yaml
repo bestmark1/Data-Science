@@ -1,0 +1,21 @@
+source: Kaggle, gsagar12
+license: CC BY-SA 4.0 (объявлена источником)
+url: https://www.kaggle.com/datasets/gsagar12/dspp1
+retrieved_at: '2026-08-25'
+files:
+- name: customer_cases.csv
+  sha256: 2ef79edd4a20a9c9adfb919967a590f270933895b4b005d16a047659f09234c9
+  bytes: 21977839
+- name: customer_info.csv
+  sha256: 829e40bf4b51d30a44269f9ce49eb576f99bbfc3c0bb6a705c83711fe22a7a2d
+  bytes: 14940855
+- name: customer_product.csv
+  sha256: 17ead65ca10cd1a0082de0a9bd723484c326c24b2fd6ac9e3d2142abed93b520
+  bytes: 27142701
+- name: gsagar12_dspp1.zip
+  sha256: 4d1a135378a19a434cff4c6bc1e1c10be03374e9f8672b3364877d4963be88e9
+  bytes: 13320805
+- name: product_info.csv
+  sha256: a7a3b1b26a3db5e06b82c50442829362f41e5dccda618d2bcc82b8b1d3b1b433
+  bytes: 104
+derived: []
