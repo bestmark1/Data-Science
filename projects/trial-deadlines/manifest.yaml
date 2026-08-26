@@ -1,0 +1,12 @@
+source: ClinicalTrials.gov, публичный API v2 и архив версий
+license: общественное достояние правительства США (объявлено источником)
+url: https://clinicaltrials.gov/
+retrieved_at: '2026-08-26'
+files:
+- name: studies_current.jsonl
+  sha256: 7f50023ee877be2bd5f6348a790b5efb983788ca48b02e4f686e326caa8fc758
+  bytes: 20558475
+- name: studies_version0.jsonl
+  sha256: 7dd11b6ad73d3e71597d5c8974357451d72d56033630b2da8a73c916af37051c
+  bytes: 110172680
+derived: []

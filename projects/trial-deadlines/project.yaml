@@ -1,0 +1,152 @@
+# ФОРМА ДЕВЯТОГО КЕЙСА
+#
+# Предсказывается: достигнет ли клиническое исследование первичного завершения
+# не позже срока, ОБЪЯВЛЕННОГО ИМ ПРИ РЕГИСТРАЦИИ.
+#
+# Ось кейса — пересмотр значений задним числом. Срок берётся из версии 0
+# записи; в текущей записи то же поле часто переписано.
+#
+# В первом прогоне намеренно присутствуют положительные контроли §5
+# пре-регистрации.
+
+title: "ClinicalTrials.gov: исследование уложилось в срок, обещанный при регистрации"
+
+# Конец наблюдения: последняя дата, к которой источник мог записать событие.
+# Берётся дата сбора, потому что реестр обновляется непрерывно и объявленного
+# среза не имеет.
+observed_until: 2026-08-26T00:00:00
+observed_until_source: "дата сбора данных; реестр обновляется непрерывно и объявленного среза не публикует"
+
+# --- ДОПУЩЕНИЯ ---------------------------------------------------------------
+
+assumptions:
+  - statement: "моментом решения является публикация регистрации, а не подача заявки"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если обещание существует раньше публикации, момент выбран позже, чем он происходит, и часть пересмотров попадёт в срок как исходное значение"
+
+  - statement: "срок, объявленный в версии 0, есть обещание, действовавшее в момент решения"
+    basis: data
+    author: "автор"
+    evidence: "версия 0 датируется днём первой подачи и содержит primaryCompletionDateStruct с типом ESTIMATED"
+    consequence: "если версия 0 уже отражает более позднюю правку, измеренная цена пересмотра занижена"
+
+  - statement: "тип ACTUAL у даты первичного завершения означает наблюдённое событие, а ESTIMATED — ненаблюдённое"
+    basis: domain_knowledge
+    author: "автор"
+    evidence: "расчёт по текущим записям: ACTUAL у 8 560, ESTIMATED у 1 878, отсутствует у 14"
+    consequence: "если тип проставляется небрежно, часть незрелых меток будет прочитана как наблюдения, и доля исхода завышена"
+
+  - statement: "месячная дата читается как последний день месяца — и у срока, и у события"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "правило единообразно и потому не подгоняет исход; но событие, записанное месяцем, ставится позже действительного, что делает соблюдение срока чуть труднее. Ядро месячной точности не различает: в нём есть только date и instant"
+
+  - statement: "спонсор является уровнем выше исследования"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если исследования одного спонсора независимы, групповой уровень объявлен там, где его нет, и проверка N14 сработает вхолостую"
+
+# --- СХЕМА -------------------------------------------------------------------
+
+columns:
+  - {name: nct_id, role: entity_id}
+  - {name: sponsor, role: group_id}
+  - {name: registered_at, role: decision_time, temporal: date}
+  - {name: completed_at, role: event_time, temporal: date}
+  - {name: due_at_promised, role: deadline, temporal: date}
+  - {name: status, role: status}
+
+  # Признаки, известные при регистрации.
+  - {name: sponsor_class, role: feature, availability: at_decision, source_of_claim: "тип спонсора из записи реестра", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov"}
+  - {name: enrollment, role: feature, availability: at_decision, source_of_claim: "плановый набор участников", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov"}
+  - {name: enrollment_type, role: feature, availability: at_decision, source_of_claim: "тип числа участников: план или факт", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov"}
+  - {name: allocation, role: feature, availability: at_decision, source_of_claim: "схема распределения из протокола", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov"}
+  - {name: intervention_model, role: feature, availability: at_decision, source_of_claim: "модель вмешательства из протокола", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov"}
+  - {name: primary_purpose, role: feature, availability: at_decision, source_of_claim: "основная цель из протокола", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov"}
+  - {name: masking, role: feature, availability: at_decision, source_of_claim: "ослепление из протокола", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov"}
+  - {name: condition_count, role: feature, availability: at_decision, source_of_claim: "код сборки: число заявленных состояний", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: promised_primary_type, role: feature, availability: at_decision, source_of_claim: "тип обещанной даты в версии 0", window_lookback_days: 0, window_source: "архив версий ClinicalTrials.gov"}
+
+  # ЗНАЧЕНИЕ НА МОМЕНТ ВЫГРУЗКИ. То же поле, переписанное после исхода.
+  # Признаком НЕ объявляется: объявление было бы утечкой, и это предмет
+  # отдельного прогона (контроль К-1).
+  - {name: due_at_current, role: ignored, temporal: date}
+  - {name: current_primary_date, role: ignored, temporal: date}
+  - {name: current_primary_type, role: ignored}
+  - {name: deadline_shift_days, role: ignored}
+
+  # Прочее, в постановке не участвующее.
+  - {name: promised_primary_date, role: ignored, temporal: date}
+  - {name: version_date, role: ignored, temporal: date}
+  - {name: started_at, role: ignored, temporal: date}
+  - {name: has_results, role: ignored}
+
+# --- КОНТРАКТ ИСХОДА ---------------------------------------------------------
+
+outcome:
+  event_column: completed_at
+  deadline_column: due_at_promised
+  comparison: by_date
+  positive_class: event_within_deadline
+  estimand: "исследование достигло первичного завершения не позже срока, объявленного им при регистрации"
+  degenerate_beyond: 0.1
+
+  missing_causes:
+    - name: "исследование завершено"
+      meaning: not_occurred
+      status_value: "COMPLETED"
+      assumption: "статус COMPLETED без даты первичного завершения означает потерю даты, а не отсутствие события"
+    - name: "исследование прекращено досрочно"
+      meaning: not_occurred
+      status_value: "TERMINATED"
+      assumption: "прекращённое исследование первичного завершения не достигло; это наблюдение, а не пропуск"
+    - name: "исследование отозвано до начала"
+      meaning: excluded
+      status_value: "WITHDRAWN"
+      assumption: "отозванное до включения участников не предполагалось к исполнению и из популяции исключается"
+    - name: "спонсор перестал обновлять запись"
+      meaning: unobserved
+      status_value: "UNKNOWN"
+      assumption: "статус UNKNOWN означает, что исход неизвестен, а не что его не было; читать его отрицательным значило бы считать молчание ответом"
+    - name: "исследование ещё идёт"
+      meaning: unobserved
+      status_value: "ACTIVE_NOT_RECRUITING"
+      assumption: "идущее исследование исхода ещё не показало"
+    - name: "исследование набирает участников"
+      meaning: unobserved
+      status_value: "RECRUITING"
+      assumption: "идущее исследование исхода ещё не показало"
+    - name: "исследование ещё не начало набор"
+      meaning: unobserved
+      status_value: "NOT_YET_RECRUITING"
+      assumption: "не начавшееся к 2026 году исследование, зарегистрированное до 2017, скорее заброшено, чем предстоит; но исход всё равно неизвестен, и читать его отрицательным нельзя"
+    - name: "исследование набирает по приглашению"
+      meaning: unobserved
+      status_value: "ENROLLING_BY_INVITATION"
+      assumption: "идущее исследование исхода ещё не показало"
+    - name: "исследование приостановлено"
+      meaning: unobserved
+      status_value: "SUSPENDED"
+      assumption: "приостановленное может как возобновиться, так и прекратиться; исход неизвестен"
+
+# --- ТИП ЗАДАЧИ --------------------------------------------------------------
+
+task:
+  target_kind: binary
+  outcome_timing: delayed
+  has_process: true
+  is_stream: true
+  object_lifetime: one_shot
+
+# --- СПЛИТ -------------------------------------------------------------------
+# Регистрация 2012-01-01 .. 2016-12-31, это 1826 дней. Обещанные сроки лежат
+# в основном в пределах пяти лет от регистрации, и метки к 2026 году зрелы.
+
+split:
+  windows:
+    - {name: w0, start_day: 365, stop_day: 730}      # 2013
+    - {name: w1, start_day: 730, stop_day: 1096}     # 2014
+    - {name: w2, start_day: 1096, stop_day: 1461}    # 2015
+  reserve_from_day: 1461                             # 2016-01-01
+  reserve_until_day: 1827                            # 2017-01-01
