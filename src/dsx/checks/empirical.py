@@ -65,6 +65,50 @@ def separation(values: pl.Series, labels: pl.Series) -> float | None:
     return None if signed is None else abs(signed)
 
 
+MIN_PER_CATEGORY = 50
+"""Сколько строк в среднем должно приходиться на категорию.
+
+Оценка категории её же долей исхода тем оптимистичнее, чем мельче категории:
+на пределе каждая категория описывает одну строку и разделяет идеально. Порог
+отсекает случай, где сила связи оказалась бы свойством дробности, а не признака.
+"""
+
+
+def _as_score(values: pl.Series, labels: pl.Series) -> pl.Series | None:
+    """Превратить категории в число: каждой — доля положительного исхода в ней.
+
+    Строковый признак прежде пропускался целиком: проверка смотрела только
+    числовые колонки. Десятый кейс подложил утечку строкой ('Y'/'N'/'U' по
+    итогам проверки) — и она прошла молча, хотя связь с исходом была +0.43 при
+    типичной 0.05 среди прочих. В седьмом и восьмом кейсах подложенные утечки
+    были числами, и слепота не проявлялась.
+
+    Упорядочивание категорий по их же доле исхода — самый благоприятный для
+    признака порядок, и это верно: проверка спрашивает, МОЖЕТ ЛИ признак
+    разделить классы слишком хорошо, а не разделяет ли он их при каком-то
+    наперёд заданном порядке.
+
+    Предел назван прямо: у категорий, встречающихся редко, доля исхода
+    оценивается по горстке строк, и мера завышается. Порог `MIN_PER_CATEGORY`
+    отсекает такие признаки, и утечка через дробную категорию проверкой не
+    ловится.
+    """
+    mask = values.is_not_null() & labels.is_not_null()
+    usable = values.filter(mask)
+    if usable.len() < 50 or usable.n_unique() < 2:
+        return None
+    if usable.len() / usable.n_unique() < MIN_PER_CATEGORY:
+        return None
+
+    # Ряд возвращается ПОЛНОЙ длины: пропуски отсеет сам `association`, а
+    # урезанный здесь ряд разошёлся бы с метками по длине.
+    #
+    # Доля считается окном, а не соединением: соединять тут нечего, а
+    # незаявленное соединение в ядре — то же самое, что незаявленное в проекте.
+    frame = pl.DataFrame({"value": values, "label": labels})
+    return frame.select(pl.col("label").mean().over("value").alias("rate"))["rate"]
+
+
 @dataclass(frozen=True)
 class ImplausibleSeparation:
     """N6. Признак разделяет классы слишком хорошо для доступного заранее.
@@ -119,7 +163,9 @@ class ImplausibleSeparation:
                 continue
             series = frame[column.name]
             if not series.dtype.is_numeric():
-                continue
+                series = _as_score(series, labels)
+                if series is None:
+                    continue
             value = separation(series, labels)
             if value is not None:
                 strengths[column.name] = value

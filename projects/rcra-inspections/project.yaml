@@ -1,0 +1,125 @@
+# ФОРМА ДЕСЯТОГО КЕЙСА
+#
+# Предсказывается: будет ли по следам проверки площадки установлено нарушение
+# в течение 30 дней после её начала.
+#
+# Ось кейса — ПОВОД проверки: почему наблюдение состоялось. В первом прогоне
+# намеренно присутствуют положительные контроли §5 пре-регистрации.
+
+title: "EPA RCRA: нарушение по следам проверки в течение 30 дней"
+
+# Конец наблюдения: дата сборки выгрузки, взятая из отметок времени файлов в
+# архиве EPA. Объявленного среза источник не публикует — реестр обновляется
+# ежедневно.
+observed_until: 2026-08-25T00:00:00
+observed_until_source: "отметка времени файлов в архиве rcra_downloads.zip: 25 августа 2026"
+
+# --- ДОПУЩЕНИЯ ---------------------------------------------------------------
+
+assumptions:
+  - statement: "исходом проверки считается ближайшее нарушение на той же площадке не раньше её начала"
+    basis: domain_knowledge
+    author: "автор"
+    evidence: "в выгрузке нарушение привязано к площадке, а не к проверке: общего ключа нет"
+    consequence: "две близкие проверки одной площадки получат одно и то же нарушение, и вклад каждой различить нечем; если нарушение вызвано не проверкой, а иным поводом, оно приписано проверке ошибочно"
+
+  - statement: "повод проверки записан кодом EVALUATION_TYPE и разбит на вызванный сигналом и плановый по официальному определению кода"
+    basis: document
+    author: "автор"
+    evidence: "разбиение объявлено в triggers.py отдельным коммитом до вычисления любой доли исхода; 16.4% проверок вызваны сигналом"
+    consequence: "если код повода проставляется небрежно, ось кейса измеряется по шуму, и цена повода окажется заниженной"
+
+  - statement: "даты раньше 1976 года невозможны: закон, по которому проводятся эти проверки, принят тогда"
+    basis: document
+    author: "автор"
+    evidence: "расчёт: 29 записей с годами 0005, 1900-ми и 1960-ми"
+    consequence: "если ранние проверки законны, отброшено 0.002% строк; граница взята из закона, а не подобрана по данным"
+
+  - statement: "свойства площадки в справочнике отражают СЕГОДНЯШНЕЕ состояние, а не состояние на момент проверки"
+    basis: data
+    author: "автор"
+    evidence: "справочник RCRA_FACILITIES не содержит истории: одна строка на площадку"
+    consequence: "признаки площадки дают знание, которого в момент проверки могло не быть; объявлены с моментом фиксации snapshot_at, чтобы это было видно проверке, а не спрятано"
+
+  - statement: "площадка является объектом, о котором решение принимается многократно"
+    basis: data
+    author: "автор"
+    evidence: "расчёт: 307 367 площадок, 86.3% проверок приходится на площадки с более чем одной"
+    consequence: "если проверки независимы, объект объявлен там, где его нет, и пересечение между обучением и оценкой будет мнимым"
+
+# --- СХЕМА -------------------------------------------------------------------
+
+columns:
+  - {name: evaluation_id, role: entity_id}
+  - {name: ID_NUMBER, role: natural_key}
+  - {name: EVALUATION_START_DATE, role: decision_time, temporal: date}
+  - {name: violation_at, role: event_time, temporal: date}
+  - {name: horizon_30d, role: deadline, temporal: date, value_as_of: EVALUATION_START_DATE}
+
+  # ПОВОД ПРОВЕРКИ — ось кейса. Объявляется обычным признаком, потому что иначе
+  # объявить его нечем: роли «причина, по которой строка существует» в форме
+  # нет. Это и есть предмет предсказания P-1.
+  - {name: EVALUATION_TYPE, role: feature, availability: at_decision, source_of_claim: "код повода из выгрузки EPA", window_lookback_days: 0, window_source: "выгрузка RCRA_EVALUATIONS"}
+  - {name: trigger_kind, role: feature, availability: at_decision, source_of_claim: "код сборки: разбиение поводов по triggers.py", window_lookback_days: 0, window_source: "код сборки build.py"}
+
+  - {name: EVALUATION_AGENCY, role: feature, availability: at_decision, source_of_claim: "орган, проводящий проверку", window_lookback_days: 0, window_source: "выгрузка RCRA_EVALUATIONS"}
+  - {name: ACTIVITY_LOCATION, role: feature, availability: at_decision, source_of_claim: "штат ведения дела", window_lookback_days: 0, window_source: "выгрузка RCRA_EVALUATIONS"}
+
+  # Свойства площадки взяты из справочника, отражающего СЕГОДНЯШНЕЕ состояние.
+  # Момент фиксации объявлен честно: он равен дате сборки выгрузки, а не дате
+  # проверки.
+  - {name: STATE_CODE, role: feature, availability: at_decision, source_of_claim: "штат площадки из справочника", window_lookback_days: 0, window_source: "выгрузка RCRA_FACILITIES", value_as_of: snapshot_at}
+  - {name: FED_WASTE_GENERATOR, role: feature, availability: at_decision, source_of_claim: "категория образования отходов", window_lookback_days: 0, window_source: "выгрузка RCRA_FACILITIES", value_as_of: snapshot_at}
+  - {name: TRANSPORTER, role: feature, availability: at_decision, source_of_claim: "признак перевозчика отходов", window_lookback_days: 0, window_source: "выгрузка RCRA_FACILITIES", value_as_of: snapshot_at}
+  - {name: ACTIVE_SITE, role: feature, availability: at_decision, source_of_claim: "признак действующей площадки", window_lookback_days: 0, window_source: "выгрузка RCRA_FACILITIES", value_as_of: snapshot_at}
+  - {name: OPERATING_TSDF, role: feature, availability: at_decision, source_of_claim: "признак объекта обработки и захоронения", window_lookback_days: 0, window_source: "выгрузка RCRA_FACILITIES", value_as_of: snapshot_at}
+  - {name: sector, role: feature, availability: at_decision, source_of_claim: "код сборки: первые две цифры NAICS", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: snapshot_at}
+
+  # КОНТРОЛЬ К-1. Признак проставляется ПО ИТОГАМ проверки, то есть известен
+  # только после исхода. Объявлен доступным в момент решения — объявление
+  # заведомо ложное. Ядру о подлоге не сообщается.
+  - {name: FOUND_VIOLATION, role: feature, availability: at_decision, source_of_claim: "итог проверки по данным EPA", window_lookback_days: 0, window_source: "выгрузка RCRA_EVALUATIONS"}
+
+  # Не участвуют в постановке.
+  - {name: EVALUATION_IDENTIFIER, role: ignored}
+  - {name: snapshot_at, role: ignored, temporal: date}
+  - {name: horizon_90d, role: ignored, temporal: date}
+  - {name: horizon_180d, role: ignored, temporal: date}
+  - {name: horizon_365d, role: ignored, temporal: date}
+
+# --- КОНТРАКТ ИСХОДА ---------------------------------------------------------
+
+outcome:
+  event_column: violation_at
+  deadline_column: horizon_30d
+  comparison: by_date
+  positive_class: event_within_deadline
+  estimand: "по следам проверки будет установлено нарушение в течение 30 дней после её начала"
+  degenerate_beyond: 0.1
+
+  missing_causes:
+    - name: "нарушения на площадке после проверки не установлено"
+      meaning: not_occurred
+      assumption: "колонки статуса процесса в выгрузке нет, и различить «нарушения не было» от «нарушение было, но не записано» нечем; принимается первое"
+
+# --- ТИП ЗАДАЧИ --------------------------------------------------------------
+
+task:
+  target_kind: binary
+  outcome_timing: delayed
+  has_process: false
+  is_stream: false
+  object_lifetime: recurring
+
+# --- СПЛИТ -------------------------------------------------------------------
+# Отсчёт от 1977-11-01, первой проверки. Окна поставлены в недавнюю часть
+# (2018-2024: 18-26 тыс. проверок в год). Метки зреют за 30 дней, поэтому
+# резерв кончается задолго до среза 2026-08-25.
+
+split:
+  windows:
+    - {name: w0, start_day: 14671, stop_day: 15401}   # 2018-01-01 .. 2020-01-01
+    - {name: w1, start_day: 15401, stop_day: 16132}   # 2020-01-01 .. 2022-01-01
+    - {name: w2, start_day: 16132, stop_day: 16862}   # 2022-01-01 .. 2024-01-01
+  reserve_from_day: 16862                             # 2024-01-01
+  reserve_until_day: 17593                            # 2026-01-01

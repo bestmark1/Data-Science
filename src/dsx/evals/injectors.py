@@ -633,3 +633,39 @@ def unobservability_tied_to_feature(
         pl.when(picked).then(pl.lit("pending")).otherwise(pl.col("status")).alias("status"),
     )
     return world.replace_main(frame)
+
+
+def categorical_feature_from_the_outcome(world: World) -> World:
+    """Признак-СТРОКА, вычисленный из исхода, объявлен доступным при решении.
+
+    Отличается от `outcome_component_as_feature` типом: там колонка числовая,
+    здесь строковая. Десятый кейс показал, что проверка N6 смотрела только
+    числовые признаки и строковую утечку пропускала целиком — связь +0.43 при
+    типичной 0.05 проходила молча. В седьмом и восьмом кейсах подложенные
+    утечки были числами, и слепота не проявлялась.
+    """
+    # Сравнение ПО ДАТЕ, как в контракте исхода этого мира. Первая версия
+    # сравнивала моменты и совпадала с меткой лишь на 71.8%: событие вечером
+    # назначенного дня она звала опозданием, а метка — нет. Сила разделения
+    # выходила 0.335 при пороге 0.35, и кейс молчал не оттого, что проверка
+    # слепа, а оттого, что утечка была неточной. Стенд обязан воспроизводить
+    # дефект, а не его половину.
+    frame = world.main.with_columns(
+        pl.when(pl.col("event_at").is_null())
+        .then(pl.lit("no_event"))
+        .when(pl.col("event_at").dt.date() > pl.col("deadline_on").dt.date())
+        .then(pl.lit("late"))
+        .otherwise(pl.lit("on_time"))
+        .alias("outcome_word")
+    )
+    schema = _add_column(
+        world.schema,
+        ColumnSpec(
+            name="outcome_word",
+            role=Role.FEATURE,
+            availability=Availability.AT_DECISION,
+            window=FeatureWindow(lookback_days=0.0, source_of_claim=SOURCE),
+            source_of_claim=SOURCE,
+        ),
+    )
+    return World(frames={**world.frames, "main": frame}, schema=schema)
