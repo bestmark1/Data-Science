@@ -12,7 +12,7 @@ TASK = TaskSpec(
 )
 
 
-def task_for(world, lifetime=None, target_kind=None) -> TaskSpec:
+def task_for(world, lifetime=None, target_kind=None, declared_process=None) -> TaskSpec:
     """Объявить предпосылки так, как они есть в данных.
 
     Объявлять их наугад — ровно та ошибка, которую ловит проверка S6: стенд
@@ -21,6 +21,10 @@ def task_for(world, lifetime=None, target_kind=None) -> TaskSpec:
     from dsx.premises import _process_observed, _stream_observed
 
     has_process, _ = _process_observed(world)
+    # Объявление автора кейса главнее наблюдения: без этого расхождение
+    # объявленного с данными на стенде не воспроизвести, и проверять S6 нечем.
+    if declared_process is not None:
+        has_process = declared_process
     is_stream, _ = _stream_observed(world)
     return TaskSpec(
         target_kind=target_kind or TargetKind.BINARY,
@@ -51,7 +55,10 @@ def context_for(bundle):
     except Exception:
         split = None
     return Context(
-        world, bundle.outcome, task_for(world, bundle.lifetime, bundle.target_kind), split
+        world,
+        bundle.outcome,
+        task_for(world, bundle.lifetime, bundle.target_kind, bundle.declared_process),
+        split,
     )
 
 

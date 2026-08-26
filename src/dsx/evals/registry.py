@@ -50,6 +50,14 @@ class Bundle:
     резерва нет, объявляет это явно.
     """
 
+    declared_process: bool | None = None
+    """Наличие процесса, ОБЪЯВЛЕННОЕ автором кейса, а не выведенное из данных.
+
+    Обычно стенд выводит предпосылки из данных: объявлять их наугад — ровно та
+    ошибка, которую ловит S6. Но чтобы саму S6 проверить, нужен кейс, где
+    объявление РАСХОДИТСЯ с данными, и потому расхождение задаётся явно.
+    """
+
     lifetime: ObjectLifetime | None = None
     """Жизненный цикл объекта, объявленный автором кейса.
 
@@ -115,6 +123,7 @@ def _bundle(
     caught_by: set[str] | None = None,
     lifetime: ObjectLifetime | None = None,
     reserve: bool = True,
+    declared_process: bool | None = None,
     target_kind: TargetKind | None = None,
     expected_positive_rate: float | None = None,
     degenerate_beyond: float | None = FIXTURE_DEGENERATE_BEYOND,
@@ -132,6 +141,7 @@ def _bundle(
         outcome=_outcome(comparison, expected_positive_rate, degenerate_beyond),
         lifetime=lifetime,
         reserve=reserve,
+        declared_process=declared_process,
         target_kind=target_kind,
     )
 
@@ -429,6 +439,49 @@ ALL: tuple[Bundle, ...] = (
         {Finding.GROUP_OVERLAP_ACROSS_SPLITS},
         lambda: inj.declared_group(inj.grouped_objects(build_world())),
         caught_by={"N14"},
+    ),
+    _bundle(
+        "undeclared-availability",
+        "Признак не объявил, доступен ли он в момент решения",
+        "Проверка C2 прожила десять кейсов без единого кейса стенда — в том же "
+        "положении, в каком N6 провела их слепой к строковым утечкам. Дефект здесь не "
+        "в данных, а в молчании: «неизвестно» означает «не ответил».",
+        {Finding.UNDECLARED_AVAILABILITY},
+        lambda: inj.undeclared_availability(build_world()),
+        caught_by={"C2"},
+    ),
+    _bundle(
+        "undeclared-column",
+        "В таблице решений есть колонка, которой нет в схеме",
+        "Ядро видит только объявленное: незаявленная колонка не попадает ни в одну "
+        "проверку. Роль ignored существует затем, чтобы сказать «есть и не нужна»; "
+        "промолчать — не ответ.",
+        {Finding.UNDECLARED_COLUMN},
+        lambda: inj.undeclared_column(build_world()),
+        caught_by={"S8"},
+    ),
+    _bundle(
+        "premise-contradicted-by-data",
+        "Объявлено отсутствие процесса при живой колонке статуса",
+        "Предпосылка выключает проверки. Объявленная наугад, она выключает их ради "
+        "тишины, и доказать обратное можно только сверкой с данными. На десятом кейсе "
+        "S6 поймала ровно это у автора: is_stream объявлен False при промежутке между "
+        "наблюдениями в сутки.",
+        {Finding.PREMISE_MISMATCH},
+        lambda: inj.premise_contradicted_by_data(build_world()),
+        caught_by={"S6"},
+        declared_process=False,
+    ),
+    _bundle(
+        "no-reserved-measurement-sample",
+        "Измерительная выборка не зарезервирована",
+        "Скользящие окна вложены и пересекаются по составу, поэтому ни одно не годится "
+        "в измерительный инструмент после того, как хоть одно использовалось для "
+        "выбора. Второй кейс: пересечение 42% на одном протоколе и 61% на другом.",
+        {Finding.NO_RESERVED_MEASUREMENT_SAMPLE},
+        build_world,
+        caught_by={"P5"},
+        reserve=False,
     ),
     _bundle(
         "categorical-feature-from-the-outcome",

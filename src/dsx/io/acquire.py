@@ -46,7 +46,31 @@ class UnsafeArchive(Exception):
 
 
 def read_credentials(path: Path = DEFAULT_CREDENTIALS_PATH) -> tuple[str, str]:
+    """Логин и ключ Kaggle: из переменных окружения либо из kaggle.json.
+
+    Оба способа взяты из документации источника. Недокументированных форматов
+    здесь нет намеренно: угадывать схему файла с ключом — плохая мысль, а
+    ошибиться в ней дороже, чем отказать с внятным сообщением.
+
+    Клиент Kaggle в августе 2026 сменил формат: переименовал `kaggle.json` в
+    `kaggle.json.legacy-backup-ГГГГММДД` и положил рядом свои файлы. Прогон
+    после этого падал с «файл не найден», и причина по сообщению не читалась.
+    Теперь читается.
+    """
+    env_user, env_key = os.environ.get("KAGGLE_USERNAME"), os.environ.get("KAGGLE_KEY")
+    if env_user and env_key:
+        return env_user, env_key
+
     if not path.is_file():
+        backups = (
+            sorted(path.parent.glob(f"{path.name}.legacy-backup-*")) if path.parent.is_dir() else []
+        )
+        if backups:
+            raise KaggleCredentialsMissing(
+                f"файл {path} не найден, но рядом лежит {backups[-1].name}: клиент Kaggle "
+                "сменил формат и переименовал прежний файл. Верните его под именем "
+                f"{path.name} либо задайте KAGGLE_USERNAME и KAGGLE_KEY в окружении"
+            )
         raise KaggleCredentialsMissing(f"файл {path} не найден")
 
     try:

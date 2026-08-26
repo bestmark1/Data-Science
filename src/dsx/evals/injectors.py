@@ -669,3 +669,40 @@ def categorical_feature_from_the_outcome(world: World) -> World:
         ),
     )
     return World(frames={**world.frames, "main": frame}, schema=schema)
+
+
+def undeclared_availability(world: World, feature: str = "lead_days") -> World:
+    """Признак не объявил, доступен ли он в момент решения.
+
+    Не ошибка данных, а молчание в объявлении: `Availability.UNKNOWN` означает
+    «не ответил». Проверка C2 жила без кейса стенда десять кейсов — ровно в том
+    положении, в каком N6 провела их слепой к строковым признакам.
+    """
+    columns = [
+        c.model_copy(update={"availability": Availability.UNKNOWN}) if c.name == feature else c
+        for c in world.schema.columns
+    ]
+    return World(frames=world.frames, schema=Schema(columns=columns))
+
+
+def undeclared_column(world: World, name: str = "extra_measurement") -> World:
+    """В таблице решений есть колонка, которой нет в схеме.
+
+    Ядро видит только объявленное: незаявленная колонка не попадает ни в одну
+    проверку. Роль `ignored` существует ровно затем, чтобы сказать «колонка
+    есть и она не нужна»; промолчать — не ответ.
+    """
+    frame = world.main.with_columns(pl.lit(1.0).alias(name))
+    return World(frames={**world.frames, "main": frame}, schema=world.schema)
+
+
+def premise_contradicted_by_data(world: World) -> World:
+    """Объявлено отсутствие колонки статуса, а она в данных есть.
+
+    Предпосылка выключает проверки. Объявленная наугад, она выключает их ради
+    тишины, и доказать обратное можно только сверкой с данными.
+
+    Мир не меняется: меняется объявление. Кейс задаёт `has_process: false` при
+    живой колонке статуса, и расхождение обязано быть названо.
+    """
+    return world

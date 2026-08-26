@@ -111,19 +111,56 @@ def test_always_alarming_detector_fails_the_negative_controls() -> None:
     "bundle", [b for b in ALL if not b.case.expectation.is_negative_control], ids=lambda b: b.id
 )
 def test_injected_world_actually_differs_from_the_clean_one(bundle) -> None:
-    """Инжектор обязан доказать, что дефект внесён.
+    """Кейс обязан доказать, что дефект внесён.
 
     Четыре раза подряд набор ловил ошибку не в проверке, а в инжекторе: дважды
     дефект отсутствовал вовсе. Изменение данных не означает внесения дефекта,
     но отсутствие изменений означает его отсутствие наверняка.
+
+    Сличается не только мир. Дефект бывает не в данных: объявленная наугад
+    предпосылка расходится с данными, не трогая их, а отсутствие резерва —
+    свойство протокола, а не таблицы. Требовать от таких кейсов изменённых
+    данных значило бы запретить их вовсе.
     """
-    clean = BY_ID["clean-baseline"].build()
+    clean = BY_ID["clean-baseline"]
     injected = bundle.build()
 
-    data_differs = not injected.main.equals(clean.main)
-    schema_differs = injected.schema != clean.schema
-    contract_differs = bundle.outcome != BY_ID["clean-baseline"].outcome
-
-    assert data_differs or schema_differs or contract_differs, (
-        "мир с дефектом не отличается от чистого: инжектор ничего не внёс"
+    differs = (
+        not injected.main.equals(clean.build().main)
+        or injected.schema != clean.build().schema
+        or bundle.outcome != clean.outcome
+        or bundle.declared_process != clean.declared_process
+        or bundle.reserve != clean.reserve
+        or bundle.lifetime != clean.lifetime
+        or bundle.target_kind != clean.target_kind
     )
+
+    assert differs, "кейс с дефектом ничем не отличается от чистого: не внесено ничего"
+
+
+def test_every_requirement_has_a_case_that_makes_it_fire() -> None:
+    """Проверка, которую никто не заставлял сработать, не проверена.
+
+    Десятый кейс: N6 смотрела только числовые признаки и пропускала строковые
+    утечки. Слепота прожила десять кейсов и семь прогонов на настоящих данных,
+    потому что подложенные утечки случайно оказывались числами, а кейса стенда
+    именно на строковую не было.
+
+    Отсюда правило: у каждого требования ядра есть кейс, который заставляет его
+    возразить. Ноль блокирующих дефектов на настоящих данных этого не заменяет —
+    он означает «на этих данных ничего не сломалось», а не «инструмент видит».
+    """
+    from dsx.checks import ALL_CHECKS
+
+    required = {check.requirement for check in ALL_CHECKS}
+    covered = {name for bundle in ALL for name in bundle.case.expectation.caught_by}
+    naked = sorted(required - covered)
+
+    assert not naked, f"нет кейса стенда, воспроизводящего дефект: {naked}"
+
+
+def test_negative_controls_exist_for_the_bench_to_mean_anything() -> None:
+    """Набор без отрицательных контролей не отличает проверку от паникёра."""
+    controls = [b.id for b in ALL if b.case.expectation.is_negative_control]
+
+    assert len(controls) >= 10, f"отрицательных контролей слишком мало: {len(controls)}"
