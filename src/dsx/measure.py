@@ -282,6 +282,117 @@ def measure_against_baseline(
     )
 
 
+@dataclass(frozen=True)
+class Contrast:
+    """Сравнение двух ПОСТАНОВОК на одной выборке.
+
+    Отличается от `Verdict` предметом: там модель меряется против правила и
+    отвечает на вопрос «стоило ли строить», здесь две постановки меряются друг
+    против друга и отвечают на вопрос «сколько стоит различие между ними».
+
+    Шестой кейс потребовал этого впервые: цена изменчивости истории есть
+    разница между моделью на признаках момента решения и моделью на признаках
+    момента выгрузки. Сравнить каждую с правилом по отдельности недостаточно —
+    два интервала, каждый из которых ноль не включает, ничего не говорят о том,
+    исключает ли ноль их РАЗНИЦА.
+    """
+
+    sample: str
+    rows: int
+    left_name: str
+    right_name: str
+    left: float
+    right: float
+    low: float
+    high: float
+
+    @property
+    def difference(self) -> float:
+        return self.left - self.right
+
+    @property
+    def decisive(self) -> bool:
+        return self.low > 0 or self.high < 0
+
+    def __str__(self) -> str:
+        verdict = (
+            f"{self.left_name if self.difference > 0 else self.right_name} различает лучше"
+            if self.decisive
+            else "различие не показано"
+        )
+        return (
+            f"разрешающая способность: {self.left_name} {self.left:.4f}, "
+            f"{self.right_name} {self.right:.4f}, разница {self.difference:+.4f} "
+            f"[{self.low:+.4f}; {self.high:+.4f}] — {verdict}"
+        )
+
+    def report_section(self) -> str:
+        return "\n".join(
+            [
+                "## Сравнение постановок",
+                "",
+                f"Выборка: {self.sample}, строк {self.rows:,}.",
+                "",
+                f"- {self}",
+            ]
+        )
+
+
+def measure_contrast(
+    ledger: SampleLedger,
+    sample: str,
+    left_scores: pl.Series,
+    right_scores: pl.Series,
+    left_name: str,
+    right_name: str,
+    decision: str = "сравнение двух постановок",
+) -> Contrast:
+    """Сравнить две постановки на одной выборке, израсходовав её один раз.
+
+    Выборка берётся ОДНИМ checkout: две отдельные меры израсходовали бы её
+    дважды, а второй заход журнал не пропустит — и правильно, потому что
+    посмотреть, подкрутить и посмотреть снова здесь так же недопустимо.
+
+    Пересчёт парный: обе постановки на каждом шаге считаются по ОДНОМУ И ТОМУ
+    ЖЕ набору строк. Непарный дал бы интервал шире истинного, сложив в него
+    разброс выборки, который у обеих постановок общий и потому сокращается.
+    """
+    frame = ledger.checkout(sample, Purpose.MEASUREMENT, decision)
+    assert isinstance(frame, pl.DataFrame)
+
+    for name, scores in ((left_name, left_scores), (right_name, right_scores)):
+        if scores.len() != frame.height:
+            raise ValueError(
+                f"у постановки {name!r} предсказаний {scores.len():,}, а строк "
+                f"в выборке {frame.height:,}: оценки не выровнены по единице решения"
+            )
+
+    observable = frame[LABEL].is_not_null().to_numpy()
+    labels = frame[LABEL].fill_null(0).to_numpy().astype(np.int64)[observable]
+    left = left_scores.to_numpy().astype(np.float64)[observable]
+    right = right_scores.to_numpy().astype(np.float64)[observable]
+
+    rng = np.random.default_rng(SEED)
+    differences = np.empty(BOOTSTRAP)
+    for i in range(BOOTSTRAP):
+        pick = rng.integers(0, labels.size, labels.size)
+        differences[i] = discrimination(left[pick], labels[pick]) - discrimination(
+            right[pick], labels[pick]
+        )
+
+    low, high = _interval(differences)
+    return Contrast(
+        sample=sample,
+        rows=int(observable.sum()),
+        left_name=left_name,
+        right_name=right_name,
+        left=discrimination(left, labels),
+        right=discrimination(right, labels),
+        low=low,
+        high=high,
+    )
+
+
 # --- разбор смещения по сегментам (N10) ------------------------------------
 
 
