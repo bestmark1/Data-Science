@@ -1,0 +1,16 @@
+source: U.S. Small Business Administration, выгрузка по FOIA
+license: CC BY-SA 4.0 (объявлена источником)
+url: https://www.kaggle.com/datasets/mirbektoktogaraev/should-this-loan-be-approved-or-denied
+retrieved_at: '2026-08-26'
+files:
+- name: SBAnational.csv
+  sha256: 0359128a0b7599e83e4c2e4dcdd781d9121a765237f98d9f0ec1ab3e7c522548
+  bytes: 179430516
+- name: Should This Loan be Approved or Denied A Large Dataset with Class Assignment
+    Guidelines.pdf
+  sha256: 4c1e09959139839cf66a09c63c4ca9971336cb458dbe9a4b7cab6c6808664c27
+  bytes: 908822
+- name: mirbektoktogaraev_should-this-loan-be-approved-or-denied.zip
+  sha256: 012911c246a6eecc388740b37dc7fb59dc7612e9750ec40dbaf09e97a92f4a87
+  bytes: 48675704
+derived: []

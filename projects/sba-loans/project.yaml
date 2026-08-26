@@ -1,0 +1,136 @@
+# ФОРМА СЕДЬМОГО КЕЙСА
+#
+# Предсказывается: будет ли кредит объявлен дефолтным до истечения своего срока.
+#
+# Кейс намеренно ОБЫЧНЫЙ: новая отрасль, ни одной новой оси. Каждый механизм,
+# который здесь работает, проверен хотя бы на одном прежнем кейсе.
+
+title: "SBA National: дефолт по кредиту малому бизнесу до истечения срока"
+
+# Конец наблюдения: последняя дата дефолта в выгрузке. Выдачи идут до
+# 2014-12-31, но дефолты записаны лишь до конца августа, и брать более поздний
+# момент значило бы считать ненаблюдённое отсутствием события.
+observed_until: 2014-08-29T00:00:00
+observed_until_source: "максимум ChgOffDate в выгрузке; объявленного среза у источника нет"
+
+# --- ДОПУЩЕНИЯ ---------------------------------------------------------------
+
+assumptions:
+  - statement: "моментом решения является ВЫДАЧА денег, а не одобрение заявки"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если риск возникает при одобрении, момент выбран позже, чем он происходит, и запаздывание выдачи попадает в признаки как знание из будущего"
+
+  - statement: "выдача происходит позже одобрения почти всегда"
+    basis: data
+    author: "автор"
+    evidence: "расчёт при сборке: 880 054 из 895 177 строк (98.3%)"
+    consequence: "ось запаздывания регистрации подтверждена данными; момент решения и момент, когда задача возникла, разведены"
+
+  - statement: "двузначный год в датах относится к XX веку там, где разбор даёт год позже 2014"
+    basis: data
+    author: "автор"
+    evidence: "сверка с ApprovalFY, где год записан четырьмя цифрами: 13 строк разобрались в 2020–2069 при ApprovalFY 1962–1970"
+    consequence: "если правило неверно, часть старых кредитов получила бы даты на век вперёд, и срок был бы посчитан от несуществующего момента"
+
+  - statement: "выдача раньше одобрения означает испорченную запись, а не досрочную выдачу"
+    basis: domain_knowledge
+    author: "автор"
+    evidence: "расчёт: 810 строк; часть из них — жертвы ловушки века, но не все"
+    consequence: "если такие выдачи законны, отброшено 0.09% строк, среди которых могли быть особые случаи; чинить их догадкой значило бы выдумывать данные"
+
+  - statement: "конец наблюдения совпадает с последней датой дефолта"
+    basis: data
+    author: "автор"
+    evidence: "расчёт: максимум charged_off_at — 2014-08-29"
+    consequence: "если сбор дефолтов оборвался раньше выдач, часть кредитов размечена как выплаченные, хотя исход неизвестен"
+
+  - statement: "отсутствие даты дефолта означает, что дефолта не было, а не пробел в регистрации"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если дефолты регистрируются неполно, отрицательный класс загрязнён, и модель занижает риск"
+
+# --- СХЕМА -------------------------------------------------------------------
+
+columns:
+  - {name: loan_id, role: entity_id}
+  - {name: borrower, role: natural_key}
+  - {name: bank, role: group_id}
+  - {name: disbursed_at, role: decision_time, temporal: instant}
+  - {name: charged_off_at, role: event_time, temporal: instant}
+  - {name: due_at, role: deadline, temporal: instant}
+  - {name: status, role: status}
+
+  # Признаки, известные в момент выдачи. Все мгновенные: окон нет, и потому
+  # объявлять часы окна нечему.
+  - {name: term_months, role: feature, availability: at_decision, source_of_claim: "срок кредита из договора", window_lookback_days: 0, window_source: "выгрузка SBA, поле Term"}
+  - {name: disbursed_amount, role: feature, availability: at_decision, source_of_claim: "сумма выдачи из договора", window_lookback_days: 0, window_source: "выгрузка SBA, поле DisbursementGross"}
+  - {name: approved_amount, role: feature, availability: at_decision, source_of_claim: "сумма, одобренная банком", window_lookback_days: 0, window_source: "выгрузка SBA, поле GrAppv"}
+  - {name: guaranteed_amount, role: feature, availability: at_decision, source_of_claim: "сумма гарантии SBA", window_lookback_days: 0, window_source: "выгрузка SBA, поле SBA_Appv"}
+  - {name: employees, role: feature, availability: at_decision, source_of_claim: "число работников на момент заявки", window_lookback_days: 0, window_source: "выгрузка SBA, поле NoEmp"}
+  - {name: new_business, role: feature, availability: at_decision, source_of_claim: "новый бизнес или существующий", window_lookback_days: 0, window_source: "выгрузка SBA, поле NewExist"}
+  - {name: jobs_created, role: feature, availability: at_decision, source_of_claim: "обещанные новые рабочие места", window_lookback_days: 0, window_source: "выгрузка SBA, поле CreateJob"}
+  - {name: jobs_retained, role: feature, availability: at_decision, source_of_claim: "обещанные сохранённые места", window_lookback_days: 0, window_source: "выгрузка SBA, поле RetainedJob"}
+  - {name: franchise_code, role: feature, availability: at_decision, source_of_claim: "код франшизы", window_lookback_days: 0, window_source: "выгрузка SBA, поле FranchiseCode"}
+  - {name: urban_rural, role: feature, availability: at_decision, source_of_claim: "город или село", window_lookback_days: 0, window_source: "выгрузка SBA, поле UrbanRural"}
+  - {name: revolving_credit, role: feature, availability: at_decision, source_of_claim: "возобновляемая кредитная линия", window_lookback_days: 0, window_source: "выгрузка SBA, поле RevLineCr"}
+  - {name: low_doc, role: feature, availability: at_decision, source_of_claim: "программа упрощённого оформления", window_lookback_days: 0, window_source: "выгрузка SBA, поле LowDoc"}
+  - {name: state, role: feature, availability: at_decision, source_of_claim: "штат заёмщика", window_lookback_days: 0, window_source: "выгрузка SBA, поле State"}
+  - {name: bank_state, role: feature, availability: at_decision, source_of_claim: "штат банка", window_lookback_days: 0, window_source: "выгрузка SBA, поле BankState"}
+  - {name: sector, role: feature, availability: at_decision, source_of_claim: "код сборки: первые две цифры NAICS", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: approval_lag_days, role: feature, availability: at_decision, source_of_claim: "код сборки: дни от одобрения до выдачи", window_lookback_days: 0, window_source: "код сборки build.py"}
+
+  # Известно к моменту выдачи, но признаком не объявлено.
+  - {name: approved_at, role: ignored, temporal: instant}
+  - {name: ApprovalFY, role: ignored}
+  - {name: naics, role: ignored}
+  - {name: City, role: ignored}
+  - {name: Zip, role: ignored}
+
+  # Известно ТОЛЬКО ПОСЛЕ исхода. Объявление признаком было бы утечкой, и это
+  # предмет отдельного прогона (предсказание P-4).
+  - {name: balance_gross, role: ignored}
+  - {name: charged_off_amount, role: ignored}
+
+# --- КОНТРАКТ ИСХОДА ---------------------------------------------------------
+
+outcome:
+  event_column: charged_off_at
+  deadline_column: due_at
+  comparison: direct
+  positive_class: event_within_deadline
+  estimand: "кредит будет объявлен дефолтным до истечения своего срока, считая срок от выдачи"
+  degenerate_beyond: 0.05
+
+  missing_causes:
+    - name: "кредит выплачен полностью"
+      meaning: not_occurred
+      status_value: "P I F"
+      assumption: "статус P I F означает выплату, а не потерю записи о дефолте"
+    - name: "кредит объявлен дефолтным"
+      meaning: not_occurred
+      status_value: "CHGOFF"
+      assumption: "статус CHGOFF без даты дефолта означает потерю даты, а не отсутствие события; такие строки исход не наблюдают"
+
+# --- ТИП ЗАДАЧИ --------------------------------------------------------------
+
+task:
+  target_kind: binary
+  outcome_timing: delayed
+  has_process: true
+  is_stream: true
+  object_lifetime: recurring
+
+# --- СПЛИТ -------------------------------------------------------------------
+# Отсчёт от 1966-08-16, первой выдачи в выгрузке.
+# Окна поставлены в плотную часть (1999–2005: 35–74 тыс. выдач в год) и
+# достаточно рано, чтобы метки успевали созреть: медианный срок 84 месяца.
+# Резерв 2005–2007 — последний период, чьи метки в основном наблюдаемы.
+
+split:
+  windows:
+    - {name: w0, start_day: 11826, stop_day: 12557}   # 1999-01-01 .. 2001-01-01
+    - {name: w1, start_day: 12557, stop_day: 13287}   # 2001-01-01 .. 2003-01-01
+    - {name: w2, start_day: 13287, stop_day: 14018}   # 2003-01-01 .. 2005-01-01
+  reserve_from_day: 14018                             # 2005-01-01
+  reserve_until_day: 14748                            # 2007-01-01
