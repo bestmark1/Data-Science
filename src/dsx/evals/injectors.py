@@ -603,3 +603,33 @@ def deadline_revised_after_decision(world: World, lag_days: int = 120) -> World:
         ColumnSpec(name="deadline_fixed_at", role=Role.IGNORED, temporal=TemporalKind.INSTANT)
     )
     return World(frames={**world.frames, "main": frame}, schema=Schema(columns=columns))
+
+
+def unobservability_tied_to_feature(
+    world: World, feature: str = "region", ahead: int = 400
+) -> World:
+    """Исход не наблюдается там, где признак принимает определённое значение.
+
+    Воспроизводит девятый кейс. Там среди исследований с наблюдаемым исходом
+    57.2% спонсированы индустрией, а среди замолчавших — 18.6%: наблюдаемость
+    зависела от того, что известно в момент решения, и метрика описывала не ту
+    популяцию, о которой делался вывод.
+
+    Отличается от `late_maturing_labels` ровно одним: там ненаблюдаемые
+    выбираются жребием, здесь — ПО ПРИЗНАКУ. Разница между случайным выпадением
+    и выпадением по признаку и есть ось информативности наблюдения.
+    """
+    values = world.main[feature].unique().sort().to_list()
+    silent = values[: max(1, len(values) // 3)]
+    picked = pl.col(feature).is_in(silent)
+    frame = world.main.with_columns(
+        pl.when(picked)
+        .then(pl.col("deadline_on").dt.offset_by(f"{ahead}d"))
+        .otherwise(pl.col("deadline_on"))
+        .alias("deadline_on"),
+        pl.when(picked).then(None).otherwise(pl.col("event_at")).alias("event_at"),
+        # Тот же статус, что у честной незрелости: иначе один статус имел бы
+        # событие то есть, то нет, и это был бы уже другой дефект (A5).
+        pl.when(picked).then(pl.lit("pending")).otherwise(pl.col("status")).alias("status"),
+    )
+    return world.replace_main(frame)

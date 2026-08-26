@@ -20,7 +20,7 @@ import polars as pl
 from dsx.checks.base import Context, NotApplicable, Signal
 from dsx.checks.empirical import association
 from dsx.evals.case import Finding
-from dsx.label import LABEL
+from dsx.label import LABEL, REASON, OutcomeReason
 from dsx.roles import Availability, Direction, Role
 from dsx.split import SplitResult
 from dsx.task import Premise
@@ -651,8 +651,104 @@ class NonDegenerateOutcome:
         ]
 
 
+@dataclass(frozen=True)
+class UnobservedCostIsNamed:
+    """N16. Цена ненаблюдаемых исходов не названа, и она может быть велика.
+
+    Ядро девять кейсов знало, что исход бывает ненаблюдаем: `OutcomeReason`
+    различает незрелость, цензурирование и исключение. Но знание это
+    заканчивалось разметкой — строки просто выпадали из счёта, и отчёт называл
+    долю среди ОСТАВШИХСЯ, не говоря, скольких он не считал и чем они могли
+    оказаться.
+
+    Девятый кейс: 20.1% исследований исход не показали. Отчёт называл 36.6%
+    уложившихся в срок; границы, в которых лежит правда, — [29.2%, 49.3%].
+    Двадцать процентных пунктов, о которых читатель не узнавал.
+
+    Проверка делает две разные вещи, и различие существенно.
+
+    **Границы называются всегда**, когда ненаблюдаемых заметная доля. Это не
+    возражение: ненаблюдаемость нормальна. Это отказ выдавать число без его
+    цены.
+
+    **Блокирует** же не ненаблюдаемость, а её СВЯЗЬ с объявленным признаком.
+    Если наблюдаемость зависит от того, что известно в момент решения, значит
+    выпавшие — не случайная часть популяции, а её отличимый кусок, и метрика
+    описывает не ту популяцию, о которой сделан вывод. На девятом кейсе среди
+    наблюдаемых 57.2% исследований спонсированы индустрией, среди молчащих —
+    18.6%.
+    """
+
+    requirement: str = "N16"
+    premises: frozenset[Premise] = frozenset({Premise.BINARY_TARGET})
+    detects: frozenset[Finding] = frozenset({Finding.INFORMATIVE_UNOBSERVABILITY})
+
+    share: float = 0.05
+    """С какой доли ненаблюдаемых их цена перестаёт быть мелочью."""
+
+    def run(self, context: Context) -> list[Signal]:
+        split = _require_split(context)
+        parts = [p.evaluate for p in split.parts if LABEL in p.evaluate.columns]
+        if not parts:
+            raise NotApplicable("оценочных частей с меткой нет")
+        frame = pl.concat(parts, how="vertical_relaxed")
+        if frame.height < MIN_ROWS:
+            raise NotApplicable("строк слишком мало, чтобы говорить о границах")
+
+        # Исключённый из популяции — не ненаблюдаемый. Различие существенно:
+        # исключение объявлено автором и означает «объект не предполагался к
+        # обработке», а ненаблюдаемость означает «исход есть, но его не видно».
+        # Смешивать их значило бы предъявлять счёт за честное объявление.
+        if REASON in frame.columns:
+            frame = frame.filter(pl.col(REASON) != OutcomeReason.EXCLUDED.value)
+        if frame.height < MIN_ROWS:
+            raise NotApplicable("после исключённых строк слишком мало")
+
+        observed = frame.filter(pl.col(LABEL).is_not_null())
+        missing = frame.height - observed.height
+        if observed.height == 0 or missing < frame.height * self.share:
+            return []
+
+        rate = float(observed[LABEL].mean())
+        low = rate * observed.height / frame.height
+        high = (rate * observed.height + missing) / frame.height
+        signals = [
+            Signal(
+                Finding.INFORMATIVE_UNOBSERVABILITY,
+                f"исход не наблюдается у {missing:,} из {frame.height:,} строк "
+                f"({missing / frame.height:.1%}). Доля положительного класса среди "
+                f"наблюдаемых {rate:.1%}, но правда лежит в границах "
+                f"[{low:.1%}; {high:.1%}] — их ширина и есть цена ненаблюдаемости",
+                blocking=False,
+            )
+        ]
+
+        # Связь наблюдаемости с объявленным признаком: выпавшие — отличимый
+        # кусок популяции, а не случайная её часть.
+        seen = frame.with_columns(pl.col(LABEL).is_not_null().cast(pl.Int64).alias("__seen"))
+        threshold = max(0.10, SIGMA * _association_error(seen["__seen"]))
+        for column in context.world.schema.usable_features():
+            if column.name not in seen.columns:
+                continue
+            value = association(seen[column.name], seen["__seen"])
+            if abs(value) <= threshold:
+                continue
+            signals.append(
+                Signal(
+                    Finding.INFORMATIVE_UNOBSERVABILITY,
+                    f"наблюдаемость исхода связана с признаком {column.name!r} "
+                    f"(связь {value:+.2f} при пороге {threshold:.2f}). Выпавшие строки — "
+                    "не случайная часть популяции, и метрика описывает не ту популяцию, "
+                    "о которой будет сделан вывод",
+                    blocking=True,
+                )
+            )
+        return signals
+
+
 DRIFT_CHECKS = [
     NonDegenerateOutcome(),
+    UnobservedCostIsNamed(),
     TargetRateStationarity(),
     ComparableSupport(),
     FeatureRelationStability(),

@@ -334,9 +334,11 @@ ALL: tuple[Bundle, ...] = (
         "label-immaturity",
         "Исход недавних объектов созревает после конца наблюдения",
         "Трение 06: отбросив незрелые, получим окно из объектов с короткими сроками.",
-        {Finding.LABEL_IMMATURITY},
+        # Незрелость ЕСТЬ ненаблюдаемость, поэтому N16 срабатывает вместе с
+        # A12 и это не ложная тревога: цена выпавших строк называется и здесь.
+        {Finding.LABEL_IMMATURITY, Finding.INFORMATIVE_UNOBSERVABILITY},
         lambda: inj.late_maturing_labels(build_world()),
-        caught_by={"A12"},
+        caught_by={"A12", "N16"},
     ),
     _bundle(
         "non-stationary-target",
@@ -427,6 +429,21 @@ ALL: tuple[Bundle, ...] = (
         {Finding.GROUP_OVERLAP_ACROSS_SPLITS},
         lambda: inj.declared_group(inj.grouped_objects(build_world())),
         caught_by={"N14"},
+    ),
+    _bundle(
+        "unobservability-tied-to-feature",
+        "Наблюдаемость исхода зависит от признака, известного при решении",
+        "Девятый кейс: среди исследований с наблюдаемым исходом 57.2% спонсированы "
+        "индустрией, среди замолчавших — 18.6%. Выпавшие строки оказались отличимым "
+        "куском популяции, и метрика описывала не ту популяцию, о которой делался вывод. "
+        "Ядро девять кейсов знало о ненаблюдаемости, но её цену не называло ни разу.",
+        # A12 срабатывает вместе с N16 и это не ложная тревога: незрелость
+        # здесь ЕСТЬ механизм, которым создана ненаблюдаемость. Различие между
+        # кейсами в том, ЧЕМ отобраны выпавшие — жребием или признаком, — и
+        # видно оно только по сигналу N16 о связи.
+        {Finding.INFORMATIVE_UNOBSERVABILITY, Finding.LABEL_IMMATURITY},
+        lambda: inj.unobservability_tied_to_feature(build_world()),
+        caught_by={"N16", "A12"},
     ),
     _bundle(
         "deadline-revised-after-decision",

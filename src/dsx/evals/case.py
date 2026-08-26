@@ -59,6 +59,7 @@ class Finding(StrEnum):
     DEGENERATE_OUTCOME = "degenerate_outcome"
     WINDOW_CLOCK_UNKNOWABLE = "window_clock_unknowable"
     VALUE_REVISED_AFTER_DECISION = "value_revised_after_decision"
+    INFORMATIVE_UNOBSERVABILITY = "informative_unobservability"
 
 
 class Expectation(BaseModel):
