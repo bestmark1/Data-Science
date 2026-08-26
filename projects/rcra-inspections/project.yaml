@@ -65,20 +65,31 @@ columns:
   - {name: EVALUATION_AGENCY, role: feature, availability: at_decision, source_of_claim: "орган, проводящий проверку", window_lookback_days: 0, window_source: "выгрузка RCRA_EVALUATIONS"}
   - {name: ACTIVITY_LOCATION, role: feature, availability: at_decision, source_of_claim: "штат ведения дела", window_lookback_days: 0, window_source: "выгрузка RCRA_EVALUATIONS"}
 
-  # Свойства площадки взяты из справочника, отражающего СЕГОДНЯШНЕЕ состояние.
-  # Момент фиксации объявлен честно: он равен дате сборки выгрузки, а не дате
-  # проверки.
+  # Свойства площадки взяты из справочника СЕГОДНЯШНЕГО состояния: истории он
+  # не хранит. Проверка S10 возразила на все шесть — 100% строк.
+  #
+  # Ответ разный, потому что величины разные. Штат и отрасль на практике не
+  # меняются, и они оставлены с записанным обходом. Признаки действующей
+  # площадки, перевозчика, объекта захоронения и категории отходов меняются —
+  # они убраны ДЕЛОМ, ролью ignored: сегодняшнее их значение способно
+  # закодировать будущее.
   - {name: STATE_CODE, role: feature, availability: at_decision, source_of_claim: "штат площадки из справочника", window_lookback_days: 0, window_source: "выгрузка RCRA_FACILITIES", value_as_of: snapshot_at}
-  - {name: FED_WASTE_GENERATOR, role: feature, availability: at_decision, source_of_claim: "категория образования отходов", window_lookback_days: 0, window_source: "выгрузка RCRA_FACILITIES", value_as_of: snapshot_at}
-  - {name: TRANSPORTER, role: feature, availability: at_decision, source_of_claim: "признак перевозчика отходов", window_lookback_days: 0, window_source: "выгрузка RCRA_FACILITIES", value_as_of: snapshot_at}
-  - {name: ACTIVE_SITE, role: feature, availability: at_decision, source_of_claim: "признак действующей площадки", window_lookback_days: 0, window_source: "выгрузка RCRA_FACILITIES", value_as_of: snapshot_at}
-  - {name: OPERATING_TSDF, role: feature, availability: at_decision, source_of_claim: "признак объекта обработки и захоронения", window_lookback_days: 0, window_source: "выгрузка RCRA_FACILITIES", value_as_of: snapshot_at}
+  - {name: FED_WASTE_GENERATOR, role: ignored}
+  - {name: TRANSPORTER, role: ignored}
+  - {name: ACTIVE_SITE, role: ignored}
+  - {name: OPERATING_TSDF, role: ignored}
   - {name: sector, role: feature, availability: at_decision, source_of_claim: "код сборки: первые две цифры NAICS", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: snapshot_at}
 
-  # КОНТРОЛЬ К-1. Признак проставляется ПО ИТОГАМ проверки, то есть известен
-  # только после исхода. Объявлен доступным в момент решения — объявление
-  # заведомо ложное. Ядру о подлоге не сообщается.
-  - {name: FOUND_VIOLATION, role: feature, availability: at_decision, source_of_claim: "итог проверки по данным EPA", window_lookback_days: 0, window_source: "выгрузка RCRA_EVALUATIONS"}
+  # Был контролем К-1: признак проставляется ПО ИТОГАМ проверки. Объявлялся
+  # доступным в момент решения; ядро ПРОМОЛЧАЛО, и это молчание оказалось
+  # находкой — проверка N6 смотрела только числовые признаки. После её
+  # исправления сила разделения названа: 0.41 при типичной 0.06.
+  - {name: FOUND_VIOLATION, role: ignored}
+
+  # История площадки: нарушения, установленные СТРОГО РАНЬШЕ этой проверки.
+  # Часы окна — время установления нарушения, то есть момент, когда о нём стало
+  # известно, а не когда оно случилось.
+  - {name: prior_violations, role: feature, availability: at_decision, source_of_claim: "код сборки: накопительный счёт нарушений на площадке", window_lookback_days: 20000, window_source: "код сборки build.py, вся история площадки", window_clock: violation_at}
 
   # Не участвуют в постановке.
   - {name: EVALUATION_IDENTIFIER, role: ignored}
@@ -108,7 +119,7 @@ task:
   target_kind: binary
   outcome_timing: delayed
   has_process: false
-  is_stream: false
+  is_stream: true
   object_lifetime: recurring
 
 # --- СПЛИТ -------------------------------------------------------------------

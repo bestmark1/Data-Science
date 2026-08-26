@@ -100,29 +100,64 @@ def build() -> pl.DataFrame:
         frame, sectors, on=["ID_NUMBER"], expect=Cardinality.MANY_TO_ONE, how="left"
     )
 
-    # Ближайшее нарушение НЕ РАНЬШЕ начала проверки. Сдвиг на день назад делает
-    # границу нестрогой: нарушение, установленное в день проверки, считается её
-    # исходом, а не предшествующим событием.
+    # Ближайшее нарушение НЕ РАНЬШЕ начала проверки. Соединение вперёд включает
+    # и сам день проверки: нарушение, установленное в этот день, считается её
+    # исходом.
     #
-    # КОНТРОЛЬ К-2. Нарушения, датированные РАНЬШЕ начала проверки, не
-    # отбрасываются: соединение вперёд их просто не найдёт, но строки с
-    # испорченными датами остаются в таблице, и ядро обязано их назвать.
-    ordered = frame.with_columns(
-        (pl.col("EVALUATION_START_DATE") - pl.duration(days=1)).alias("__from")
-    ).sort("__from")
+    # Первая версия сдвигала левый ключ на день назад «ради нестрогой границы»,
+    # и этим втягивала нарушения, установленные НАКАНУНЕ проверки: 4 278 строк,
+    # у которых событие оказывалось раньше решения. Поймала это проверка A13 —
+    # дефект был мой, а не источника.
+    ordered = frame.sort("EVALUATION_START_DATE")
     with_violation = guarded_asof_join(
         ordered,
         violations,
-        left_on="__from",
+        left_on="EVALUATION_START_DATE",
         right_on="violation_at",
         by=["ID_NUMBER"],
         direction=AsofDirection.FORWARD,
-    ).drop("__from")
+    )
 
     # Закон, по которому эти проверки проводятся, принят в 1976 году. Даты
     # раньше него невозможны: в выгрузке встречаются годы 0005 и 1900-е — три
     # десятка записей с испорченной датой. Граница взята из закона, а не
     # подобрана по данным.
+    # История площадки: сколько нарушений установлено на ней СТРОГО РАНЬШЕ этой
+    # проверки. Считается слиянием двух потоков и накопительной суммой, а не
+    # соединением: соединять тут нечего.
+    #
+    # Отбор идёт по времени установления нарушения — по тому, когда о нём стало
+    # известно. Это и объявляется часами окна (window_clock).
+    stream = pl.concat(
+        [
+            with_violation.select(
+                "ID_NUMBER",
+                pl.col("EVALUATION_START_DATE").alias("__at"),
+                pl.lit(0, dtype=pl.Int32).alias("__is_violation"),
+                pl.int_range(pl.len(), dtype=pl.Int64).alias("__row"),
+            ),
+            violations.select(
+                "ID_NUMBER",
+                pl.col("violation_at").alias("__at"),
+                pl.lit(1, dtype=pl.Int32).alias("__is_violation"),
+                pl.lit(None, dtype=pl.Int64).alias("__row"),
+            ),
+        ],
+        how="vertical",
+    ).sort("ID_NUMBER", "__at", "__is_violation", descending=[False, False, True])
+
+    history = (
+        stream.with_columns(
+            (pl.col("__is_violation").cum_sum().over("ID_NUMBER") - pl.col("__is_violation")).alias(
+                "prior_violations"
+            )
+        )
+        .filter(pl.col("__row").is_not_null())
+        .sort("__row")
+        .select("prior_violations")
+    )
+    with_violation = with_violation.with_columns(history["prior_violations"])
+
     broken = (
         pl.col("EVALUATION_START_DATE").is_null()
         | pl.col("EVALUATION_IDENTIFIER").is_null()
@@ -141,8 +176,6 @@ def build() -> pl.DataFrame:
         f"  прочитано {read:,}, потеряно {lost:,} (нет даты проверки, её номера, "
         f"площадки либо дата раньше закона 1976 года), осталось {kept.height:,}"
     )
-
-    # КОНТРОЛЬ К-3. Часовые значения не вычищаются.
 
     import sys
 
