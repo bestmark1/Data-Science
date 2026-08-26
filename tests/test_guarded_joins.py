@@ -79,3 +79,127 @@ def test_detector_survives_unparseable_files(tmp_path: Path) -> None:
 def test_named_working_files_are_covered(name: str) -> None:
     """Файл, выпавший из выборки, проверяться перестанет незаметно."""
     assert any(path.name == name for path in WORKING_PATH)
+
+
+# --- соединение по времени (join_asof) --------------------------------------
+
+
+def _timeline() -> tuple:
+    """Два участка, решения и события на них.
+
+    У участка 'a' событие лежит ПОСЛЕ решения, у 'b' — ДО. Так одна и та же
+    пара таблиц годится и для проверки направления вперёд, и назад.
+    """
+    import datetime as dt
+
+    import polars as pl
+
+    day = dt.datetime(2020, 1, 1)
+    left = pl.DataFrame(
+        {
+            "segment": ["a", "b"],
+            "at": [day + dt.timedelta(days=10), day + dt.timedelta(days=10)],
+        }
+    ).sort("at")
+    right = pl.DataFrame(
+        {
+            "segment": ["a", "b"],
+            "event_at": [day + dt.timedelta(days=20), day + dt.timedelta(days=1)],
+        }
+    ).sort("event_at")
+    return left, right
+
+
+def test_asof_join_preserves_the_unit_of_decision() -> None:
+    from dsx.join import AsofDirection, guarded_asof_join
+
+    left, right = _timeline()
+
+    joined = guarded_asof_join(
+        left,
+        right,
+        left_on="at",
+        right_on="event_at",
+        by=["segment"],
+        direction=AsofDirection.FORWARD,
+    )
+
+    assert joined.height == left.height
+    # Вперёд от решения лежит только событие участка 'a'.
+    assert joined.filter(joined["event_at"].is_not_null())["segment"].to_list() == ["a"]
+
+
+def test_asof_join_refuses_keys_with_the_same_name() -> None:
+    """Совпавшие имена polars схлопывает, и сверять направление станет нечем."""
+    import polars as pl
+
+    from dsx.join import AsofDirection, JoinExpectationViolated, guarded_asof_join
+
+    left, right = _timeline()
+    right = right.rename({"event_at": "at"}).sort("at")
+
+    with pytest.raises(JoinExpectationViolated, match="схлопнет"):
+        guarded_asof_join(
+            left,
+            right,
+            left_on="at",
+            right_on="at",
+            by=["segment"],
+            direction=AsofDirection.FORWARD,
+        )
+    assert isinstance(left, pl.DataFrame)
+
+
+def test_asof_join_refuses_an_unsorted_frame() -> None:
+    """Polars не проверяет сортировку, когда задан `by`, и лишь предупреждает."""
+    from dsx.join import AsofDirection, JoinExpectationViolated, guarded_asof_join
+
+    left, right = _timeline()
+
+    with pytest.raises(JoinExpectationViolated, match="не отсортирован"):
+        guarded_asof_join(
+            left,
+            right.reverse(),
+            left_on="at",
+            right_on="event_at",
+            by=["segment"],
+            direction=AsofDirection.FORWARD,
+        )
+
+
+def test_asof_join_without_a_declared_direction_is_blocked() -> None:
+    """Направление — то самое, чего число строк не покажет."""
+    from dsx.join import Blocked, guarded_asof_join
+    from dsx.policy import OverrideLedger
+
+    left, right = _timeline()
+
+    with pytest.raises(Blocked):
+        guarded_asof_join(
+            left,
+            right,
+            left_on="at",
+            right_on="event_at",
+            by=["segment"],
+            ledger=OverrideLedger(),
+        )
+
+
+def test_asof_join_refuses_a_blank_left_timestamp() -> None:
+    """Пустой момент решения дал бы «ничего не случилось» вместо «неизвестно»."""
+    import polars as pl
+
+    from dsx.join import AsofDirection, JoinExpectationViolated, guarded_asof_join
+
+    left, right = _timeline()
+    left = pl.concat([left, pl.DataFrame({"segment": ["c"], "at": [None]}, schema=left.schema)])
+
+    with pytest.raises(JoinExpectationViolated, match="пуста"):
+        guarded_asof_join(
+            left,
+            right,
+            left_on="at",
+            right_on="event_at",
+            by=["segment"],
+            direction=AsofDirection.FORWARD,
+        )

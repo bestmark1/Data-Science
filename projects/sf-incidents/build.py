@@ -22,7 +22,7 @@ from pathlib import Path
 
 import polars as pl
 
-from dsx.join import Cardinality, guarded_join
+from dsx.join import AsofDirection, Cardinality, guarded_asof_join, guarded_join
 
 PROJECT = Path(__file__).resolve().parent
 RAW = PROJECT / "data" / "raw"
@@ -169,14 +169,15 @@ def build() -> pl.DataFrame:
     # Ближайшее СЛЕДУЮЩЕЕ насильственное происшествие — соединение вперёд по
     # времени. Сдвиг на микросекунду делает границу строгой: сводка не считается
     # исходом сама для себя, а одновременная с ней — считается.
-    with_next = ordered.with_columns(
-        (pl.col("reported_at") + pl.duration(microseconds=1)).alias("__after")
-    ).join_asof(
+    with_next = guarded_asof_join(
+        ordered.with_columns(
+            (pl.col("reported_at") + pl.duration(microseconds=1)).alias("__after")
+        ).sort("__after"),
         violent,
         left_on="__after",
         right_on="violent_at",
-        by="segment_id",
-        strategy="forward",
+        by=["segment_id"],
+        direction=AsofDirection.FORWARD,
     )
     with_next = with_next.rename({"violent_at": "next_violent_at"}).drop("__after")
 

@@ -18,11 +18,20 @@ import ast
 from dataclasses import dataclass
 from pathlib import Path
 
-JOIN_KEYWORDS = frozenset({"on", "how", "left_on", "right_on"})
+JOIN_KEYWORDS = frozenset({"on", "how", "left_on", "right_on", "by", "strategy"})
 """Именованные аргументы, встречающиеся только у соединения таблиц.
 
 Отличают `frame.join(other, on=...)` от `", ".join(items)`: у строкового
 метода таких аргументов нет, и путаницы не возникает.
+"""
+
+JOIN_METHODS = frozenset({"join", "join_asof", "join_where"})
+"""Методы соединения таблиц.
+
+`join_asof` добавлен шестым кейсом, где он прошёл мимо детектора незамеченным.
+Он опаснее обычного соединения тем, что число строк левой таблицы сохраняет
+всегда: ошибка направления не раздувает таблицу, а молча подставляет не ту
+строку, и признак момента решения получает будущее.
 """
 
 
@@ -33,14 +42,17 @@ class UnguardedJoin:
     path: Path
     lineno: int
 
+    method: str = "join"
+
     def __str__(self) -> str:
-        return f"{self.path}:{self.lineno}: соединение мимо guarded_join"
+        guard = "guarded_asof_join" if self.method == "join_asof" else "guarded_join"
+        return f"{self.path}:{self.lineno}: соединение мимо {guard}"
 
 
 def _is_dataframe_join(node: ast.AST) -> bool:
     if not isinstance(node, ast.Call):
         return False
-    if not isinstance(node.func, ast.Attribute) or node.func.attr != "join":
+    if not isinstance(node.func, ast.Attribute) or node.func.attr not in JOIN_METHODS:
         return False
     return any(keyword.arg in JOIN_KEYWORDS for keyword in node.keywords)
 
@@ -56,7 +68,7 @@ def find_unguarded_joins(*paths: Path) -> list[UnguardedJoin]:
             except SyntaxError:
                 continue
             findings += [
-                UnguardedJoin(path=file, lineno=node.lineno)
+                UnguardedJoin(path=file, lineno=node.lineno, method=node.func.attr)
                 for node in ast.walk(tree)
                 if _is_dataframe_join(node)
             ]
