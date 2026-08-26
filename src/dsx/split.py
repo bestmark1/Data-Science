@@ -107,6 +107,15 @@ class SplitResult:
     reserved_immature: int = 0
     """Строки резерва, чей исход ещё не наблюдаем."""
 
+    purged_by_window: dict[str, int] = field(default_factory=dict)
+    """Обучающие решения, вычищенные из-за пересечения окон признаков.
+
+    Проверка N2i возражает верно, но ответить на неё объявлением нельзя:
+    механизм, удовлетворяемый обещанием, защищает хуже своего отсутствия.
+    Поэтому пересечение снимается делом — удалением обучающих решений,
+    чьи окна достают до оценочных, — и цена этого записывается здесь.
+    """
+
     reserved_rows: int = 0
     """Сколько строк в измерительной выборке.
 
@@ -383,6 +392,55 @@ def feature_window_overlap(parts: list[Part], world: World, lookback_days: float
         if touching:
             overlaps[part.name] = touching
     return overlaps
+
+
+def purge_overlapping_train(
+    parts: list[Part], world: World, lookback_days: float
+) -> dict[str, int]:
+    """Убрать из обучения решения, чьи окна признаков достают до оценочных.
+
+    Обратная сторона `feature_window_overlap`: та считает нарушение, эта его
+    снимает. Чистится ОБУЧЕНИЕ, а не оценка. Оценочная выборка — измерительный
+    инструмент, и подрезать её под удобный ответ значит менять вопрос; обучающие
+    же решения расходуемы, и их потеря — честная цена независимости.
+
+    Оценочное решение в момент e задевает обучающее в момент t при
+    e <= t + lookback. Значит опасны обучающие решения объекта с
+    t >= min(e) - lookback, и удаляются именно они.
+
+    Возвращает, сколько решений удалено в каждом окне. Ноль удалённых
+    возможен: если объект в оценке не встречается, чистить нечего.
+    """
+    keys = world.schema.by_role(Role.NATURAL_KEY) or world.schema.by_role(Role.ENTITY_ID)
+    if not keys or lookback_days <= 0.0:
+        return {}
+    key = keys[0].name
+    moment = world.schema.decision_time.name
+    reach = pl.lit(dt.timedelta(days=lookback_days))
+
+    purged: dict[str, int] = {}
+    for part in parts:
+        if key not in part.train.columns or key not in part.evaluate.columns:
+            continue
+        first_eval = part.evaluate.group_by(key).agg(pl.col(moment).min().alias("__first_eval"))
+        # Грануляция объявляется и здесь: group_by даёт одну строку на ключ.
+        marked = guarded_join(
+            part.train,
+            first_eval,
+            on=[key],
+            expect=Cardinality.MANY_TO_ONE,
+            how="left",
+        )
+        # Объект, которого в оценке нет, пересечься не может: __first_eval
+        # пуст, сравнение даёт null, и строка остаётся.
+        kept = marked.filter(
+            pl.col("__first_eval").is_null() | (pl.col(moment) < pl.col("__first_eval") - reach)
+        ).drop("__first_eval")
+        removed = part.train.height - kept.height
+        if removed:
+            part.train = kept
+            purged[part.name] = removed
+    return purged
 
 
 def positive_rates(parts: list[Part]) -> dict[str, float]:

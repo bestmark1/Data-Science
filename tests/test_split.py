@@ -396,3 +396,57 @@ def test_no_group_level_is_reported_as_not_applicable() -> None:
 
     with pytest.raises(NotApplicable, match="не найдено"):
         GroupDependence().run(context_for(BY_ID["clean-baseline"]))
+
+
+# --- вычистка пересечения окон признаков ------------------------------------
+
+
+def _recurring_world():
+    """Мир с повторяющимся объектом: два решения по каждому участку."""
+    from dsx.evals import injectors as inj
+    from dsx.evals.world import build_world
+
+    return inj.repeated_object(build_world())
+
+
+def test_purge_removes_exactly_the_overlapping_training_decisions() -> None:
+    """Убираются обучающие решения, чьи окна достают до оценочных, и только они."""
+    from dsx.split import feature_window_overlap, purge_overlapping_train
+
+    world = _recurring_world()
+    split = split_by_windows(world, CLEAN.outcome, windows_for(world), snapshot_for(world))
+    lookback = 90.0
+
+    before = feature_window_overlap(split.parts, world, lookback)
+    assert before, "мир построен так, чтобы пересечение было"
+
+    purged = purge_overlapping_train(split.parts, world, lookback)
+
+    assert purged, "вычищено должно быть не ноль"
+    after = feature_window_overlap(split.parts, world, lookback)
+    assert after == {}, f"после вычистки пересечений быть не должно, осталось {after}"
+
+
+def test_purge_does_not_touch_the_evaluation_sample() -> None:
+    """Оценка — измерительный инструмент: подрезать её значит менять вопрос."""
+    from dsx.split import purge_overlapping_train
+
+    world = _recurring_world()
+    split = split_by_windows(world, CLEAN.outcome, windows_for(world), snapshot_for(world))
+    heights = {p.name: p.evaluate.height for p in split.parts}
+
+    purge_overlapping_train(split.parts, world, 90.0)
+
+    assert {p.name: p.evaluate.height for p in split.parts} == heights
+
+
+def test_purge_is_silent_when_features_are_instant() -> None:
+    """Мгновенным измерениям пересекаться нечем, и обучение не трогается."""
+    from dsx.split import purge_overlapping_train
+
+    world = _recurring_world()
+    split = split_by_windows(world, CLEAN.outcome, windows_for(world), snapshot_for(world))
+    heights = {p.name: p.train.height for p in split.parts}
+
+    assert purge_overlapping_train(split.parts, world, 0.0) == {}
+    assert {p.name: p.train.height for p in split.parts} == heights

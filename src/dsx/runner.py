@@ -30,6 +30,7 @@ from dsx.split import (
     entity_overlap,
     extent_of,
     positive_rates,
+    purge_overlapping_train,
     reserved_extent,
     split_by_windows,
 )
@@ -62,6 +63,11 @@ class Result:
             f"  {RESERVE}: {self.split.reserved_rows:,}"
             + (f" (из них незрелых {immature:,})" if immature else "")
         )
+        if self.split.purged_by_window:
+            lines.append(
+                "вычищено из обучения (пересечение окон признаков): "
+                + str(self.split.purged_by_window)
+            )
         lines.append(
             "выпало между выборками: "
             + str(self.split.dropped_by_window or self.split.dropped_not_yet_known)
@@ -132,6 +138,17 @@ def run(
     split = split_by_windows(
         world, definition, form.split.to_windows(origin), snapshot, reserve_from, reserve_until
     )
+
+    # Пересечение окон признаков снимается ДЕЛОМ, до проверок: обучающие
+    # решения, чьи окна достают до оценочных, удаляются. Проверка N2i после
+    # этого молчит не потому, что ей пообещали, а потому, что пересечения
+    # больше нет. Цена записывается и попадает в отчёт.
+    reach = max(
+        (c.window.lookback_days for c in world.schema.usable_features() if c.window is not None),
+        default=0.0,
+    )
+    split.purged_by_window = purge_overlapping_train(split.parts, world, reach)
+
     overrides = overrides or OverrideLedger()
     checks = run_checks(list(ALL_CHECKS), Context(world, definition, task, split), overrides)
 

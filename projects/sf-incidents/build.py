@@ -22,6 +22,8 @@ from pathlib import Path
 
 import polars as pl
 
+from dsx.join import Cardinality, guarded_join
+
 PROJECT = Path(__file__).resolve().parent
 RAW = PROJECT / "data" / "raw"
 SOURCE = RAW / "Police_Department_Incident_Reports__2018_to_Present.csv"
@@ -148,25 +150,35 @@ def build() -> pl.DataFrame:
     export = _history(by_event, "happened_at", "nearby_90d_export")
     by_event = by_event.select("report_id").with_columns(export)
 
-    joined = by_report.join(by_event, on="report_id", how="left")
+    # Грануляция объявляется: report_id уникален, соответствие однозначное.
+    joined = guarded_join(
+        by_report, by_event, on=["report_id"], expect=Cardinality.ONE_TO_ONE, how="left"
+    )
 
     # Исход: следующее НАСИЛЬСТВЕННОЕ происшествие на том же участке. Событием
     # считается его РЕГИСТРАЦИЯ: узнать о происшествии раньше, чем о нём
     # сообщили, нельзя.
-    ordered = joined.sort("segment_id", "reported_at").with_columns(
-        pl.col("category").is_in(VIOLENT).alias("is_violent")
+    ordered = joined.with_columns(pl.col("category").is_in(VIOLENT).alias("is_violent")).sort(
+        "reported_at"
     )
-    violent = ordered.filter("is_violent").select(
-        "segment_id", pl.col("reported_at").alias("violent_at")
+    violent = (
+        ordered.filter("is_violent")
+        .select("segment_id", pl.col("reported_at").alias("violent_at"))
+        .sort("violent_at")
     )
-    nearest = (
-        ordered.select("segment_id", "reported_at")
-        .join(violent, on="segment_id", how="left")
-        .filter(pl.col("violent_at") > pl.col("reported_at"))
-        .group_by("segment_id", "reported_at")
-        .agg(pl.col("violent_at").min().alias("next_violent_at"))
+    # Ближайшее СЛЕДУЮЩЕЕ насильственное происшествие — соединение вперёд по
+    # времени. Сдвиг на микросекунду делает границу строгой: сводка не считается
+    # исходом сама для себя, а одновременная с ней — считается.
+    with_next = ordered.with_columns(
+        (pl.col("reported_at") + pl.duration(microseconds=1)).alias("__after")
+    ).join_asof(
+        violent,
+        left_on="__after",
+        right_on="violent_at",
+        by="segment_id",
+        strategy="forward",
     )
-    with_next = ordered.join(nearest, on=["segment_id", "reported_at"], how="left")
+    with_next = with_next.rename({"violent_at": "next_violent_at"}).drop("__after")
 
     return with_next.with_columns(
         pl.col("next_violent_at").alias("next_incident_at"),
