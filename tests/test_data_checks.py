@@ -243,3 +243,74 @@ def test_identical_rates_are_not_reported_as_a_difference() -> None:
     signals = TargetRateStationarity().run(context)
 
     assert signals == [], [s.detail for s in signals]
+
+
+# --- месячная точность (A10) ------------------------------------------------
+
+
+def _outcome_with(bundle, event_kind, deadline_kind):
+    """Тот же мир, но с объявленной грануляцией у двух колонок исхода."""
+    from dsx.evals.registry import Bundle
+    from dsx.evals.world import build_world
+    from dsx.roles import Schema
+
+    world = build_world()
+    columns = []
+    for column in world.schema.columns:
+        if column.name == bundle.outcome.event_column:
+            columns.append(column.model_copy(update={"temporal": event_kind}))
+        elif column.name == bundle.outcome.deadline_column:
+            columns.append(column.model_copy(update={"temporal": deadline_kind}))
+        else:
+            columns.append(column)
+    from dsx.evals.world import World
+
+    return Bundle(
+        case=bundle.case,
+        build=lambda: World(frames=world.frames, schema=Schema(columns=columns)),
+        outcome=bundle.outcome,
+    )
+
+
+def test_month_against_day_is_blocking_even_when_compared_by_date() -> None:
+    """Приведение к дате лечит расхождение дата/момент и только его."""
+    from dsx.checks.contract import MixedTemporalComparison
+    from dsx.evals.registry import BY_ID
+    from dsx.roles import TemporalKind
+
+    base = BY_ID["clean-baseline"]
+    context = context_for(_outcome_with(base, TemporalKind.DATE, TemporalKind.MONTH))
+
+    signals = MixedTemporalComparison().run(context)
+
+    assert [s.finding for s in signals] == [Finding.MIXED_TEMPORAL_COMPARISON]
+    assert signals[0].blocking
+    assert "месяц" in signals[0].detail
+
+
+def test_two_month_columns_are_reported_but_not_blocked() -> None:
+    """Одинаково грубые стороны не смешиваются, но люфт остаётся."""
+    from dsx.checks.contract import MixedTemporalComparison
+    from dsx.evals.registry import BY_ID
+    from dsx.roles import TemporalKind
+
+    base = BY_ID["clean-baseline"]
+    context = context_for(_outcome_with(base, TemporalKind.MONTH, TemporalKind.MONTH))
+
+    signals = MixedTemporalComparison().run(context)
+
+    assert len(signals) == 1
+    assert not signals[0].blocking, "запрещать тут нечего"
+    assert "люфт" in signals[0].detail
+
+
+def test_matching_day_granularity_stays_silent() -> None:
+    """Отрицательный контроль: одинаковая дневная точность возражений не вызывает."""
+    from dsx.checks.contract import MixedTemporalComparison
+    from dsx.evals.registry import BY_ID
+    from dsx.roles import TemporalKind
+
+    base = BY_ID["clean-baseline"]
+    context = context_for(_outcome_with(base, TemporalKind.DATE, TemporalKind.DATE))
+
+    assert MixedTemporalComparison().run(context) == []

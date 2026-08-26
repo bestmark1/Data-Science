@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from dsx.checks.base import Context, Signal
 from dsx.evals.case import Finding
 from dsx.outcome import ComparisonMode
-from dsx.roles import Availability, Role, TemporalKind
+from dsx.roles import Availability, Role, TemporalKind, coarser
 from dsx.task import Premise
 
 UNIVERSAL = frozenset({Premise.UNIVERSAL})
@@ -31,27 +31,54 @@ class MixedTemporalComparison:
     detects: frozenset[Finding] = frozenset({Finding.MIXED_TEMPORAL_COMPARISON})
 
     def run(self, context: Context) -> list[Signal]:
-        if context.outcome.comparison is not ComparisonMode.DIRECT:
-            return []
-
         schema = context.world.schema
         left = schema.get(context.outcome.event_column)
         right = schema.get(context.outcome.deadline_column)
         if left is None or right is None:
             return []
-        if left.temporal is None or right.temporal is None or left.temporal is right.temporal:
+        if left.temporal is None or right.temporal is None:
             return []
 
-        date_side = left if left.temporal is TemporalKind.DATE else right
-        instant_side = right if date_side is left else left
-        return [
-            Signal(
-                Finding.MIXED_TEMPORAL_COMPARISON,
-                f"{date_side.name!r} хранит дату, {instant_side.name!r} — момент времени. "
-                "Прямое сравнение пометит событие в тот же день как произошедшее позже.",
-                blocking=True,
+        if left.temporal is right.temporal:
+            # Одинаково грубые стороны не смешиваются, но месяц остаётся месяцем:
+            # неопределённость никуда не делась, она лишь одинакова с обеих
+            # сторон. Сигнал не блокирующий — запрещать тут нечего, — но
+            # читатель обязан знать, что у числа есть месяц люфта.
+            if left.temporal is TemporalKind.MONTH:
+                return [
+                    Signal(
+                        Finding.MIXED_TEMPORAL_COMPARISON,
+                        f"{left.name!r} и {right.name!r} известны с точностью до месяца. "
+                        "Сравнение честное, но исход у части строк зависит от того, каким "
+                        "днём развёрнут месяц: у полученного числа есть люфт до месяца",
+                        blocking=False,
+                    )
+                ]
+            return []
+
+        rough = coarser(left.temporal, right.temporal)
+        fine = right if rough is left.temporal else left
+        rough_side = left if rough is left.temporal else right
+
+        # Приведение к дате лечит расхождение дата/момент и только его. Месяц
+        # оно не лечит: развернуть «2015-10» в дату можно четырьмя способами, и
+        # на девятом кейсе выбор менял долю уложившихся с 26.3% до 36.6%.
+        if context.outcome.comparison is ComparisonMode.BY_DATE and rough is not TemporalKind.MONTH:
+            return []
+
+        if rough is TemporalKind.MONTH:
+            detail = (
+                f"{rough_side.name!r} известна с точностью до месяца, а {fine.name!r} — "
+                f"до {fine.temporal.value}. Развернуть месяц в дату можно по-разному, и "
+                "выбор соглашения меняет исход у всех строк с месячной точностью. "
+                "Приведение к дате этого не лечит"
             )
-        ]
+        else:
+            detail = (
+                f"{rough_side.name!r} хранит дату, {fine.name!r} — момент времени. "
+                "Прямое сравнение пометит событие в тот же день как произошедшее позже."
+            )
+        return [Signal(Finding.MIXED_TEMPORAL_COMPARISON, detail, blocking=True)]
 
 
 @dataclass(frozen=True)

@@ -53,7 +53,7 @@ columns:
   - {name: nct_id, role: entity_id}
   - {name: sponsor, role: group_id}
   - {name: registered_at, role: decision_time, temporal: date}
-  - {name: completed_at, role: event_time, temporal: date}
+  - {name: completed_at, role: event_time, temporal: month}
   - {name: due_at_promised, role: ignored, temporal: date}
   - {name: status, role: status}
 
@@ -74,7 +74,7 @@ columns:
   # КОНТРОЛЬ К-1: сроком объявлено поле, переписанное ПОСЛЕ исхода.
   # КОНТРОЛЬ К-1: срок взят из текущей записи, и момент его фиксации —
   # последнее обновление, а не регистрация.
-  - {name: due_at_current, role: deadline, temporal: date, value_as_of: last_update_at}
+  - {name: due_at_current, role: deadline, temporal: month, value_as_of: last_update_at}
   - {name: current_primary_date, role: ignored, temporal: date}
   - {name: current_primary_type, role: ignored}
   - {name: deadline_shift_days, role: ignored}

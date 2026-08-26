@@ -53,10 +53,14 @@ columns:
   - {name: nct_id, role: entity_id}
   - {name: sponsor, role: group_id}
   - {name: registered_at, role: decision_time, temporal: date}
-  - {name: completed_at, role: event_time, temporal: date}
+  # Точность месячная: в реестре дата завершения записана месяцем у 6 715
+  # записей и днём у 3 724. Объявляется САМАЯ ГРУБАЯ из встречающихся —
+  # сравнение надёжно настолько, насколько груб худший его участник.
+  - {name: completed_at, role: event_time, temporal: month}
   # Обещание зафиксировано в день регистрации: версия 0 записи и есть
   # состояние на момент решения.
-  - {name: due_at_promised, role: deadline, temporal: date, value_as_of: registered_at}
+  # Обещанный срок записан месяцем ВСЕГДА: 10 369 записей из 10 369.
+  - {name: due_at_promised, role: deadline, temporal: month, value_as_of: registered_at}
   - {name: status, role: status}
 
   # Признаки, известные при регистрации.
