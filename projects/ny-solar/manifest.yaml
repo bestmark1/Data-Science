@@ -1,0 +1,9 @@
+source: NYSERDA, портал открытых данных штата Нью-Йорк
+license: лицензия источником не объявлена; атрибуция NYSERDA
+url: https://data.ny.gov/d/3x8r-34rs
+retrieved_at: '2026-08-26'
+files:
+- name: ny_solar_projects.csv
+  sha256: cbd018722431b7a23275f54f33b0fdd50ed80cbc8a8b9006fc5fee1dac73874e
+  bytes: 85100878
+derived: []
