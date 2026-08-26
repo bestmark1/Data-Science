@@ -196,6 +196,12 @@ def build() -> pl.DataFrame:
         (pl.col("current_primary_date") - pl.col("promised_primary_date"))
         .dt.total_days()
         .alias("deadline_shift_days"),
+        # УМЕРЕННЫЙ пересмотр: обещанный срок, сдвинутый на медианную величину
+        # правки (184 дня). Не крайний случай, где срок становится записью о
+        # случившемся, а обычный — такой, каким пересмотр бывает чаще всего.
+        # Нужен, чтобы проверить, ловит ли ядро пересмотр КАК ТАКОВОЙ или
+        # только его вырожденное следствие.
+        (pl.col("promised_primary_date") + pl.duration(days=184)).alias("due_at_mild"),
     )
 
 

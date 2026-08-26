@@ -9,7 +9,7 @@
 # В первом прогоне намеренно присутствуют положительные контроли §5
 # пре-регистрации.
 
-title: "ClinicalTrials.gov: исследование уложилось в срок, обещанный при регистрации"
+title: "ClinicalTrials.gov: ПРОВЕРКА — сроком объявлен УМЕРЕННО пересмотренный"
 
 # Конец наблюдения: последняя дата, к которой источник мог записать событие.
 # Берётся дата сбора, потому что реестр обновляется непрерывно и объявленного
@@ -54,7 +54,8 @@ columns:
   - {name: sponsor, role: group_id}
   - {name: registered_at, role: decision_time, temporal: date}
   - {name: completed_at, role: event_time, temporal: date}
-  - {name: due_at_promised, role: deadline, temporal: date}
+  - {name: due_at_promised, role: ignored, temporal: date}
+  - {name: due_at_mild, role: deadline, temporal: date}
   - {name: status, role: status}
 
   # Признаки, известные при регистрации.
@@ -75,7 +76,6 @@ columns:
   - {name: current_primary_date, role: ignored, temporal: date}
   - {name: current_primary_type, role: ignored}
   - {name: deadline_shift_days, role: ignored}
-  - {name: due_at_mild, role: ignored, temporal: date}
 
   # Прочее, в постановке не участвующее.
   - {name: promised_primary_date, role: ignored, temporal: date}
@@ -87,10 +87,10 @@ columns:
 
 outcome:
   event_column: completed_at
-  deadline_column: due_at_promised
+  deadline_column: due_at_mild
   comparison: by_date
   positive_class: event_within_deadline
-  estimand: "исследование достигло первичного завершения не позже срока, объявленного им при регистрации"
+  estimand: "исследование достигло первичного завершения не позже срока, пересмотренного на медианную величину"
   degenerate_beyond: 0.1
 
   missing_causes:
