@@ -461,7 +461,9 @@ def segment_bias(
             for row in grouped.iter_rows(named=True)
         ]
 
-    return sorted(found, key=lambda s: -abs(s.bias))
+    # Второй и третий ключи — ради воспроизводимости: при равном смещении
+    # порядок иначе решает group_by, чей порядок в polars не определён.
+    return sorted(found, key=lambda s: (-abs(s.bias), s.feature, s.value))
 
 
 def segment_section(segments: list[Segment], show: int = 10) -> str:

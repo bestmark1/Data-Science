@@ -136,6 +136,12 @@ class StatusEventConflict:
                 pl.col(event).null_count().alias("without_event"),
             )
             .filter((pl.col("without_event") > 0) & (pl.col("without_event") < pl.col("rows")))
+            # Порядок строк после group_by в polars не определён, и отчёт
+            # переставал воспроизводиться дословно: седьмой кейс дал два
+            # прогона, различающиеся местом одной строки. Заключение от этого
+            # не менялось, но отпечаток, которым заключение связано с
+            # протоколом, — менялся.
+            .sort(column, nulls_last=True)
         )
 
         return [
@@ -257,7 +263,9 @@ class PostTreatmentMissingness:
                 missing.group_by(status)
                 .agg(pl.len().alias("n"))
                 .with_columns((pl.col("n") / missing.height).alias("share"))
-                .sort("share", descending=True)
+                # Второй ключ — против той же невоспроизводимости: при равных
+                # долях порядок решал бы случай.
+                .sort(["share", status], descending=[True, False], nulls_last=True)
             )
             top = share.row(0, named=True)
             # Сравнение с пустым значением через `==` даёт null, а не истину:

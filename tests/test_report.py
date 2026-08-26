@@ -165,3 +165,35 @@ def test_sample_spending_reaches_the_report() -> None:
 def test_empty_statement_is_refused() -> None:
     with pytest.raises(ValidationError):
         study().conclude("")
+
+
+def test_signal_order_does_not_depend_on_group_by() -> None:
+    """Отчёт обязан воспроизводиться дословно, а не «по существу».
+
+    Седьмой кейс дал два прогона, различающиеся местом одной строки: порядок
+    после group_by в polars не определён. Заключение от этого не менялось, но
+    отпечаток, которым заключение связано с протоколом, — менялся.
+    """
+    import polars as pl
+
+    from dsx.checks.base import Context
+    from dsx.checks.data import StatusEventConflict
+    from dsx.evals.registry import BY_ID
+
+    base = BY_ID["clean-baseline"]
+    world = base.build()
+    # Много разных статусов: чем их больше, тем вероятнее перестановка.
+    frame = world.main.with_columns(
+        pl.when(pl.arange(0, pl.len()) % 4 == 0)
+        .then(None)
+        .otherwise(pl.col("event_at"))
+        .alias("event_at")
+    )
+    world = world.replace_main(frame)
+    context = Context(world, base.outcome, None, None)
+
+    runs = [[s.detail for s in StatusEventConflict().run(context)] for _ in range(5)]
+
+    assert runs[0], "кейс должен давать хотя бы один сигнал, иначе тест пуст"
+    assert all(r == runs[0] for r in runs), runs
+    assert runs[0] == sorted(runs[0]), "порядок обязан быть определённым, а не случайным"
