@@ -128,8 +128,11 @@ def download_dataset(slug: str, destination: Path, *, credentials: tuple[str, st
     )
     opener = urllib.request.build_opener(_StripAuthOnCrossHost)
 
+    declared: int | None = None
     try:
         with opener.open(request, timeout=_TIMEOUT_SECONDS) as response:
+            length = response.headers.get("Content-Length")
+            declared = int(length) if length and length.isdigit() else None
             with partial.open("wb") as handle:
                 while chunk := response.read(_CHUNK):
                     handle.write(chunk)
@@ -145,12 +148,41 @@ def download_dataset(slug: str, destination: Path, *, credentials: tuple[str, st
         partial.unlink(missing_ok=True)
         raise DownloadFailed(f"сеть недоступна или чтение прервано: {exc}") from exc
 
-    if partial.read_bytes()[:4] != _ZIP_MAGIC:
+    received = partial.stat().st_size
+    with partial.open("rb") as handle:
+        head = handle.read(4)
+    if head != _ZIP_MAGIC:
         partial.unlink(missing_ok=True)
         raise DownloadFailed("полученный файл не является ZIP-архивом")
 
+    # Совпадения первых четырёх байт мало: оборванная загрузка начинается
+    # правильной подписью и кончается ничем. На шестом кейсе так пришло
+    # 159.8 МБ вместо 169, и распаковка упала уже после того, как файл был
+    # объявлен полученным.
+    if declared is not None and received != declared:
+        partial.unlink(missing_ok=True)
+        raise DownloadFailed(
+            f"загрузка оборвана: получено {received:,} байт из объявленных {declared:,}"
+        )
+    if not _has_central_directory(partial):
+        partial.unlink(missing_ok=True)
+        raise DownloadFailed("в архиве нет оглавления: загрузка оборвана либо файл повреждён")
+
     os.replace(partial, archive)
     return archive
+
+
+def _has_central_directory(archive: Path, window: int = 1 << 16) -> bool:
+    """Есть ли в конце архива запись оглавления.
+
+    Признак завершённости, не зависящий от объявленного размера: сервер может
+    его не прислать, а оборванный архив всё равно не имеет оглавления.
+    """
+    size = archive.stat().st_size
+    with archive.open("rb") as handle:
+        handle.seek(max(0, size - window))
+        tail = handle.read()
+    return b"PK\x05\x06" in tail or b"PK\x06\x06" in tail
 
 
 def extract_archive(

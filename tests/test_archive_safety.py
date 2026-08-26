@@ -74,3 +74,23 @@ def test_refusal_names_both_sizes(tmp_path: Path) -> None:
         extract_archive(archive, tmp_path / "out", max_uncompressed_bytes=1_000_000)
 
     assert "ГиБ" in str(excinfo.value) and "явно" in str(excinfo.value)
+
+
+def test_truncated_archive_is_refused(tmp_path: Path) -> None:
+    """Оборванная загрузка начинается правильной подписью и кончается ничем.
+
+    Проверки первых четырёх байт мало: на шестом кейсе так пришло 159.8 МБ
+    вместо 169, и распаковка упала уже после того, как файл был объявлен
+    полученным.
+    """
+    from dsx.io.acquire import _has_central_directory
+
+    whole = tmp_path / "whole.zip"
+    with zipfile.ZipFile(whole, "w") as bundle:
+        bundle.writestr("payload.csv", "a" * 100_000)
+
+    cut = tmp_path / "cut.zip"
+    cut.write_bytes(whole.read_bytes()[: whole.stat().st_size // 2])
+
+    assert _has_central_directory(whole)
+    assert not _has_central_directory(cut)
