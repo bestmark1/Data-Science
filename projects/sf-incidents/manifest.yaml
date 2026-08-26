@@ -1,0 +1,12 @@
+source: San Francisco Police Department, портал открытых данных города
+license: CC BY 4.0 (объявлена источником)
+url: https://www.kaggle.com/datasets/vivovinco/san-francisco-incident-reports-2018present
+retrieved_at: '2026-08-26'
+files:
+- name: Police_Department_Incident_Reports__2018_to_Present.csv
+  sha256: e3c2c048cfd7689514e73a9772a22e791de4bf03c0d0327d89e12dcfb3e6dba9
+  bytes: 292150249
+- name: vivovinco_san-francisco-incident-reports-2018present.zip
+  sha256: 22279c6a04c22ebe177b7e2408eb636b781dbd542ba10bc1743898ece7ef0cc1
+  bytes: 71121901
+derived: []

@@ -1,0 +1,115 @@
+# ФОРМА ШЕСТОГО КЕЙСА
+#
+# Предсказывается: случится ли новое происшествие на участке улицы в течение
+# 90 дней после регистрации текущей сводки.
+
+title: "SF incident reports: насильственное происшествие на участке за 7 дней"
+
+# Конец наблюдения: последняя дата регистрации в выгрузке. Объявленного среза
+# у источника нет, и это записано допущением.
+observed_until: 2023-11-25T00:00:00
+observed_until_source: "последняя дата регистрации в выгрузке; объявленного среза у источника нет"
+
+# --- ДОПУЩЕНИЯ ---------------------------------------------------------------
+
+assumptions:
+  - statement: "моментом решения является регистрация сводки, а не время происшествия"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если решения принимаются по иным сведениям, чем зарегистрированные сводки, момент выбран не там, где он происходит, и признаки дают знание, которого не было"
+
+  - statement: "признак истории участка, посчитанный по всей выгрузке, отличается от посчитанного на момент решения у двух третей строк"
+    basis: data
+    author: "автор"
+    evidence: "расчёт при сборке: nearby_90d_known против nearby_90d_export, различаются у 500 558 из 753 186 строк"
+    consequence: "обычный способ построения истории места даёт значение, которого в момент решения не существовало; величина ошибки измеряется сравнением двух моделей"
+
+  - statement: "конец наблюдения совпадает с последней датой регистрации"
+    basis: data
+    author: "автор"
+    evidence: "расчёт: максимум reported_at — 2023-11-24"
+    consequence: "если сбор оборвался раньше, часть повторных происшествий не попала в выгрузку, и участки размечены как спокойные, хотя исход неизвестен"
+
+  - statement: "участок улицы является объектом, о котором принимается решение повторно"
+    basis: data
+    author: "автор"
+    evidence: "расчёт: 6 476 участков, все сводки приходятся на участки с более чем одной"
+    consequence: "если решения принимаются по кварталам или районам, объект выбран мельче нужного, и зависимость между соседними участками остаётся невидимой"
+
+# --- СХЕМА -------------------------------------------------------------------
+
+columns:
+  - {name: report_id, role: entity_id}
+  - {name: segment_id, role: natural_key}
+  - {name: reported_at, role: decision_time, temporal: instant}
+  - {name: next_incident_at, role: outcome_component, temporal: instant}
+  - {name: horizon_7d, role: deadline, temporal: instant}
+
+  # Горизонты-кандидаты, не выбранные сроком.
+  - {name: horizon_3d, role: ignored, temporal: instant}
+  - {name: horizon_14d, role: ignored, temporal: instant}
+  - {name: horizon_30d, role: ignored, temporal: instant}
+
+  # Время происшествия известно при регистрации, но решением не является.
+  # Ролью measured_at объявлено НЕ БЫЛО: у признака-агрегата по окну нет
+  # единого момента измерения, он считается по множеству сводок. Первая версия
+  # объявляла его, и проверка S7 верно возразила — расхождение до 1980 дней.
+  - {name: happened_at, role: ignored, temporal: instant}
+
+  # ПРИЗНАК ПО СРЕЗУ: учтены только сводки, зарегистрированные до решения.
+  - {name: nearby_90d_known, role: feature, availability: at_decision, source_of_claim: "код сборки: окно по времени РЕГИСТРАЦИИ", window_lookback_days: 90, window_source: "код сборки build.py, срез на момент решения"}
+
+  # ПРИЗНАК ПО ВЫГРУЗКЕ: учтены сводки, произошедшие в окне, включая записанные
+  # позже. Так считает всякий, кто не думал о запаздывании. Объявляется наравне
+  # с предыдущим намеренно: ядро обязано либо различить их, либо промолчать, и
+  # это предмет предсказания P-1.
+  - {name: nearby_90d_export, role: feature, availability: at_decision, source_of_claim: "код сборки: окно по времени ПРОИСШЕСТВИЯ", window_lookback_days: 90, window_source: "код сборки build.py, вся выгрузка"}
+
+  # Свойства сводки, известные при регистрации.
+  - {name: category, role: feature, availability: at_decision, source_of_claim: "классификация происшествия в сводке", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: report_type, role: feature, availability: at_decision, source_of_claim: "тип сводки: первичная, дополнительная", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: filed_online, role: feature, availability: at_decision, source_of_claim: "способ подачи сводки", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: district, role: feature, availability: at_decision, source_of_claim: "полицейский округ участка", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: neighborhood, role: feature, availability: at_decision, source_of_claim: "район участка", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: report_lag_hours, role: feature, availability: at_decision, source_of_claim: "код сборки: часы от происшествия до регистрации", window_lookback_days: 0, window_source: "код сборки build.py"}
+
+  # Известно только после решения.
+  - {name: subcategory, role: ignored}
+  - {name: resolution, role: ignored}   # исход разбирательства по сводке
+  - {name: next_violent_at, role: ignored}
+  - {name: is_violent, role: ignored}
+
+# --- КОНТРАКТ ИСХОДА ---------------------------------------------------------
+
+outcome:
+  event_column: next_incident_at
+  deadline_column: horizon_7d
+  comparison: direct
+  positive_class: event_within_deadline
+  estimand: "на участке будет зарегистрирована сводка о НАСИЛЬСТВЕННОМ происшествии в течение 7 дней после текущей"
+
+  missing_causes:
+    - name: "насильственных происшествий на участке к сроку не зарегистрировано"
+      meaning: not_occurred
+      assumption: "отсутствие новой сводки означает отсутствие происшествия, а не то, что о нём не сообщили; сообщения добровольны, и это допущение — предмет предсказания об информативности наблюдения"
+
+# --- ТИП ЗАДАЧИ --------------------------------------------------------------
+
+task:
+  target_kind: binary
+  outcome_timing: delayed
+  has_process: false
+  is_stream: true
+  object_lifetime: recurring
+
+# --- СПЛИТ -------------------------------------------------------------------
+# Период регистрации 2018-01-01 .. 2023-11-24, это 2153 дня.
+# Метки зреют до дня 2063 (2153 минус горизонт 90).
+
+split:
+  windows:
+    - {name: w0, start_day: 1200, stop_day: 1440}
+    - {name: w1, start_day: 1440, stop_day: 1680}
+    - {name: w2, start_day: 1680, stop_day: 1920}
+  reserve_from_day: 1920
+  reserve_until_day: 2063
