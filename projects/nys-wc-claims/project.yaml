@@ -46,7 +46,7 @@ columns:
   - {name: claim_id, role: entity_id}
   - {name: assembled_at, role: decision_time, temporal: date}
   - {name: first_hearing_at, role: outcome_component, temporal: date}
-  - {name: horizon_180d, role: deadline, temporal: date}
+  - {name: horizon_180d, role: deadline, temporal: date, value_as_of: assembled_at}
 
   # Горизонты-кандидаты, не выбранные в качестве срока.
   - {name: horizon_30d, role: ignored, temporal: date}

@@ -70,6 +70,9 @@ class ColumnForm(BaseModel):
     """Колонка, по времени которой строка отбирается в окно признака."""
 
     measured_at: str | None = None
+    value_as_of: str | None = None
+    """Колонка с моментом, на который зафиксировано значение этой колонки."""
+
     direction: Direction | None = None
     """Куда признак двигает риск по доменному знанию, до просмотра данных."""
 
@@ -95,6 +98,7 @@ class ColumnForm(BaseModel):
             source_of_claim=self.source_of_claim,
             window=window,
             measured_at=self.measured_at,
+            value_as_of=self.value_as_of,
             direction=self.direction,
         )
 

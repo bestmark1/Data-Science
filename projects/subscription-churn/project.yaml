@@ -43,7 +43,7 @@ columns:
   - {name: customer_id, role: entity_id}
   - {name: signed_up_at, role: decision_time, temporal: instant}
   - {name: cancelled_at, role: outcome_component, temporal: instant}
-  - {name: horizon_180d, role: deadline, temporal: instant}
+  - {name: horizon_180d, role: deadline, temporal: instant, value_as_of: signed_up_at}
 
   # Горизонты-кандидаты, не выбранные сроком.
   - {name: horizon_30d, role: ignored, temporal: instant}

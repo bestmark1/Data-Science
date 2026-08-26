@@ -42,7 +42,7 @@ columns:
   - {name: license_id, role: natural_key}
   - {name: inspected_at, role: decision_time, temporal: date}
   - {name: next_failure_at, role: outcome_component, temporal: date}
-  - {name: horizon_180d, role: deadline, temporal: date}
+  - {name: horizon_180d, role: deadline, temporal: date, value_as_of: inspected_at}
   # Статус относится к СОБЫТИЮ, то есть к следующей инспекции: именно он
   # объясняет, почему провала не случилось. Первая версия объявляла статусом
   # результат текущей инспекции, и ядро отказалось размечать — верно, потому

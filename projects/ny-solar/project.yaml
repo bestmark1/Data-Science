@@ -55,7 +55,7 @@ columns:
   - {name: contractor, role: group_id}
   - {name: applied_at, role: decision_time, temporal: instant}
   - {name: completed_at, role: event_time, temporal: instant}
-  - {name: due_at, role: deadline, temporal: instant}
+  - {name: due_at, role: deadline, temporal: instant, value_as_of: applied_at}
   - {name: status, role: status}
 
   # Признаки, известные при подаче заявки. Все мгновенные.

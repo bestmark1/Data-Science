@@ -23,6 +23,7 @@ columns:
   - name: horizon_on
     role: deadline
     temporal: instant
+    value_as_of: decided_at
 
   # Остатки соединений. Роль ignored — это ответ «колонка есть и не нужна»;
   # промолчать значило бы оставить их невидимыми для всех проверок.

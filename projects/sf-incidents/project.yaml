@@ -43,7 +43,7 @@ columns:
   - {name: segment_id, role: natural_key}
   - {name: reported_at, role: decision_time, temporal: instant}
   - {name: next_incident_at, role: outcome_component, temporal: instant}
-  - {name: horizon_7d, role: deadline, temporal: instant}
+  - {name: horizon_7d, role: deadline, temporal: instant, value_as_of: reported_at}
 
   # Горизонты-кандидаты, не выбранные сроком.
   - {name: horizon_3d, role: ignored, temporal: instant}

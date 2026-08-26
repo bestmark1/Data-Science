@@ -23,6 +23,7 @@ columns:
   - name: horizon_on
     role: deadline
     temporal: instant
+    value_as_of: decided_at
   - name: measured_at
     role: measured_at
     temporal: instant

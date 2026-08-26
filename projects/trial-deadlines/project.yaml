@@ -54,7 +54,9 @@ columns:
   - {name: sponsor, role: group_id}
   - {name: registered_at, role: decision_time, temporal: date}
   - {name: completed_at, role: event_time, temporal: date}
-  - {name: due_at_promised, role: deadline, temporal: date}
+  # Обещание зафиксировано в день регистрации: версия 0 записи и есть
+  # состояние на момент решения.
+  - {name: due_at_promised, role: deadline, temporal: date, value_as_of: registered_at}
   - {name: status, role: status}
 
   # Признаки, известные при регистрации.
@@ -80,6 +82,7 @@ columns:
   # Прочее, в постановке не участвующее.
   - {name: promised_primary_date, role: ignored, temporal: date}
   - {name: version_date, role: ignored, temporal: date}
+  - {name: last_update_at, role: ignored, temporal: date}
   - {name: started_at, role: ignored, temporal: date}
   - {name: has_results, role: ignored}
 

@@ -196,9 +196,88 @@ class WindowClockIsKnowable:
         return signals
 
 
+@dataclass(frozen=True)
+class ValueFixedBeforeDecision:
+    """S10. Значение поля зафиксировано ПОЗЖЕ момента, когда решение принималось.
+
+    Поле, которое источник переписывает, читается сегодня не тем, каким было
+    тогда. Девятый кейс: срок клинического исследования пересматривался у 73.9%
+    записей с медианой 184 дня, а у завершившихся переписывался в дату самого
+    завершения. Взятый из текущей выгрузки, он давал 100% выполненных обещаний
+    вместо 36.5% — разницу в 63.5 процентных пункта.
+
+    Проверяется прежде всего СРОК. Именно через него пересмотр смертелен:
+    переписанный срок перестаёт быть обещанием и становится записью о
+    случившемся, после чего исход выполняется тождественно. Признаки
+    проверяются тоже, если объявили момент фиксации.
+
+    Отсутствие объявления у срока блокирует. Вопрос «на какой момент
+    зафиксировано это значение» девять кейсов не задавался ни разу, и умолчание
+    здесь неотличимо от невнимательности.
+
+    Предел назван прямо: объявление сверяется данными только тогда, когда
+    названная колонка есть в таблице решений. Объявить момент фиксации равным
+    моменту решения и солгать — можно; проверка увидит это лишь если в данных
+    есть чем возразить. Та же граница, что у S9.
+    """
+
+    requirement: str = "S10"
+    premises: frozenset[Premise] = frozenset({Premise.UNIVERSAL})
+    detects: frozenset[Finding] = frozenset({Finding.VALUE_REVISED_AFTER_DECISION})
+
+    share: float = 0.05
+    """Какая доля позже зафиксированных значений считается систематической."""
+
+    def run(self, context: Context) -> list[Signal]:
+        schema = context.world.schema
+        decision = schema.decision_time
+        if decision is None:
+            return []
+
+        deadlines = schema.by_role(Role.DEADLINE)
+        signals: list[Signal] = []
+
+        undeclared = [c.name for c in deadlines if not c.value_as_of]
+        if undeclared:
+            signals.append(
+                Signal(
+                    Finding.VALUE_REVISED_AFTER_DECISION,
+                    f"срок {sorted(undeclared)!r} не объявил, НА КАКОЙ МОМЕНТ "
+                    "зафиксировано его значение. Поле, переписанное после исхода, "
+                    "перестаёт быть обещанием и становится записью о случившемся, "
+                    "и отличить одно от другого без объявления нельзя",
+                    blocking=True,
+                )
+            )
+
+        frame = context.world.main
+        checked = [c for c in (*deadlines, *schema.usable_features()) if c.value_as_of]
+        for column in checked:
+            fixed = column.value_as_of
+            if fixed not in frame.columns or decision.name not in frame.columns:
+                continue  # сверить нечем, и это видно в отчёте как непроверяемое
+            if fixed == decision.name:
+                continue  # значение зафиксировано в момент решения: пересмотра нет
+            later = frame.filter(pl.col(fixed) > pl.col(decision.name)).height
+            if later < frame.height * self.share:
+                continue
+            signals.append(
+                Signal(
+                    Finding.VALUE_REVISED_AFTER_DECISION,
+                    f"значение {column.name!r} зафиксировано на момент {fixed!r}, "
+                    f"а решение принималось в {decision.name!r}: у {later:,} строк "
+                    f"({later / frame.height:.1%}) первое позже второго. Это значение "
+                    "решавшему известно не было",
+                    blocking=True,
+                )
+            )
+        return signals
+
+
 PREMISE_CHECKS = [
     PremisesMatchData(),
     FeatureWindowsMatchData(),
     EveryColumnIsDeclared(),
     WindowClockIsKnowable(),
+    ValueFixedBeforeDecision(),
 ]

@@ -20,7 +20,7 @@ FORM = textwrap.dedent("""
     columns:
       - {name: entity_id, role: entity_id}
       - {name: decided_at, role: decision_time, temporal: instant}
-      - {name: deadline_on, role: deadline, temporal: date}
+      - {name: deadline_on, role: deadline, temporal: date, value_as_of: decided_at}
       - {name: event_at, role: outcome_component, temporal: instant}
       - {name: status, role: status}
       - name: lead_days

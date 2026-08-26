@@ -58,6 +58,7 @@ class Finding(StrEnum):
     UNDECLARED_GROUP = "undeclared_group"
     DEGENERATE_OUTCOME = "degenerate_outcome"
     WINDOW_CLOCK_UNKNOWABLE = "window_clock_unknowable"
+    VALUE_REVISED_AFTER_DECISION = "value_revised_after_decision"
 
 
 class Expectation(BaseModel):

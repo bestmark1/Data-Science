@@ -578,3 +578,28 @@ def window_clock_from_the_event(
         ),
     )
     return declare_feature_windows(world, lookback_days, clock="occurred_at")
+
+
+def deadline_revised_after_decision(world: World, lag_days: int = 120) -> World:
+    """Срок зафиксирован ПОЗЖЕ момента решения: значение переписано задним числом.
+
+    Воспроизводит девятый кейс. Там срок клинического исследования, обещанный
+    при регистрации, пересматривался у 73.9% записей, а у завершившихся
+    переписывался в дату самого завершения: 100% выполненных обещаний вместо
+    36.5%.
+
+    Колонка момента фиксации добавляется, потому что в чистом мире её нет:
+    там срок назначается в момент решения и не меняется.
+    """
+    moment = world.schema.decision_time.name
+    frame = world.main.with_columns(
+        (pl.col(moment) + pl.duration(days=lag_days)).alias("deadline_fixed_at")
+    )
+    columns = [
+        c.model_copy(update={"value_as_of": "deadline_fixed_at"}) if c.role is Role.DEADLINE else c
+        for c in world.schema.columns
+    ]
+    columns.append(
+        ColumnSpec(name="deadline_fixed_at", role=Role.IGNORED, temporal=TemporalKind.INSTANT)
+    )
+    return World(frames={**world.frames, "main": frame}, schema=Schema(columns=columns))

@@ -58,7 +58,7 @@ columns:
   - {name: bank, role: group_id}
   - {name: disbursed_at, role: decision_time, temporal: instant}
   - {name: charged_off_at, role: event_time, temporal: instant}
-  - {name: due_at, role: deadline, temporal: instant}
+  - {name: due_at, role: deadline, temporal: instant, value_as_of: disbursed_at}
   - {name: status, role: status}
 
   # Признаки, известные в момент выдачи. Все мгновенные: окон нет, и потому

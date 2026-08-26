@@ -69,6 +69,7 @@ def _status_dates(record: dict) -> dict:
         "primary_date": primary.get("date"),
         "primary_type": primary.get("type"),
         "start_date": status.get("startDateStruct", {}).get("date"),
+        "last_update": status.get("lastUpdatePostDateStruct", {}).get("date"),
         "posted": status.get("studyFirstPostDateStruct", {}).get("date"),
         "overall_status": status.get("overallStatus"),
     }
@@ -89,6 +90,10 @@ def _current_rows() -> list[dict]:
                 "current_primary_date": _parse(dates["primary_date"]),
                 "current_primary_type": dates["primary_type"],
                 "started_at": _parse(dates["start_date"]),
+                # Момент, НА КОТОРЫЙ зафиксировано текущее содержимое записи.
+                # Без него объявленный момент фиксации нечем сверить, и
+                # проверка S10 честно молчит.
+                "last_update_at": _parse(dates["last_update"]),
                 "status": dates["overall_status"],
                 "sponsor": sponsor.get("name"),
                 "sponsor_class": sponsor.get("class"),

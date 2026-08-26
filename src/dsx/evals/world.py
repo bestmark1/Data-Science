@@ -41,7 +41,14 @@ def base_schema() -> Schema:
         columns=[
             ColumnSpec(name="entity_id", role=Role.ENTITY_ID),
             ColumnSpec(name="decided_at", role=Role.DECISION_TIME, temporal=TemporalKind.INSTANT),
-            ColumnSpec(name="deadline_on", role=Role.DEADLINE, temporal=TemporalKind.DATE),
+            # Срок назначается в момент решения и в этом мире не пересматривается:
+            # момент фиксации совпадает с моментом решения.
+            ColumnSpec(
+                name="deadline_on",
+                role=Role.DEADLINE,
+                temporal=TemporalKind.DATE,
+                value_as_of="decided_at",
+            ),
             ColumnSpec(
                 name="event_at",
                 role=Role.OUTCOME_COMPONENT,
