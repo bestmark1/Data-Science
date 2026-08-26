@@ -303,14 +303,24 @@ def repeated_object(world: World, per_object: int = 3, seed: int = 23) -> World:
     return World(frames={**world.frames, "main": frame}, schema=schema)
 
 
-def declare_feature_windows(world: World, lookback_days: float, lag_days: float = 0.0) -> World:
+def declare_feature_windows(
+    world: World,
+    lookback_days: float,
+    lag_days: float = 0.0,
+    clock: str = "decided_at",
+) -> World:
     """Объявить окно у всех признаков.
 
     Само по себе объявление дефектом не является: оно лишь делает видимым то,
     как признак посчитан. Дефектом становится ширина окна, при которой окна
     двух решений одного объекта пересекаются.
+
+    `clock` — по какому времени строка отбирается в окно. По умолчанию момент
+    решения: так окно видит только известное.
     """
-    window = FeatureWindow(lookback_days=lookback_days, lag_days=lag_days, source_of_claim=SOURCE)
+    window = FeatureWindow(
+        lookback_days=lookback_days, lag_days=lag_days, source_of_claim=SOURCE, clock=clock
+    )
     columns = [
         c.model_copy(update={"window": window}) if c.role is Role.FEATURE else c
         for c in world.schema.columns
@@ -329,7 +339,7 @@ def stale_measurements(world: World, age_days: int = 3, lookback_days: float = 0
     frame = world.main.with_columns(
         (pl.col(moment) - pl.duration(days=age_days)).alias("measured_at")
     )
-    window = FeatureWindow(lookback_days=lookback_days, source_of_claim=SOURCE)
+    window = FeatureWindow(lookback_days=lookback_days, source_of_claim=SOURCE, clock=moment)
     columns = [
         c.model_copy(update={"window": window, "measured_at": "measured_at"})
         if c.role is Role.FEATURE
@@ -539,3 +549,32 @@ def degenerate_outcome(world: World, past_deadline_days: int = 1) -> World:
         .alias("event_at")
     )
     return world.replace_main(shifted)
+
+
+def window_clock_from_the_event(
+    world: World, lookback_days: float = 30.0, lag_days: int = 5
+) -> World:
+    """Окно признака отсчитано по времени СОБЫТИЯ, а не по времени сведений о нём.
+
+    Воспроизводит шестой кейс: у сводки о происшествии два времени — когда оно
+    случилось и когда о нём сообщили, — и второе позже первого. Окно по первому
+    захватывает записи, о которых на момент решения ещё не сообщили. В таблице
+    обе колонки просто числа, и без объявления они неразличимы.
+
+    Колонка добавляется, потому что в чистом мире её нет: событие там лежит
+    ПОСЛЕ решения, а нужен случай, где запись описывает уже случившееся.
+    """
+    moment = world.schema.decision_time.name
+    frame = world.main.with_columns(
+        (pl.col(moment) - pl.duration(days=lag_days)).alias("occurred_at")
+    )
+    world = World(
+        frames={**world.frames, "main": frame},
+        schema=Schema(
+            columns=[
+                *world.schema.columns,
+                ColumnSpec(name="occurred_at", role=Role.IGNORED, temporal=TemporalKind.INSTANT),
+            ]
+        ),
+    )
+    return declare_feature_windows(world, lookback_days, clock="occurred_at")

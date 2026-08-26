@@ -57,6 +57,7 @@ class Finding(StrEnum):
     GROUP_OVERLAP_ACROSS_SPLITS = "group_overlap_across_splits"
     UNDECLARED_GROUP = "undeclared_group"
     DEGENERATE_OUTCOME = "degenerate_outcome"
+    WINDOW_CLOCK_UNKNOWABLE = "window_clock_unknowable"
 
 
 class Expectation(BaseModel):

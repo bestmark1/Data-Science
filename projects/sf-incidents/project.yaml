@@ -57,13 +57,13 @@ columns:
   - {name: happened_at, role: ignored, temporal: instant}
 
   # ПРИЗНАК ПО СРЕЗУ: учтены только сводки, зарегистрированные до решения.
-  - {name: nearby_90d_known, role: feature, availability: at_decision, source_of_claim: "код сборки: окно по времени РЕГИСТРАЦИИ", window_lookback_days: 90, window_source: "код сборки build.py, срез на момент решения"}
+  - {name: nearby_90d_known, role: feature, availability: at_decision, source_of_claim: "код сборки: окно по времени РЕГИСТРАЦИИ", window_lookback_days: 90, window_source: "код сборки build.py, срез на момент решения", window_clock: reported_at}
 
   # ПРИЗНАК ПО ВЫГРУЗКЕ: учтены сводки, произошедшие в окне, включая записанные
   # позже. Так считает всякий, кто не думал о запаздывании. Объявляется наравне
   # с предыдущим намеренно: ядро обязано либо различить их, либо промолчать, и
   # это предмет предсказания P-1.
-  - {name: nearby_90d_export, role: feature, availability: at_decision, source_of_claim: "код сборки: окно по времени ПРОИСШЕСТВИЯ", window_lookback_days: 90, window_source: "код сборки build.py, вся выгрузка"}
+  - {name: nearby_90d_export, role: feature, availability: at_decision, source_of_claim: "код сборки: окно по времени ПРОИСШЕСТВИЯ", window_lookback_days: 90, window_source: "код сборки build.py, вся выгрузка", window_clock: happened_at}
 
   # Свойства сводки, известные при регистрации.
   - {name: category, role: feature, availability: at_decision, source_of_claim: "классификация происшествия в сводке", window_lookback_days: 0, window_source: "код сборки build.py"}

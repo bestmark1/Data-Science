@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import polars as pl
+
 from dsx.checks.base import Context, Signal
 from dsx.evals.case import Finding
 from dsx.premises import verify
+from dsx.roles import Role
 from dsx.task import Premise
 from dsx.windows import verify_windows
 
@@ -95,4 +98,107 @@ class EveryColumnIsDeclared:
         ]
 
 
-PREMISE_CHECKS = [PremisesMatchData(), FeatureWindowsMatchData(), EveryColumnIsDeclared()]
+@dataclass(frozen=True)
+class WindowClockIsKnowable:
+    """S9. Окно признака отсчитано по времени, которого на момент решения нет.
+
+    У записи бывает два времени: когда описанное ею случилось и когда о ней
+    стало известно. Окно, отсчитанное по первому, захватывает записи, о которых
+    на момент решения ещё не сообщили. В таблице обе колонки — просто числа, и
+    отличить одно окно от другого без объявления нельзя: шестой кейс собрал два
+    признака, различающиеся ровно этим, и ядро не возразило ни разу.
+
+    Объявление проверяется данными. Если объявленные часы систематически
+    отстают от момента, когда запись становится известной, окно захватывает
+    неизвестное — и это находка, а не оговорка.
+
+    Там, где часы лежат за пределами таблицы решений (показания приборов,
+    отдельный журнал), сверить нечем, и проверка честно молчит: объявление
+    остаётся объявлением и видно в отчёте как непроверяемое.
+    """
+
+    requirement: str = "S9"
+    premises: frozenset[Premise] = frozenset({Premise.UNIVERSAL})
+    detects: frozenset[Finding] = frozenset({Finding.WINDOW_CLOCK_UNKNOWABLE})
+
+    share: float = 0.05
+    """Какая доля отставших строк считается систематической.
+
+    Единичное отставание бывает опечаткой в источнике; порог отделяет её от
+    устройства данных. На шестом кейсе отставали 25.3% строк.
+    """
+
+    def _knowable_at(self, context: Context) -> str | None:
+        """Колонка, по которой запись становится известной.
+
+        Порядок не произволен. Объявленный момент поступления сведений главнее
+        всего; за ним момент измерения — показание прибора становится известным
+        тогда, когда снято, и отдельного «сообщили» у него нет. Если не
+        объявлено ни того ни другого, запись становится известной в собственный
+        момент решения.
+
+        Первая версия всегда брала момент решения и кричала на законном: у
+        показаний за неделю до визита время замера, разумеется, раньше визита.
+        Проверка, срабатывающая на обычном устройстве данных, запрещена
+        правилами этого проекта.
+        """
+        for role in (Role.AVAILABLE_AT, Role.MEASURED_AT):
+            declared = context.world.schema.by_role(role)
+            if declared:
+                return declared[0].name
+        decision = context.world.schema.decision_time
+        return decision.name if decision else None
+
+    def run(self, context: Context) -> list[Signal]:
+        features = [
+            c
+            for c in context.world.schema.usable_features()
+            if c.window is not None and c.window.lookback_days > 0.0
+        ]
+        if not features:
+            return []
+
+        undeclared = sorted(c.name for c in features if not c.window.clock)
+        signals = [
+            Signal(
+                Finding.WINDOW_CLOCK_UNKNOWABLE,
+                f"признаки {undeclared!r} объявили окно, но не сказали, ПО КАКОМУ "
+                "времени строка в него отбирается. Время события и время, когда о "
+                "нём стало известно, — разные колонки, и окно по первому захватывает "
+                "то, чего на момент решения ещё нет",
+                blocking=True,
+            )
+        ]
+        if not undeclared:
+            signals = []
+
+        known = self._knowable_at(context)
+        frame = context.world.main
+        for column in features:
+            clock = column.window.clock
+            if not clock or not known or clock == known:
+                continue
+            if clock not in frame.columns or known not in frame.columns:
+                continue  # часы вне таблицы решений: сверить нечем, и это видно в отчёте
+            behind = frame.filter(pl.col(clock) < pl.col(known)).height
+            if behind < frame.height * self.share:
+                continue
+            signals.append(
+                Signal(
+                    Finding.WINDOW_CLOCK_UNKNOWABLE,
+                    f"окно признака {column.name!r} отсчитывается по {clock!r}, а запись "
+                    f"становится известной в {known!r}: у {behind:,} строк "
+                    f"({behind / frame.height:.1%}) первое раньше второго. Окно "
+                    "захватывает записи, о которых на момент решения ещё не сообщили",
+                    blocking=True,
+                )
+            )
+        return signals
+
+
+PREMISE_CHECKS = [
+    PremisesMatchData(),
+    FeatureWindowsMatchData(),
+    EveryColumnIsDeclared(),
+    WindowClockIsKnowable(),
+]

@@ -66,6 +66,9 @@ class ColumnForm(BaseModel):
     window_lookback_days: float | None = None
     window_lag_days: float = 0.0
     window_source: str | None = None
+    window_clock: str | None = None
+    """Колонка, по времени которой строка отбирается в окно признака."""
+
     measured_at: str | None = None
     direction: Direction | None = None
     """Куда признак двигает риск по доменному знанию, до просмотра данных."""
@@ -82,6 +85,7 @@ class ColumnForm(BaseModel):
                 lookback_days=self.window_lookback_days,
                 lag_days=self.window_lag_days,
                 source_of_claim=self.window_source,
+                clock=self.window_clock,
             )
         return ColumnSpec(
             name=self.name,
