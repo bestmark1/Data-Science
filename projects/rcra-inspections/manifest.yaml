@@ -1,0 +1,21 @@
+source: 'U.S. EPA, ECHO: данные RCRA по обращению с опасными отходами'
+license: общественное достояние правительства США (объявлено источником)
+url: https://echo.epa.gov/tools/data-downloads
+retrieved_at: '2026-08-26'
+files:
+- name: RCRA_EVALUATIONS.csv
+  sha256: c6797057f645f14f006c3e59770f8343fde295d3174803182bf29cf575710a6c
+  bytes: 104841958
+- name: RCRA_FACILITIES.csv
+  sha256: 9bc0b5bb5aa117c193a5e3be062132fded246669250d93f9b88370b3bfbb1bde
+  bytes: 273993204
+- name: RCRA_NAICS.csv
+  sha256: 8c59498d8b25bea1f32aaa7c48b35ed0877db4ab967f4f85d5fea7f043f93ed4
+  bytes: 14155960
+- name: RCRA_VIOLATIONS.csv
+  sha256: f7a49dfd45c1d4acb9632b7ad73de113df92c87521de420f24ab954938976535
+  bytes: 102556401
+- name: rcra_downloads.zip
+  sha256: c18a5e2054358845438ce5f264363230b03d569c30ec23db57e34eae04dd3157
+  bytes: 119393467
+derived: []
