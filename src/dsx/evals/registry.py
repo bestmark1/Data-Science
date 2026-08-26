@@ -62,9 +62,19 @@ class Bundle:
         return self.case.id
 
 
+FIXTURE_DEGENERATE_BEYOND = 0.01
+"""Порог невырожденности для синтетических миров стенда.
+
+Значение фикстуры, а не доменное утверждение: миры стенда строятся с долей
+класса около трети, и порог в один процент им заведомо не мешает. Кейс,
+которому нужен другой порог, объявляет его сам.
+"""
+
+
 def _outcome(
     comparison: ComparisonMode = ComparisonMode.BY_DATE,
     expected_positive_rate: float | None = None,
+    degenerate_beyond: float | None = FIXTURE_DEGENERATE_BEYOND,
 ) -> OutcomeDefinition:
     return OutcomeDefinition(
         event_column="event_at",
@@ -91,6 +101,7 @@ def _outcome(
         estimand="событие произошло позже назначенного срока среди объектов, "
         "которые предполагалось обработать",
         expected_positive_rate=expected_positive_rate,
+        degenerate_beyond=degenerate_beyond,
     )
 
 
@@ -106,6 +117,7 @@ def _bundle(
     reserve: bool = True,
     target_kind: TargetKind | None = None,
     expected_positive_rate: float | None = None,
+    degenerate_beyond: float | None = FIXTURE_DEGENERATE_BEYOND,
 ) -> Bundle:
     return Bundle(
         case=Case(
@@ -117,7 +129,7 @@ def _bundle(
             ),
         ),
         build=build,
-        outcome=_outcome(comparison, expected_positive_rate),
+        outcome=_outcome(comparison, expected_positive_rate, degenerate_beyond),
         lifetime=lifetime,
         reserve=reserve,
         target_kind=target_kind,
@@ -415,6 +427,31 @@ ALL: tuple[Bundle, ...] = (
         {Finding.GROUP_OVERLAP_ACROSS_SPLITS},
         lambda: inj.declared_group(inj.grouped_objects(build_world())),
         caught_by={"N14"},
+    ),
+    _bundle(
+        "degenerate-outcome",
+        "Доля класса такова, что предсказывать нечего",
+        "Шестой кейс: первая постановка дала 95.3% одного класса, и НИ ОДНА проверка "
+        "не возразила. N13 сверяет долю только с объявленным ожиданием и без него "
+        "пропускается — то есть выключается ровно у того, кто о вырожденности не "
+        "подумал. Дефект не в данных и не в разметке, а в вопросе. Кейс объявляет "
+        "порог 30%: доля выходит 71.8%, и вырожденность определена ОБЪЯВЛЕНИЕМ "
+        "автора, а не числом, назначенным ядром.",
+        {Finding.DEGENERATE_OUTCOME},
+        lambda: inj.degenerate_outcome(build_world()),
+        caught_by={"N15"},
+        degenerate_beyond=0.3,
+    ),
+    _bundle(
+        "outcome-without-degeneracy-threshold",
+        "Порог невырожденности не объявлен",
+        "Отсутствие объявления — то же самое молчание, что дало 95.3% пройти незамеченно. "
+        "Кейс проверяет, что молчание блокирует само по себе, а не только нарушение "
+        "объявленного порога.",
+        {Finding.DEGENERATE_OUTCOME},
+        lambda: build_world(),
+        caught_by={"N15"},
+        degenerate_beyond=None,
     ),
     _bundle(
         "sentinel-as-value",

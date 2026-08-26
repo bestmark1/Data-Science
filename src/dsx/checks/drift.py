@@ -132,7 +132,11 @@ class TargetRateStationarity:
             _rate_error(in_windows, pooled.height) ** 2
             + _rate_error(in_reserve, reserved.height) ** 2
         )
-        if abs(in_reserve - in_windows) < SIGMA * spread:
+        # Сравнение НЕСТРОГОЕ намеренно. При доле ровно 100% или ровно 0%
+        # разброс равен нулю, и строгое `0 < 0` ложно: проверка сообщала о
+        # расхождении между 100% и 100%. Расхождение, равное шумовому порогу,
+        # свидетельством не является — тем более нулевое.
+        if abs(in_reserve - in_windows) <= SIGMA * spread:
             return []
 
         return [
@@ -171,7 +175,7 @@ class TargetRateStationarity:
         spread = math.sqrt(
             _rate_error(rates[0], sizes[0]) ** 2 + _rate_error(rates[-1], sizes[-1]) ** 2
         )
-        if abs(rates[-1] - rates[0]) < SIGMA * spread:
+        if abs(rates[-1] - rates[0]) <= SIGMA * spread:
             return []
 
         shown = ", ".join(
@@ -210,7 +214,7 @@ class TargetRateStationarity:
         spread = math.sqrt(
             _rate_error(low, sizes[low_name]) ** 2 + _rate_error(high, sizes[high_name]) ** 2
         )
-        if high - low < SIGMA * spread:
+        if high - low <= SIGMA * spread:
             return signals
 
         shown = ", ".join(f"{name}: {value:.1%}" for name, value in sorted(rates.items()))
@@ -592,7 +596,63 @@ class ExpectedRateHolds:
         ]
 
 
+@dataclass(frozen=True)
+class NonDegenerateOutcome:
+    """N15. Доля класса такова, что предсказывать нечего.
+
+    Шестой кейс дал в первой постановке 95.3% одного класса, и НИ ОДНА
+    проверка не возразила. N13 сверяет долю только с объявленным ожиданием и
+    без него пропускается — то есть выключается ровно у того, кто о
+    вырожденности не подумал, а значит и ожидания не объявил.
+
+    Порог объявляет автор. Общего числа здесь нет: доля в один процент
+    вырождена для просрочки доставки и совершенно законна для мошенничества.
+    Порог, назначенный ядром, кричал бы на редких событиях — а проверка,
+    кричащая на законном, запрещена правилами этого проекта.
+
+    Отсутствие порога тоже блокирует, и это главное в проверке. Иначе она
+    повторила бы дефект N13: молчание там, где нужнее всего.
+    """
+
+    requirement: str = "N15"
+    premises: frozenset[Premise] = frozenset({Premise.BINARY_TARGET})
+    detects: frozenset[Finding] = frozenset({Finding.DEGENERATE_OUTCOME})
+
+    def run(self, context: Context) -> list[Signal]:
+        floor = context.outcome.degenerate_beyond
+        if floor is None:
+            return [
+                Signal(
+                    Finding.DEGENERATE_OUTCOME,
+                    "порог невырожденности не объявлен: не сказано, при какой доле "
+                    "класса задача перестаёт иметь смысл. Без него вырожденный исход "
+                    "проходит молча, и заключение делается о цели, в которой нечего "
+                    "предсказывать",
+                    blocking=True,
+                )
+            ]
+
+        windows = _windows_with_labels(context)
+        frame = pl.concat([f for _, f in windows], how="vertical_relaxed")
+        observed = float(frame[LABEL].mean())
+        if floor <= observed <= 1.0 - floor:
+            return []
+
+        constant = max(observed, 1.0 - observed)
+        return [
+            Signal(
+                Finding.DEGENERATE_OUTCOME,
+                f"доля положительного класса {observed:.1%} при объявленном пороге "
+                f"невырожденности {floor:.1%}. Постоянное правило, не смотрящее ни "
+                f"на что, верно в {constant:.1%} случаев: измеренное качество будет "
+                "свойством популяции, а не модели",
+                blocking=True,
+            )
+        ]
+
+
 DRIFT_CHECKS = [
+    NonDegenerateOutcome(),
     TargetRateStationarity(),
     ComparableSupport(),
     FeatureRelationStability(),

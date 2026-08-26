@@ -223,3 +223,23 @@ def test_null_status_share_is_computed_not_zeroed() -> None:
     assert signals, "концентрация пропуска на пустом статусе — настоящая находка"
     assert "в данных 50%" in signals[0].detail, "доля пустого статуса считается, а не зануляется"
     assert "в данных 0%" not in signals[0].detail
+
+
+def test_identical_rates_are_not_reported_as_a_difference() -> None:
+    """При доле ровно 100% разброс равен нулю, и строгое `0 < 0` было ложным."""
+    from dsx.checks.drift import TargetRateStationarity
+    from dsx.evals import injectors as inj
+    from dsx.evals.registry import BY_ID, Bundle
+    from dsx.evals.world import build_world
+
+    base = BY_ID["clean-baseline"]
+    bundle = Bundle(
+        case=base.case,
+        build=lambda: inj.degenerate_outcome(build_world()),
+        outcome=base.outcome,
+    )
+    context = context_for(bundle)
+
+    signals = TargetRateStationarity().run(context)
+
+    assert signals == [], [s.detail for s in signals]

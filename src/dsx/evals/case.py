@@ -56,6 +56,7 @@ class Finding(StrEnum):
     SENTINEL_AS_VALUE = "sentinel_as_value"
     GROUP_OVERLAP_ACROSS_SPLITS = "group_overlap_across_splits"
     UNDECLARED_GROUP = "undeclared_group"
+    DEGENERATE_OUTCOME = "degenerate_outcome"
 
 
 class Expectation(BaseModel):

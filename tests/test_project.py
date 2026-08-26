@@ -37,6 +37,7 @@ FORM = textwrap.dedent("""
       comparison: by_date
       positive_class: event_after_deadline
       estimand: "событие позже назначенного срока"
+      degenerate_beyond: 0.01
       missing_causes:
         - {name: "события не было", meaning: not_occurred, status_value: completed}
         - {name: "объект исключён", meaning: excluded, status_value: aborted}

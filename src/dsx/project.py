@@ -135,6 +135,18 @@ class OutcomeForm(BaseModel):
     в модели. Тот же приём, что с доменным направлением признака.
     """
 
+    degenerate_beyond: Annotated[float, Field(gt=0.0, lt=0.5)] | None = None
+    """Порог невырожденности: доля класса ближе к нулю или единице этого
+    объявляется вырожденной, и прогон блокируется.
+
+    Введено шестым кейсом. Первая его постановка дала 95.3% одного класса, и
+    ни одна проверка не возразила: N13 сверяет долю только с ОЖИДАЕМОЙ, а не
+    объявив ожидания, автор выключал её ровно тогда, когда она нужнее всего.
+
+    Не объявить порог тоже нельзя: отсутствие блокирует. Умолчания нет
+    намеренно — умолчание, совпадающее с честным ответом, запрещено правилами
+    проекта, потому что неотличимо от невнимательности."""
+
     def to_definition(self) -> OutcomeDefinition:
         return OutcomeDefinition(
             event_column=self.event_column,
@@ -143,6 +155,7 @@ class OutcomeForm(BaseModel):
             positive_class=self.positive_class,
             estimand=self.estimand,
             expected_positive_rate=self.expected_positive_rate,
+            degenerate_beyond=self.degenerate_beyond,
             missing_causes=[c.to_cause() for c in self.missing_causes],
         )
 

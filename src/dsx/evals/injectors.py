@@ -517,3 +517,25 @@ def declared_group(world: World) -> World:
         for c in world.schema.columns
     ]
     return World(frames=world.frames, schema=Schema(columns=columns))
+
+
+def degenerate_outcome(world: World, past_deadline_days: int = 1) -> World:
+    """Сдвинуть ранние события за срок: почти всякий исход становится поздним.
+
+    Воспроизводит первую постановку шестого кейса, где доля одного класса
+    вышла 95.3% и ни одна проверка не возразила. Дефект не в данных и не в
+    разметке — они верны; дефект в ВОПРОСЕ: предсказывать нечего, потому что
+    ответ известен заранее.
+
+    Двигается СОБЫТИЕ, а не срок. Первая версия отодвигала срок в прошлое и
+    попутно делала метку известной задолго до начала окна — строка попадала и
+    в обучение, и в оценку, и кейс воспроизводил два дефекта вместо одного.
+    Правило стенда «один инжектор — один дефект» держится на таких мелочах.
+    """
+    shifted = world.main.with_columns(
+        pl.when(pl.col("event_at") <= pl.col("deadline_on"))
+        .then(pl.col("deadline_on").dt.offset_by(f"{past_deadline_days}d"))
+        .otherwise(pl.col("event_at"))
+        .alias("event_at")
+    )
+    return world.replace_main(shifted)
