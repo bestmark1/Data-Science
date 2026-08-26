@@ -490,3 +490,30 @@ def sentinel_as_value(world: World, token: str = "NA", share: float = 0.3, seed:
         )
         .drop("_pick")
     )
+
+
+def grouped_objects(world: World, per_group: int = 3, seed: int = 43) -> World:
+    """Объединить объекты в группы: сеть, работодатель, филиал.
+
+    Само по себе дефектом не является — это устройство предметной области.
+    Дефектом становится незаявленный уровень: объекты одной группы зависимы, и
+    модель, видевшая часть её, оценивается на остальной мягче.
+    """
+    rng = np.random.default_rng(seed)
+    frame = world.main
+    rows = frame.height
+    groups = max(1, rows // per_group)
+    names = [f"chain{int(i):05d}" for i in rng.integers(0, groups, rows)]
+    return World(
+        frames={**world.frames, "main": frame.with_columns(pl.Series("chain", names))},
+        schema=Schema(columns=[*world.schema.columns, ColumnSpec(name="chain", role=Role.IGNORED)]),
+    )
+
+
+def declared_group(world: World) -> World:
+    """Объявить колонку сети групповым уровнем."""
+    columns = [
+        c.model_copy(update={"role": Role.GROUP_ID}) if c.name == "chain" else c
+        for c in world.schema.columns
+    ]
+    return World(frames=world.frames, schema=Schema(columns=columns))

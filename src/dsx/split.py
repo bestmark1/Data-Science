@@ -241,6 +241,79 @@ def reserved_extent(result: SplitResult, world: World) -> Extent | None:
     return _extent_of_frame(result.reserved, world)
 
 
+def group_candidates(world: World, min_share: float = 0.10) -> dict[str, tuple[int, float]]:
+    """Колонки, похожие на уровень ГРУППЫ над объектом.
+
+    Группа отличается от категории числом значений. Сеть — это тысячи названий
+    по два-три заведения; тип заведения — два десятка значений на тридцать
+    тысяч. Поэтому кандидатом считается колонка, у которой различных значений
+    сопоставимо много с числом объектов.
+
+    Возвращает имя колонки, число многообъектных групп и долю строк в них.
+    """
+    keys = world.schema.by_role(Role.NATURAL_KEY) or world.schema.by_role(Role.ENTITY_ID)
+    if not keys:
+        return {}
+    key = keys[0].name
+    frame = world.main
+    if key not in frame.columns:
+        return {}
+
+    objects = frame[key].n_unique()
+    declared = {c.name for c in world.schema.by_role(Role.GROUP_ID)}
+    found: dict[str, tuple[int, float]] = {}
+
+    for column in world.schema.columns:
+        name = column.name
+        if name in declared or name == key or name not in frame.columns:
+            continue
+        if column.role in (Role.ENTITY_ID, Role.NATURAL_KEY, Role.GROUP_ID):
+            continue
+        if frame[name].dtype != pl.String:
+            continue
+
+        values = frame[name].n_unique()
+        # Категория — мало значений на много объектов; группа — много значений.
+        if values < objects * 0.10:
+            continue
+
+        sized = frame.group_by(name).agg(pl.col(key).n_unique().alias("objects"))
+        multi = sized.filter(pl.col("objects") > 1)
+        if multi.is_empty():
+            continue
+        rows = frame.filter(pl.col(name).is_in(multi[name].implode())).height
+        share = rows / frame.height
+        if share >= min_share:
+            found[name] = (multi.height, share)
+    return found
+
+
+def group_overlap(parts: list[Part], world: World) -> dict[str, tuple[int, float]]:
+    """Группы, встречающиеся и в обучении, и в оценке одного окна.
+
+    Для объекта пересечение при долгом жизненном цикле нормально; для ГРУППЫ
+    оно означает, что модель видела другие объекты той же сети и потому
+    оценивается мягче, чем на действительно новой.
+    """
+    groups = world.schema.by_role(Role.GROUP_ID)
+    if not groups:
+        return {}
+    column = groups[0].name
+
+    overlaps: dict[str, tuple[int, float]] = {}
+    for part in parts:
+        if column not in part.train.columns or column not in part.evaluate.columns:
+            continue
+        shared = set(part.train[column].drop_nulls().unique().to_list()) & set(
+            part.evaluate[column].drop_nulls().unique().to_list()
+        )
+        if not shared:
+            continue
+        touched = part.evaluate.filter(pl.col(column).is_in(list(shared))).height
+        overlaps[part.name] = (len(shared), touched / max(part.evaluate.height, 1))
+    return overlaps
+
+
 def extent_of(part: Part, world: World) -> Extent:
     """Состав части сплита: единицы решения обучения И оценки вместе.
 

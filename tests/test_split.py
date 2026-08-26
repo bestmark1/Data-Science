@@ -350,3 +350,49 @@ def test_reserve_upper_bound_keeps_the_immature_tail_out() -> None:
         <= without.reserved_immature
     )
     assert context_for(bundle).split is not None
+
+
+# --- групповая зависимость (N14) -------------------------------------------
+
+
+def test_undeclared_group_is_found_in_the_data() -> None:
+    """Молчание здесь читалось бы как отсутствие зависимости."""
+    from dsx.checks.split_checks import GroupDependence
+    from dsx.evals.case import Finding
+    from harness import context_for
+
+    signals = GroupDependence().run(context_for(BY_ID["undeclared-group"]))
+
+    assert [s.finding for s in signals] == [Finding.UNDECLARED_GROUP]
+    assert signals[0].blocking
+
+
+def test_declared_group_overlap_is_measured() -> None:
+    from dsx.checks.split_checks import GroupDependence
+    from dsx.evals.case import Finding
+    from harness import context_for
+
+    signals = GroupDependence().run(context_for(BY_ID["group-overlap-across-splits"]))
+
+    assert {s.finding for s in signals} == {Finding.GROUP_OVERLAP_ACROSS_SPLITS}
+    assert "доля" in signals[0].detail
+
+
+def test_category_is_not_mistaken_for_a_group() -> None:
+    """Тип заведения — два десятка значений на тысячи объектов, это категория."""
+    from dsx.split import group_candidates
+
+    world = BY_ID["clean-baseline"].build()
+
+    assert "region" not in group_candidates(world), "мало значений на много объектов"
+
+
+def test_no_group_level_is_reported_as_not_applicable() -> None:
+    import pytest
+
+    from dsx.checks.base import NotApplicable
+    from dsx.checks.split_checks import GroupDependence
+    from harness import context_for
+
+    with pytest.raises(NotApplicable, match="не найдено"):
+        GroupDependence().run(context_for(BY_ID["clean-baseline"]))

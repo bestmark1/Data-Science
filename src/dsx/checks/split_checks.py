@@ -9,7 +9,13 @@ import polars as pl
 from dsx.checks.base import Context, NotApplicable, Signal
 from dsx.evals.case import Finding
 from dsx.roles import Role
-from dsx.split import SplitResult, entity_overlap, feature_window_overlap
+from dsx.split import (
+    SplitResult,
+    entity_overlap,
+    feature_window_overlap,
+    group_candidates,
+    group_overlap,
+)
 from dsx.task import ObjectLifetime, Premise
 
 
@@ -133,6 +139,68 @@ class FeatureWindowOverlap:
 
 
 @dataclass(frozen=True)
+class GroupDependence:
+    """N14. Объекты одной группы попали и в обучение, и в оценку.
+
+    Уровень выше объекта: сеть, работодатель, филиал. Объекты одной группы
+    зависимы — общее руководство, общие поставки, общая практика, — и модель,
+    видевшая часть группы, оценивается на остальной мягче, чем на действительно
+    новой.
+
+    Дыра названа третьим кейсом (топ-10 страховщиков покрывали 44.4% строк) и
+    подтверждена пятым (37.9% инспекций у сетей, у SUBWAY 294 точки). Ни то ни
+    другое ядро не видело.
+
+    Если группа НЕ объявлена, проверка не молчит: она ищет колонку, похожую на
+    групповую, и требует ответа. Молчание здесь читалось бы как отсутствие
+    зависимости, а означало бы лишь, что уровень не назван.
+    """
+
+    requirement: str = "N14"
+    premises: frozenset[Premise] = frozenset({Premise.UNIVERSAL})
+    detects: frozenset[Finding] = frozenset(
+        {Finding.GROUP_OVERLAP_ACROSS_SPLITS, Finding.UNDECLARED_GROUP}
+    )
+
+    def run(self, context: Context) -> list[Signal]:
+        split = _require_split(context)
+        declared = context.world.schema.by_role(Role.GROUP_ID)
+
+        if not declared:
+            candidates = group_candidates(context.world)
+            if not candidates:
+                raise NotApplicable(
+                    "групповой уровень не объявлен, и колонок, похожих на него, в данных не найдено"
+                )
+            shown = ", ".join(
+                f"{name!r}: {count:,} групп, {share:.0%} строк"
+                for name, (count, share) in sorted(candidates.items())
+            )
+            return [
+                Signal(
+                    Finding.UNDECLARED_GROUP,
+                    f"уровень группы не объявлен, но данные его содержат ({shown}). "
+                    "Объекты одной группы зависимы, и модель, видевшая часть её, "
+                    "оценивается на остальной мягче. Объявите роль group_id либо "
+                    "зафиксируйте обход с причиной",
+                    blocking=True,
+                )
+            ]
+
+        overlaps = group_overlap(split.parts, context.world)
+        return [
+            Signal(
+                Finding.GROUP_OVERLAP_ACROSS_SPLITS,
+                f"в окне {name!r} {count:,} групп присутствуют и в обучении, и в оценке; "
+                f"их доля в оценочном окне {share:.0%}. Модель видела другие объекты тех "
+                "же групп: оценка мягче, чем на действительно новых",
+                blocking=True,
+            )
+            for name, (count, share) in sorted(overlaps.items())
+        ]
+
+
+@dataclass(frozen=True)
 class ReservedMeasurementSample:
     """P5. Измерительная выборка не зарезервирована.
 
@@ -236,6 +304,7 @@ class LabelImmaturity:
 SPLIT_CHECKS = [
     EntityOverlapAcrossSplits(),
     FeatureWindowOverlap(),
+    GroupDependence(),
     ReservedMeasurementSample(),
     LabelImmaturity(),
 ]
