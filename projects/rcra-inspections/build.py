@@ -75,12 +75,12 @@ def build() -> pl.DataFrame:
             "ACTIVE_SITE",
             "OPERATING_TSDF",
         ],
-    ).unique(subset=["ID_NUMBER"], keep="first")
+    ).unique(subset=["ID_NUMBER"], keep="first", maintain_order=True)
 
     sectors = (
         _read("RCRA_NAICS.csv", ["ID_NUMBER", "NAICS_CODE"])
         .with_columns(pl.col("NAICS_CODE").str.slice(0, 2).alias("sector"))
-        .unique(subset=["ID_NUMBER"], keep="first")
+        .unique(subset=["ID_NUMBER"], keep="first", maintain_order=True)
         .select("ID_NUMBER", "sector")
     )
 
