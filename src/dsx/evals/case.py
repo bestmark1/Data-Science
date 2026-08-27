@@ -61,6 +61,7 @@ class Finding(StrEnum):
     VALUE_REVISED_AFTER_DECISION = "value_revised_after_decision"
     INFORMATIVE_UNOBSERVABILITY = "informative_unobservability"
     OBSERVATION_REASON_MATTERS = "observation_reason_matters"
+    UNUSABLE_TRAINING_PART = "unusable_training_part"
 
 
 class Expectation(BaseModel):

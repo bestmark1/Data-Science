@@ -139,6 +139,48 @@ class FeatureWindowOverlap:
 
 
 @dataclass(frozen=True)
+class TrainingPartIsUsable:
+    """P8. Обучающая часть окна пуста или ничтожна.
+
+    Окно, которому не на чем учиться, модели не даёт. Всякая метрика по нему —
+    описание пустоты, а не качества, и вывод из неё нельзя ни подтвердить, ни
+    опровергнуть.
+
+    Одиннадцатый кейс: первое окно начиналось нулевым днём периода, и обучаться
+    ему было не на чем — до него данных нет. Прогон напечатал «обучение 0» и не
+    возразил НИ ОДНИМ сигналом. Строка в сводке — не возражение: её пропускают
+    глазами, а блокирующий сигнал требует ответа.
+
+    Порог не в доле, а в числе строк: обучение из десятка строк негодно
+    независимо от того, велика ли оценочная часть.
+    """
+
+    requirement: str = "P8"
+    premises: frozenset[Premise] = frozenset({Premise.UNIVERSAL})
+    detects: frozenset[Finding] = frozenset({Finding.UNUSABLE_TRAINING_PART})
+
+    minimum: int = 100
+    """Ниже этого числа обучающих строк окно объявляется негодным."""
+
+    def run(self, context: Context) -> list[Signal]:
+        split = context.split
+        if not isinstance(split, SplitResult) or not split.parts:
+            raise NotApplicable("временной сплит не построен")
+
+        return [
+            Signal(
+                Finding.UNUSABLE_TRAINING_PART,
+                f"в окне {part.name!r} обучающих решений {part.train.height:,} "
+                f"при пороге {self.minimum}: учиться не на чем, и всякая метрика "
+                "по этому окну описывает пустоту, а не качество",
+                blocking=True,
+            )
+            for part in split.parts
+            if part.train.height < self.minimum
+        ]
+
+
+@dataclass(frozen=True)
 class GroupDependence:
     """N14. Объекты одной группы попали и в обучение, и в оценку.
 
@@ -302,6 +344,7 @@ class LabelImmaturity:
 
 
 SPLIT_CHECKS = [
+    TrainingPartIsUsable(),
     EntityOverlapAcrossSplits(),
     FeatureWindowOverlap(),
     GroupDependence(),

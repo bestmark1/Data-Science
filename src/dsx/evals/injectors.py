@@ -736,3 +736,26 @@ def outcome_depends_on_the_reason(world: World, seed: int = 47, shift_days: int 
     )
     schema = _add_column(world.schema, ColumnSpec(name="reason", role=Role.OBSERVATION_REASON))
     return World(frames={**world.frames, "main": frame}, schema=schema)
+
+
+def training_part_is_empty(world: World, ahead: int = 400) -> World:
+    """Исход всех решений созревает после конца наблюдения.
+
+    Обучаться окну становится не на чем: обучение — это объекты, чей исход был
+    известен ДО начала окна, а здесь он не известен ни до одного из них.
+
+    Воспроизводит одиннадцатый кейс, где первое окно начиналось нулевым днём
+    периода и обучение выходило пустым. Прогон напечатал «обучение 0» и не
+    возразил ни одним сигналом: строка в сводке — не возражение.
+
+    Отличается от `late_maturing_labels` тем, что затрагивает ВСЕ строки, а не
+    долю: там дефект в составе окна, здесь — в самой его пригодности.
+
+    Событие сдвигается вместе со сроком, а не обнуляется: мир без единого
+    события ломает построение снимка, и кейс проверял бы стенд вместо ядра.
+    """
+    frame = world.main.with_columns(
+        pl.col("deadline_on").dt.offset_by(f"{ahead}d"),
+        pl.col("event_at").dt.offset_by(f"{ahead}d"),
+    )
+    return world.replace_main(frame)

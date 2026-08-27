@@ -1,0 +1,138 @@
+# ФОРМА ОДИННАДЦАТОГО КЕЙСА
+#
+# Предсказывается: прибудет ли рейс позже расписанного времени прибытия.
+#
+# Кейс намеренно ОБЫЧНЫЙ: новая отрасль, ни одной новой оси. Первый под новым
+# правилом остановки, которое требует не тишины, а доказанного зрения.
+#
+# В первом прогоне намеренно присутствуют положительные контроли §5
+# пре-регистрации.
+
+title: "BTS: рейс прибудет позже расписания"
+
+# Конец наблюдения: последний день выгруженного года. Рейсы 2025 года в
+# популяцию не входят по объявлению, а не по обрыву сбора.
+observed_until: 2025-01-02T00:00:00
+observed_until_source: "объявленная популяция — двенадцать месяцев 2024 года; сутки запаса на рейсы, прибывающие после полуночи 31 декабря"
+
+# --- ДОПУЩЕНИЯ ---------------------------------------------------------------
+
+assumptions:
+  - statement: "моментом решения является расписанное время вылета"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если предсказание делается раньше — при продаже билета или при постановке в план, — часть признаков в тот момент ещё неизвестна, и момент выбран позже, чем он происходит"
+
+  - statement: "время в выгрузке записано четырьмя цифрами и привязано к дате рейса, а не к календарю"
+    basis: data
+    author: "автор"
+    evidence: "расчёт: значения вида '0856', '1135'; запись '2400' встречается 239 раз в одном месяце и означает полночь следующих суток"
+    consequence: "рейс, прибывающий после полуночи, имеет время прибытия МЕНЬШЕ времени вылета; без поправки его прибытие оказалось бы за одиннадцать часов до вылета"
+
+  - statement: "прибытие, записанное раньше расписанного вылета по часам, относится к следующим суткам"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если рейс задержан более чем на сутки, поправка сдвинет его на день вперёд недостаточно, и опоздание будет занижено"
+
+  - statement: "отмена и отклонение рейса различимы по данным и означают разное"
+    basis: data
+    author: "автор"
+    evidence: "расчёт: отменённых 96 315, отклонённых 17 499; у отменённых время прибытия — пустая строка"
+    consequence: "склейка их в один класс приписала бы отклонённому рейсу отсутствие прибытия, которого не было: он прибыл, но в другой аэропорт"
+
+  - statement: "маршрут является объектом, о котором решение принимается многократно"
+    basis: data
+    author: "автор"
+    evidence: "расчёт: 6 805 маршрутов, 100% рейсов приходится на маршруты с более чем одним рейсом"
+    consequence: "если задержки принадлежат борту или экипажу, а не маршруту, объект объявлен не тот, и пересечение между обучением и оценкой будет мнимым"
+
+# --- СХЕМА -------------------------------------------------------------------
+
+columns:
+  - {name: flight_id, role: entity_id}
+  - {name: route, role: natural_key}
+  - {name: carrier, role: group_id}
+  - {name: scheduled_departure, role: decision_time, temporal: instant}
+  - {name: arrived_at, role: event_time, temporal: instant}
+  - {name: due_0m, role: deadline, temporal: instant, value_as_of: scheduled_departure}
+  - {name: status, role: status}
+
+  # Признаки, известные в момент расписанного вылета.
+  - {name: origin, role: feature, availability: at_decision, source_of_claim: "аэропорт вылета из расписания", window_lookback_days: 0, window_source: "выгрузка BTS"}
+  - {name: dest, role: feature, availability: at_decision, source_of_claim: "аэропорт прибытия из расписания", window_lookback_days: 0, window_source: "выгрузка BTS"}
+  - {name: origin_state, role: feature, availability: at_decision, source_of_claim: "штат вылета из расписания", window_lookback_days: 0, window_source: "выгрузка BTS"}
+  - {name: dest_state, role: feature, availability: at_decision, source_of_claim: "штат прибытия из расписания", window_lookback_days: 0, window_source: "выгрузка BTS"}
+  - {name: scheduled_minutes, role: feature, availability: at_decision, source_of_claim: "расписанная длительность рейса", window_lookback_days: 0, window_source: "выгрузка BTS"}
+  - {name: distance, role: feature, availability: at_decision, source_of_claim: "расстояние между аэропортами", window_lookback_days: 0, window_source: "выгрузка BTS"}
+  - {name: day_of_week, role: feature, availability: at_decision, source_of_claim: "день недели из даты рейса", window_lookback_days: 0, window_source: "выгрузка BTS"}
+  - {name: CRSDepTime, role: feature, availability: at_decision, source_of_claim: "расписанное время вылета в минутах от полуночи", window_lookback_days: 0, window_source: "код сборки build.py"}
+
+  # КОНТРОЛЬ К-1. Задержка вылета известна только ПОСЛЕ фактического вылета,
+  # то есть после момента решения. Объявлена доступной при решении — объявление
+  # заведомо ложное. Ядру о подлоге не сообщается.
+  - {name: departure_delay, role: feature, availability: at_decision, source_of_claim: "задержка вылета по данным BTS", window_lookback_days: 0, window_source: "выгрузка BTS"}
+
+  # Не участвуют в постановке.
+  - {name: flight_date, role: ignored, temporal: date}
+  - {name: tail_number, role: ignored}
+  - {name: flight_number, role: ignored}
+  - {name: DepTime, role: ignored}
+  - {name: CRSArrTime, role: ignored}
+  - {name: ArrTime, role: ignored}
+  - {name: Cancelled, role: ignored}
+  - {name: Diverted, role: ignored}
+  - {name: cancellation_code, role: ignored}
+  - {name: scheduled_arrival, role: ignored, temporal: instant}
+  - {name: due_15m, role: ignored, temporal: instant}
+  - {name: due_30m, role: ignored, temporal: instant}
+  - {name: due_60m, role: ignored, temporal: instant}
+
+# --- КОНТРАКТ ИСХОДА ---------------------------------------------------------
+
+outcome:
+  event_column: arrived_at
+  deadline_column: due_0m
+  comparison: direct
+  positive_class: event_after_deadline
+  estimand: "рейс прибудет позже расписанного времени прибытия"
+  degenerate_beyond: 0.1
+
+  missing_causes:
+    - name: "рейс прибыл вовремя или раньше"
+      meaning: not_occurred
+      status_value: "completed"
+      assumption: "состоявшийся рейс без времени прибытия означает потерю записи, а не отсутствие прибытия"
+    - name: "рейс отменён"
+      meaning: excluded
+      status_value: "cancelled"
+      assumption: "отменённый рейс не выполнялся, и судить его соблюдение расписания не о чем: он выбывает из популяции, а не считается опоздавшим"
+    - name: "рейс отклонён в другой аэропорт"
+      meaning: unobserved
+      status_value: "diverted"
+      assumption: "отклонённый рейс прибыл, но не туда; соблюдение расписания по назначению для него неизвестно, а не нарушено"
+
+# --- ТИП ЗАДАЧИ --------------------------------------------------------------
+
+task:
+  target_kind: binary
+  outcome_timing: delayed
+  has_process: true
+  is_stream: true
+  object_lifetime: recurring
+
+# --- СПЛИТ -------------------------------------------------------------------
+# Отсчёт от 2024-01-01. Метки зреют в тот же день, поэтому окна ставятся
+# вплотную.
+#
+# Первое окно начиналось нулевым днём, и обучаться ему было НЕ НА ЧЕМ: до
+# первого января данных нет. Прогон это напечатал («обучение 0») и не возразил
+# ни одним сигналом — ошибка моя, но молчание ядра оказалось находкой кейса.
+# Теперь первый квартал целиком уходит в обучение первого окна.
+
+split:
+  windows:
+    - {name: w0, start_day: 91, stop_day: 182}    # апрель — июнь
+    - {name: w1, start_day: 182, stop_day: 274}   # июль — сентябрь
+    - {name: w2, start_day: 274, stop_day: 335}   # октябрь — ноябрь
+  reserve_from_day: 335                            # декабрь
+  reserve_until_day: 366
