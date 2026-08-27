@@ -79,6 +79,11 @@ class Study:
     """
 
     cause_questions: int = 0
+
+    estimand: str | None = None
+    """Что оценивается — предложение, СОБРАННОЕ ядром из того, по чему оно
+    считает. Автор его не писал: писать было можно ровно до тех пор, пока
+    написанное расходилось с вычисляемым."""
     """Сколько вопросов порождено причинами отсутствия события.
 
     Называется числом, а не долей: их количество задаёт словарь источника, а не
@@ -135,6 +140,8 @@ class Study:
 
     def render(self) -> str:
         parts = [f"# {self.title}", "", self._conclusion_section()]
+        if self.estimand is not None:
+            parts += ["", self._estimand_section()]
         if self.checks is not None:
             parts += ["", self._findings_section(), "", self._skipped_section()]
         if self.measurement is not None:
@@ -174,6 +181,25 @@ class Study:
             lines.append("")
         lines += [f"- {q}" for q in self.open_questions]
         return "\n".join(lines)
+
+    def _estimand_section(self) -> str:
+        """Оцениваемая величина — словами, но не авторскими.
+
+        Раздел существует, чтобы гарантия была видна читателю. Невидимая
+        гарантия читателю не помогает: он не может отличить собранное
+        предложение от написанного и по-прежнему обязан верить на слово.
+        """
+        return "\n".join(
+            [
+                "## Что оценивается",
+                "",
+                self.estimand or "Не объявлено.",
+                "",
+                "Предложение собрано из направления, грануляции сравнения и смысла "
+                "причин отсутствия события — то есть из тех же величин, по которым "
+                "считается метка. Автор его не писал.",
+            ]
+        )
 
     def _conclusion_section(self) -> str:
         lines = ["## Заключение", ""]

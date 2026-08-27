@@ -197,3 +197,25 @@ def test_signal_order_does_not_depend_on_group_by() -> None:
     assert runs[0], "кейс должен давать хотя бы один сигнал, иначе тест пуст"
     assert all(r == runs[0] for r in runs), runs
     assert runs[0] == sorted(runs[0]), "порядок обязан быть определённым, а не случайным"
+
+
+def test_report_shows_the_sentence_the_core_assembled() -> None:
+    """Невидимая гарантия читателю не помогает.
+
+    Собранное предложение отличается от написанного только тем, что его нельзя
+    было написать. Не показав его, отчёт оставляет читателя верить на слово —
+    ровно в том месте, ради которого поле и разбиралось.
+    """
+    study = Study(title="проверка")
+    study.estimand = "положительным считается: доставка наступает не позже, чем обещанная дата."
+
+    rendered = study.render()
+
+    assert "## Что оценивается" in rendered
+    assert "наступает не позже" in rendered
+    assert "Автор его не писал." in rendered
+
+
+def test_report_without_a_form_does_not_invent_the_sentence() -> None:
+    """Отрицательный контроль: раздела нет, когда собирать не из чего."""
+    assert "## Что оценивается" not in Study(title="проверка").render()

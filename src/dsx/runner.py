@@ -172,6 +172,7 @@ def run(
     study.open_questions = form.unverifiable_declarations()
     study.feature_uncertainty = form.feature_uncertainty_share()
     study.cause_questions = len(form.unverifiable_by_kind()["причины"])
+    study.estimand = form.outcome.to_definition().estimand
     study.checks = checks
     study.samples = samples
     study.assumptions = form.registry()
