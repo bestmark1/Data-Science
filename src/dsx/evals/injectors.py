@@ -62,6 +62,7 @@ def feature_declared_after_decision(world: World) -> World:
     column = ColumnSpec(
         name="actual_days",
         role=Role.FEATURE,
+        value_as_of="decided_at",
         availability=Availability.AFTER,
         source_of_claim=SOURCE,
     )
@@ -88,6 +89,7 @@ def feature_from_the_future(world: World) -> World:
     column = ColumnSpec(
         name="overrun_days",
         role=Role.FEATURE,
+        value_as_of="decided_at",
         availability=Availability.AT_DECISION,
         source_of_claim=SOURCE,
     )
@@ -106,6 +108,7 @@ def outcome_component_as_feature(world: World) -> World:
     column = ColumnSpec(
         name="event_at",
         role=Role.FEATURE,
+        value_as_of="decided_at",
         temporal=TemporalKind.INSTANT,
         availability=Availability.AT_DECISION,
         source_of_claim=SOURCE,
@@ -669,6 +672,7 @@ def categorical_feature_from_the_outcome(world: World) -> World:
         ColumnSpec(
             name="outcome_word",
             role=Role.FEATURE,
+            value_as_of="decided_at",
             availability=Availability.AT_DECISION,
             window=FeatureWindow(lookback_days=0.0, source_of_claim=SOURCE),
             source_of_claim=SOURCE,

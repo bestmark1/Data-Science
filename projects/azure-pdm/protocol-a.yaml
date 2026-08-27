@@ -36,12 +36,14 @@ columns:
   - name: components_serviced
     role: feature
     availability: at_decision
+    value_as_of: decided_at
     source_of_claim: "владелец данных (гипотетический)"
     window_lookback_days: 0
     window_source: "код сборки таблицы решений"
   - name: age
     role: feature
     availability: at_decision
+    value_as_of: decided_at
     source_of_claim: "владелец данных (гипотетический)"
     window_lookback_days: 0
     window_source: "справочник машин"
@@ -50,6 +52,7 @@ columns:
   - name: model
     role: feature
     availability: at_decision
+    value_as_of: decided_at
     source_of_claim: "владелец данных (гипотетический)"
     window_lookback_days: 0
     window_source: "справочник машин"

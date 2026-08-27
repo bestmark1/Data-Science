@@ -34,20 +34,20 @@ columns:
 
   # Скользящие признаки: семь суток с отступом в шесть часов. Отступ появился
   # после F-11 — без него окно захватывало показания, снятые после решения.
-  - {name: volt_mean_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at}
-  - {name: rotate_mean_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at}
-  - {name: pressure_mean_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at}
-  - {name: vibration_mean_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at}
-  - {name: volt_std_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at}
-  - {name: rotate_std_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at}
-  - {name: pressure_std_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at}
-  - {name: vibration_std_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at}
-  - {name: errors_7d, role: feature, availability: at_decision, source_of_claim: "журнал ошибок", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at}
+  - {name: volt_mean_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at, value_as_of: measured_at}
+  - {name: rotate_mean_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at, value_as_of: measured_at}
+  - {name: pressure_mean_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at, value_as_of: measured_at}
+  - {name: vibration_mean_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at, value_as_of: measured_at}
+  - {name: volt_std_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at, value_as_of: measured_at}
+  - {name: rotate_std_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at, value_as_of: measured_at}
+  - {name: pressure_std_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at, value_as_of: measured_at}
+  - {name: vibration_std_7d, role: feature, availability: at_decision, source_of_claim: "телеметрия", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at, value_as_of: measured_at}
+  - {name: errors_7d, role: feature, availability: at_decision, source_of_claim: "журнал ошибок", window_lookback_days: 7, window_lag_days: 0.25, window_source: "код построения признаков", window_clock: measured_at, measured_at: measured_at, value_as_of: measured_at}
 
   # Справочник машин. Времени внесения записи нет, окно остаётся объявлением.
   # Доменное ожидание: старая машина отказывает чаще.
-  - {name: age, role: feature, availability: at_decision, source_of_claim: "справочник машин", window_lookback_days: 0, window_source: "справочник машин", direction: increases}
-  - {name: model, role: feature, availability: at_decision, source_of_claim: "справочник машин", window_lookback_days: 0, window_source: "справочник машин"}
+  - {name: age, role: feature, availability: at_decision, source_of_claim: "справочник машин", window_lookback_days: 0, window_source: "справочник машин", direction: increases, value_as_of: decided_at}
+  - {name: model, role: feature, availability: at_decision, source_of_claim: "справочник машин", window_lookback_days: 0, window_source: "справочник машин", value_as_of: decided_at}
 
 outcome:
   event_column: failed_at

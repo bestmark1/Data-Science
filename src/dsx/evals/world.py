@@ -58,18 +58,21 @@ def base_schema() -> Schema:
             ColumnSpec(
                 name="lead_days",
                 role=Role.FEATURE,
+                value_as_of="decided_at",
                 availability=Availability.AT_DECISION,
                 source_of_claim=SOURCE,
             ),
             ColumnSpec(
                 name="size",
                 role=Role.FEATURE,
+                value_as_of="decided_at",
                 availability=Availability.AT_DECISION,
                 source_of_claim=SOURCE,
             ),
             ColumnSpec(
                 name="region",
                 role=Role.FEATURE,
+                value_as_of="decided_at",
                 availability=Availability.AT_DECISION,
                 source_of_claim=SOURCE,
             ),

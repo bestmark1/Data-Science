@@ -235,6 +235,7 @@ class ValueFixedBeforeDecision:
             return []
 
         deadlines = schema.by_role(Role.DEADLINE)
+        features = schema.usable_features()
         signals: list[Signal] = []
 
         undeclared = [c.name for c in deadlines if not c.value_as_of]
@@ -250,8 +251,34 @@ class ValueFixedBeforeDecision:
                 )
             )
 
+        # Признаки — тоже. Двенадцатый кейс: колонка текущего состояния
+        # нарушения, объявленная признаком момента решения, имела связь с
+        # исходом в шестнадцать раз сильнее типичной и всё же прошла мимо N6,
+        # потому что сила связи утечку от честного признака не отличает.
+        #
+        # Отличает момент фиксации. В тех же данных лежала колонка с датой
+        # состояния, и она позже инспекции у 96.6% строк: объяви автор момент
+        # честно — проверка возразила бы немедленно.
+        #
+        # Требование не закрывает ложь: объявить моментом фиксации момент
+        # решения можно и у переписываемого поля. Оно заставляет ЗАДАТЬ вопрос
+        # о каждом признаке и делает ответ проверяемым везде, где в данных есть
+        # колонка-спутник.
+        silent = [c.name for c in features if not c.value_as_of]
+        if silent:
+            signals.append(
+                Signal(
+                    Finding.VALUE_REVISED_AFTER_DECISION,
+                    f"признаки {sorted(silent)!r} не объявили, НА КАКОЙ МОМЕНТ "
+                    "зафиксированы их значения. Величина, взятая из свежей выгрузки, "
+                    "читается сегодня не той, какой была в момент решения, и отличить "
+                    "одно от другого без объявления нечем",
+                    blocking=True,
+                )
+            )
+
         frame = context.world.main
-        checked = [c for c in (*deadlines, *schema.usable_features()) if c.value_as_of]
+        checked = [c for c in (*deadlines, *features) if c.value_as_of]
         for column in checked:
             fixed = column.value_as_of
             if fixed not in frame.columns or decision.name not in frame.columns:

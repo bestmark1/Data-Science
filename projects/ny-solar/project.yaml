@@ -59,22 +59,22 @@ columns:
   - {name: status, role: status}
 
   # Признаки, известные при подаче заявки. Все мгновенные.
-  - {name: sector, role: feature, availability: at_decision, source_of_claim: "сектор заявителя из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA"}
-  - {name: program_type, role: feature, availability: at_decision, source_of_claim: "программа поддержки из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA"}
-  - {name: purchase_type, role: feature, availability: at_decision, source_of_claim: "форма приобретения из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA"}
-  - {name: utility, role: feature, availability: at_decision, source_of_claim: "электросетевая компания участка", window_lookback_days: 0, window_source: "выгрузка NYSERDA"}
-  - {name: county, role: feature, availability: at_decision, source_of_claim: "округ участка", window_lookback_days: 0, window_source: "выгрузка NYSERDA"}
-  - {name: municipality_type, role: feature, availability: at_decision, source_of_claim: "тип муниципалитета", window_lookback_days: 0, window_source: "выгрузка NYSERDA"}
-  - {name: disadvantaged_status, role: feature, availability: at_decision, source_of_claim: "статус неблагополучной территории", window_lookback_days: 0, window_source: "выгрузка NYSERDA"}
-  - {name: project_cost, role: feature, availability: at_decision, source_of_claim: "стоимость проекта из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA"}
-  - {name: incentive, role: feature, availability: at_decision, source_of_claim: "размер субсидии по программе", window_lookback_days: 0, window_source: "выгрузка NYSERDA"}
-  - {name: nameplate_kw, role: feature, availability: at_decision, source_of_claim: "проектная мощность из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA"}
-  - {name: expected_kwh, role: feature, availability: at_decision, source_of_claim: "ожидаемая выработка из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA"}
-  - {name: inverter_count, role: feature, availability: at_decision, source_of_claim: "число инверторов из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA"}
-  - {name: module_count, role: feature, availability: at_decision, source_of_claim: "число модулей из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA"}
-  - {name: inverter_maker, role: feature, availability: at_decision, source_of_claim: "производитель инвертора из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA"}
-  - {name: module_maker, role: feature, availability: at_decision, source_of_claim: "производитель модулей из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA"}
-  - {name: remote_net_metering, role: feature, availability: at_decision, source_of_claim: "признак удалённого учёта из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA"}
+  - {name: sector, role: feature, availability: at_decision, source_of_claim: "сектор заявителя из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA", value_as_of: applied_at}
+  - {name: program_type, role: feature, availability: at_decision, source_of_claim: "программа поддержки из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA", value_as_of: applied_at}
+  - {name: purchase_type, role: feature, availability: at_decision, source_of_claim: "форма приобретения из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA", value_as_of: applied_at}
+  - {name: utility, role: feature, availability: at_decision, source_of_claim: "электросетевая компания участка", window_lookback_days: 0, window_source: "выгрузка NYSERDA", value_as_of: applied_at}
+  - {name: county, role: feature, availability: at_decision, source_of_claim: "округ участка", window_lookback_days: 0, window_source: "выгрузка NYSERDA", value_as_of: applied_at}
+  - {name: municipality_type, role: feature, availability: at_decision, source_of_claim: "тип муниципалитета", window_lookback_days: 0, window_source: "выгрузка NYSERDA", value_as_of: applied_at}
+  - {name: disadvantaged_status, role: feature, availability: at_decision, source_of_claim: "статус неблагополучной территории", window_lookback_days: 0, window_source: "выгрузка NYSERDA", value_as_of: applied_at}
+  - {name: project_cost, role: feature, availability: at_decision, source_of_claim: "стоимость проекта из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA", value_as_of: applied_at}
+  - {name: incentive, role: feature, availability: at_decision, source_of_claim: "размер субсидии по программе", window_lookback_days: 0, window_source: "выгрузка NYSERDA", value_as_of: applied_at}
+  - {name: nameplate_kw, role: feature, availability: at_decision, source_of_claim: "проектная мощность из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA", value_as_of: applied_at}
+  - {name: expected_kwh, role: feature, availability: at_decision, source_of_claim: "ожидаемая выработка из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA", value_as_of: applied_at}
+  - {name: inverter_count, role: feature, availability: at_decision, source_of_claim: "число инверторов из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA", value_as_of: applied_at}
+  - {name: module_count, role: feature, availability: at_decision, source_of_claim: "число модулей из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA", value_as_of: applied_at}
+  - {name: inverter_maker, role: feature, availability: at_decision, source_of_claim: "производитель инвертора из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA", value_as_of: applied_at}
+  - {name: module_maker, role: feature, availability: at_decision, source_of_claim: "производитель модулей из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA", value_as_of: applied_at}
+  - {name: remote_net_metering, role: feature, availability: at_decision, source_of_claim: "признак удалённого учёта из анкеты", window_lookback_days: 0, window_source: "выгрузка NYSERDA", value_as_of: applied_at}
 
   # Был контролем К-1: величина вычислена из даты завершения и известна только
   # ПОСЛЕ исхода. Объявлялась признаком момента подачи; ядро возразило само —

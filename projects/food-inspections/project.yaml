@@ -57,19 +57,19 @@ columns:
   # назад внутри лицензии; время последнего наблюдения объявлено, поэтому окно
   # сверяется с данными, а не принимается на слово.
   - {name: previous_inspected_at, role: measured_at, temporal: date}
-  - {name: failures_before, role: feature, availability: at_decision, source_of_claim: "код сборки: провалы до текущей инспекции", window_lookback_days: 2800, window_source: "код сборки build.py, история от начала наблюдения", window_clock: previous_inspected_at, measured_at: previous_inspected_at}
-  - {name: inspections_before, role: feature, availability: at_decision, source_of_claim: "код сборки: число инспекций до текущей", window_lookback_days: 2800, window_source: "код сборки build.py, история от начала наблюдения", window_clock: previous_inspected_at, measured_at: previous_inspected_at}
-  - {name: previous_failed, role: feature, availability: at_decision, source_of_claim: "код сборки: результат предыдущей инспекции", window_lookback_days: 2800, window_source: "код сборки build.py", window_clock: previous_inspected_at, measured_at: previous_inspected_at}
-  - {name: days_since_previous, role: feature, availability: at_decision, source_of_claim: "код сборки: дни от предыдущей инспекции", window_lookback_days: 2800, window_source: "код сборки build.py", window_clock: previous_inspected_at, measured_at: previous_inspected_at}
+  - {name: failures_before, role: feature, availability: at_decision, source_of_claim: "код сборки: провалы до текущей инспекции", window_lookback_days: 2800, window_source: "код сборки build.py, история от начала наблюдения", window_clock: previous_inspected_at, measured_at: previous_inspected_at, value_as_of: previous_inspected_at}
+  - {name: inspections_before, role: feature, availability: at_decision, source_of_claim: "код сборки: число инспекций до текущей", window_lookback_days: 2800, window_source: "код сборки build.py, история от начала наблюдения", window_clock: previous_inspected_at, measured_at: previous_inspected_at, value_as_of: previous_inspected_at}
+  - {name: previous_failed, role: feature, availability: at_decision, source_of_claim: "код сборки: результат предыдущей инспекции", window_lookback_days: 2800, window_source: "код сборки build.py", window_clock: previous_inspected_at, measured_at: previous_inspected_at, value_as_of: previous_inspected_at}
+  - {name: days_since_previous, role: feature, availability: at_decision, source_of_claim: "код сборки: дни от предыдущей инспекции", window_lookback_days: 2800, window_source: "код сборки build.py", window_clock: previous_inspected_at, measured_at: previous_inspected_at, value_as_of: previous_inspected_at}
 
   # Свойства заведения, известные до инспекции.
-  - {name: facility_type, role: feature, availability: at_decision, source_of_claim: "реестр заведений города", window_lookback_days: 0, window_source: "код сборки build.py"}
-  - {name: risk, role: feature, availability: at_decision, source_of_claim: "категория риска присваивается городом заранее", window_lookback_days: 0, window_source: "код сборки build.py"}
-  - {name: zip_code, role: feature, availability: at_decision, source_of_claim: "адрес заведения", window_lookback_days: 0, window_source: "код сборки build.py"}
-  - {name: inspection_type, role: feature, availability: at_decision, source_of_claim: "тип назначен городом при планировании инспекции", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: facility_type, role: feature, availability: at_decision, source_of_claim: "реестр заведений города", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: inspected_at}
+  - {name: risk, role: feature, availability: at_decision, source_of_claim: "категория риска присваивается городом заранее", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: inspected_at}
+  - {name: zip_code, role: feature, availability: at_decision, source_of_claim: "адрес заведения", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: inspected_at}
+  - {name: inspection_type, role: feature, availability: at_decision, source_of_claim: "тип назначен городом при планировании инспекции", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: inspected_at}
   # Результат ТЕКУЩЕЙ инспекции известен к концу её проведения, то есть в момент
   # решения о следующей.
-  - {name: result, role: feature, availability: at_decision, source_of_claim: "исход текущей инспекции, известен по её завершении", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: result, role: feature, availability: at_decision, source_of_claim: "исход текущей инспекции, известен по её завершении", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: inspected_at}
 
   # Значения, известные только ПОСЛЕ момента решения.
   - {name: next_inspected_at, role: ignored}  # дата следующей инспекции — из будущего

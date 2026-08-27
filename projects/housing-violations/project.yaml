@@ -51,12 +51,12 @@ columns:
   - {name: violation_status, role: status}
 
   # Признаки, известные в день инспекции.
-  - {name: severity, role: feature, availability: at_decision, source_of_claim: "класс нарушения, присваиваемый инспектором", window_lookback_days: 0, window_source: "выгрузка HPD"}
-  - {name: boro, role: feature, availability: at_decision, source_of_claim: "район города", window_lookback_days: 0, window_source: "выгрузка HPD"}
-  - {name: novtype, role: feature, availability: at_decision, source_of_claim: "тип уведомления о нарушении", window_lookback_days: 0, window_source: "выгрузка HPD"}
-  - {name: rentimpairing, role: feature, availability: at_decision, source_of_claim: "признак нарушения, ущемляющего право на аренду", window_lookback_days: 0, window_source: "выгрузка HPD"}
-  - {name: story, role: feature, availability: at_decision, source_of_claim: "этаж, где найдено нарушение", window_lookback_days: 0, window_source: "выгрузка HPD"}
-  - {name: communityboard, role: feature, availability: at_decision, source_of_claim: "муниципальный округ", window_lookback_days: 0, window_source: "выгрузка HPD"}
+  - {name: severity, role: feature, availability: at_decision, source_of_claim: "класс нарушения, присваиваемый инспектором", window_lookback_days: 0, window_source: "выгрузка HPD", value_as_of: inspected_at}
+  - {name: boro, role: feature, availability: at_decision, source_of_claim: "район города", window_lookback_days: 0, window_source: "выгрузка HPD", value_as_of: inspected_at}
+  - {name: novtype, role: feature, availability: at_decision, source_of_claim: "тип уведомления о нарушении", window_lookback_days: 0, window_source: "выгрузка HPD", value_as_of: inspected_at}
+  - {name: rentimpairing, role: feature, availability: at_decision, source_of_claim: "признак нарушения, ущемляющего право на аренду", window_lookback_days: 0, window_source: "выгрузка HPD", value_as_of: inspected_at}
+  - {name: story, role: feature, availability: at_decision, source_of_claim: "этаж, где найдено нарушение", window_lookback_days: 0, window_source: "выгрузка HPD", value_as_of: inspected_at}
+  - {name: communityboard, role: feature, availability: at_decision, source_of_claim: "муниципальный округ", window_lookback_days: 0, window_source: "выгрузка HPD", value_as_of: inspected_at}
 
   # Был контролем К-1: текущее состояние отражает ИТОГ и известно только после.
   # Ядро ПРОМОЛЧАЛО — сила разделения 0.278 при абсолютном пороге 0.35, хотя

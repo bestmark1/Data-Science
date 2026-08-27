@@ -64,15 +64,15 @@ columns:
   - {name: status, role: status}
 
   # Признаки, известные при регистрации.
-  - {name: sponsor_class, role: feature, availability: at_decision, source_of_claim: "тип спонсора из записи реестра", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov"}
-  - {name: enrollment, role: feature, availability: at_decision, source_of_claim: "плановый набор участников", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov"}
-  - {name: enrollment_type, role: feature, availability: at_decision, source_of_claim: "тип числа участников: план или факт", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov"}
-  - {name: allocation, role: feature, availability: at_decision, source_of_claim: "схема распределения из протокола", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov"}
-  - {name: intervention_model, role: feature, availability: at_decision, source_of_claim: "модель вмешательства из протокола", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov"}
-  - {name: primary_purpose, role: feature, availability: at_decision, source_of_claim: "основная цель из протокола", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov"}
-  - {name: masking, role: feature, availability: at_decision, source_of_claim: "ослепление из протокола", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov"}
-  - {name: condition_count, role: feature, availability: at_decision, source_of_claim: "код сборки: число заявленных состояний", window_lookback_days: 0, window_source: "код сборки build.py"}
-  - {name: promised_primary_type, role: feature, availability: at_decision, source_of_claim: "тип обещанной даты в версии 0", window_lookback_days: 0, window_source: "архив версий ClinicalTrials.gov"}
+  - {name: sponsor_class, role: feature, availability: at_decision, source_of_claim: "тип спонсора из записи реестра", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov", value_as_of: registered_at}
+  - {name: enrollment, role: feature, availability: at_decision, source_of_claim: "плановый набор участников", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov", value_as_of: registered_at}
+  - {name: enrollment_type, role: feature, availability: at_decision, source_of_claim: "тип числа участников: план или факт", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov", value_as_of: registered_at}
+  - {name: allocation, role: feature, availability: at_decision, source_of_claim: "схема распределения из протокола", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov", value_as_of: registered_at}
+  - {name: intervention_model, role: feature, availability: at_decision, source_of_claim: "модель вмешательства из протокола", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov", value_as_of: registered_at}
+  - {name: primary_purpose, role: feature, availability: at_decision, source_of_claim: "основная цель из протокола", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov", value_as_of: registered_at}
+  - {name: masking, role: feature, availability: at_decision, source_of_claim: "ослепление из протокола", window_lookback_days: 0, window_source: "выгрузка ClinicalTrials.gov", value_as_of: registered_at}
+  - {name: condition_count, role: feature, availability: at_decision, source_of_claim: "код сборки: число заявленных состояний", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: registered_at}
+  - {name: promised_primary_type, role: feature, availability: at_decision, source_of_claim: "тип обещанной даты в версии 0", window_lookback_days: 0, window_source: "архив версий ClinicalTrials.gov", value_as_of: registered_at}
 
   # ЗНАЧЕНИЕ НА МОМЕНТ ВЫГРУЗКИ. То же поле, переписанное после исхода.
   # Признаком НЕ объявляется: объявление было бы утечкой, и это предмет

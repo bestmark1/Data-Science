@@ -57,21 +57,21 @@ columns:
   - {name: happened_at, role: ignored, temporal: instant}
 
   # ПРИЗНАК ПО СРЕЗУ: учтены только сводки, зарегистрированные до решения.
-  - {name: nearby_90d_known, role: feature, availability: at_decision, source_of_claim: "код сборки: окно по времени РЕГИСТРАЦИИ", window_lookback_days: 90, window_source: "код сборки build.py, срез на момент решения", window_clock: reported_at}
+  - {name: nearby_90d_known, role: feature, availability: at_decision, source_of_claim: "код сборки: окно по времени РЕГИСТРАЦИИ", window_lookback_days: 90, window_source: "код сборки build.py, срез на момент решения", window_clock: reported_at, value_as_of: reported_at}
 
   # ПРИЗНАК ПО ВЫГРУЗКЕ: учтены сводки, произошедшие в окне, включая записанные
   # позже. Так считает всякий, кто не думал о запаздывании. Объявляется наравне
   # с предыдущим намеренно: ядро обязано либо различить их, либо промолчать, и
   # это предмет предсказания P-1.
-  - {name: nearby_90d_export, role: feature, availability: at_decision, source_of_claim: "код сборки: окно по времени ПРОИСШЕСТВИЯ", window_lookback_days: 90, window_source: "код сборки build.py, вся выгрузка", window_clock: happened_at}
+  - {name: nearby_90d_export, role: feature, availability: at_decision, source_of_claim: "код сборки: окно по времени ПРОИСШЕСТВИЯ", window_lookback_days: 90, window_source: "код сборки build.py, вся выгрузка", window_clock: happened_at, value_as_of: reported_at}
 
   # Свойства сводки, известные при регистрации.
-  - {name: category, role: feature, availability: at_decision, source_of_claim: "классификация происшествия в сводке", window_lookback_days: 0, window_source: "код сборки build.py"}
-  - {name: report_type, role: feature, availability: at_decision, source_of_claim: "тип сводки: первичная, дополнительная", window_lookback_days: 0, window_source: "код сборки build.py"}
-  - {name: filed_online, role: feature, availability: at_decision, source_of_claim: "способ подачи сводки", window_lookback_days: 0, window_source: "код сборки build.py"}
-  - {name: district, role: feature, availability: at_decision, source_of_claim: "полицейский округ участка", window_lookback_days: 0, window_source: "код сборки build.py"}
-  - {name: neighborhood, role: feature, availability: at_decision, source_of_claim: "район участка", window_lookback_days: 0, window_source: "код сборки build.py"}
-  - {name: report_lag_hours, role: feature, availability: at_decision, source_of_claim: "код сборки: часы от происшествия до регистрации", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: category, role: feature, availability: at_decision, source_of_claim: "классификация происшествия в сводке", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: reported_at}
+  - {name: report_type, role: feature, availability: at_decision, source_of_claim: "тип сводки: первичная, дополнительная", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: reported_at}
+  - {name: filed_online, role: feature, availability: at_decision, source_of_claim: "способ подачи сводки", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: reported_at}
+  - {name: district, role: feature, availability: at_decision, source_of_claim: "полицейский округ участка", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: reported_at}
+  - {name: neighborhood, role: feature, availability: at_decision, source_of_claim: "район участка", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: reported_at}
+  - {name: report_lag_hours, role: feature, availability: at_decision, source_of_claim: "код сборки: часы от происшествия до регистрации", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: reported_at}
 
   # Известно только после решения.
   - {name: subcategory, role: ignored}

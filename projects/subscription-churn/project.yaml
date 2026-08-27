@@ -53,11 +53,11 @@ columns:
   # Признаки, доступные в момент оформления. Окна нулевой длины: это атрибуты
   # записи, а не агрегаты по интервалу. Сверить их нечем — времени изменения
   # записи в выгрузке нет.
-  - {name: age, role: feature, availability: at_decision, source_of_claim: "customer_info.csv, атрибут клиента", window_lookback_days: 0, window_source: "код сборки build.py"}
-  - {name: gender, role: feature, availability: at_decision, source_of_claim: "customer_info.csv, атрибут клиента", window_lookback_days: 0, window_source: "код сборки build.py"}
-  - {name: product, role: feature, availability: at_decision, source_of_claim: "customer_product.csv, выбранный продукт", window_lookback_days: 0, window_source: "код сборки build.py"}
-  - {name: price, role: feature, availability: at_decision, source_of_claim: "product_info.csv, справочник", window_lookback_days: 0, window_source: "код сборки build.py"}
-  - {name: billing_cycle, role: feature, availability: at_decision, source_of_claim: "product_info.csv, справочник", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: age, role: feature, availability: at_decision, source_of_claim: "customer_info.csv, атрибут клиента", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: signed_up_at}
+  - {name: gender, role: feature, availability: at_decision, source_of_claim: "customer_info.csv, атрибут клиента", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: signed_up_at}
+  - {name: product, role: feature, availability: at_decision, source_of_claim: "customer_product.csv, выбранный продукт", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: signed_up_at}
+  - {name: price, role: feature, availability: at_decision, source_of_claim: "product_info.csv, справочник", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: signed_up_at}
+  - {name: billing_cycle, role: feature, availability: at_decision, source_of_claim: "product_info.csv, справочник", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: signed_up_at}
 
   # Название продукта дублирует его идентификатор: два значения на два продукта.
   - {name: name, role: ignored}

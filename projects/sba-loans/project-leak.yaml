@@ -63,22 +63,22 @@ columns:
 
   # Признаки, известные в момент выдачи. Все мгновенные: окон нет, и потому
   # объявлять часы окна нечему.
-  - {name: term_months, role: feature, availability: at_decision, source_of_claim: "срок кредита из договора", window_lookback_days: 0, window_source: "выгрузка SBA, поле Term"}
-  - {name: disbursed_amount, role: feature, availability: at_decision, source_of_claim: "сумма выдачи из договора", window_lookback_days: 0, window_source: "выгрузка SBA, поле DisbursementGross"}
-  - {name: approved_amount, role: feature, availability: at_decision, source_of_claim: "сумма, одобренная банком", window_lookback_days: 0, window_source: "выгрузка SBA, поле GrAppv"}
-  - {name: guaranteed_amount, role: feature, availability: at_decision, source_of_claim: "сумма гарантии SBA", window_lookback_days: 0, window_source: "выгрузка SBA, поле SBA_Appv"}
-  - {name: employees, role: feature, availability: at_decision, source_of_claim: "число работников на момент заявки", window_lookback_days: 0, window_source: "выгрузка SBA, поле NoEmp"}
-  - {name: new_business, role: feature, availability: at_decision, source_of_claim: "новый бизнес или существующий", window_lookback_days: 0, window_source: "выгрузка SBA, поле NewExist"}
-  - {name: jobs_created, role: feature, availability: at_decision, source_of_claim: "обещанные новые рабочие места", window_lookback_days: 0, window_source: "выгрузка SBA, поле CreateJob"}
-  - {name: jobs_retained, role: feature, availability: at_decision, source_of_claim: "обещанные сохранённые места", window_lookback_days: 0, window_source: "выгрузка SBA, поле RetainedJob"}
-  - {name: franchise_code, role: feature, availability: at_decision, source_of_claim: "код франшизы", window_lookback_days: 0, window_source: "выгрузка SBA, поле FranchiseCode"}
-  - {name: urban_rural, role: feature, availability: at_decision, source_of_claim: "город или село", window_lookback_days: 0, window_source: "выгрузка SBA, поле UrbanRural"}
-  - {name: revolving_credit, role: feature, availability: at_decision, source_of_claim: "возобновляемая кредитная линия", window_lookback_days: 0, window_source: "выгрузка SBA, поле RevLineCr"}
-  - {name: low_doc, role: feature, availability: at_decision, source_of_claim: "программа упрощённого оформления", window_lookback_days: 0, window_source: "выгрузка SBA, поле LowDoc"}
-  - {name: state, role: feature, availability: at_decision, source_of_claim: "штат заёмщика", window_lookback_days: 0, window_source: "выгрузка SBA, поле State"}
-  - {name: bank_state, role: feature, availability: at_decision, source_of_claim: "штат банка", window_lookback_days: 0, window_source: "выгрузка SBA, поле BankState"}
-  - {name: sector, role: feature, availability: at_decision, source_of_claim: "код сборки: первые две цифры NAICS", window_lookback_days: 0, window_source: "код сборки build.py"}
-  - {name: approval_lag_days, role: feature, availability: at_decision, source_of_claim: "код сборки: дни от одобрения до выдачи", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: term_months, role: feature, availability: at_decision, source_of_claim: "срок кредита из договора", window_lookback_days: 0, window_source: "выгрузка SBA, поле Term", value_as_of: disbursed_at}
+  - {name: disbursed_amount, role: feature, availability: at_decision, source_of_claim: "сумма выдачи из договора", window_lookback_days: 0, window_source: "выгрузка SBA, поле DisbursementGross", value_as_of: disbursed_at}
+  - {name: approved_amount, role: feature, availability: at_decision, source_of_claim: "сумма, одобренная банком", window_lookback_days: 0, window_source: "выгрузка SBA, поле GrAppv", value_as_of: disbursed_at}
+  - {name: guaranteed_amount, role: feature, availability: at_decision, source_of_claim: "сумма гарантии SBA", window_lookback_days: 0, window_source: "выгрузка SBA, поле SBA_Appv", value_as_of: disbursed_at}
+  - {name: employees, role: feature, availability: at_decision, source_of_claim: "число работников на момент заявки", window_lookback_days: 0, window_source: "выгрузка SBA, поле NoEmp", value_as_of: disbursed_at}
+  - {name: new_business, role: feature, availability: at_decision, source_of_claim: "новый бизнес или существующий", window_lookback_days: 0, window_source: "выгрузка SBA, поле NewExist", value_as_of: disbursed_at}
+  - {name: jobs_created, role: feature, availability: at_decision, source_of_claim: "обещанные новые рабочие места", window_lookback_days: 0, window_source: "выгрузка SBA, поле CreateJob", value_as_of: disbursed_at}
+  - {name: jobs_retained, role: feature, availability: at_decision, source_of_claim: "обещанные сохранённые места", window_lookback_days: 0, window_source: "выгрузка SBA, поле RetainedJob", value_as_of: disbursed_at}
+  - {name: franchise_code, role: feature, availability: at_decision, source_of_claim: "код франшизы", window_lookback_days: 0, window_source: "выгрузка SBA, поле FranchiseCode", value_as_of: disbursed_at}
+  - {name: urban_rural, role: feature, availability: at_decision, source_of_claim: "город или село", window_lookback_days: 0, window_source: "выгрузка SBA, поле UrbanRural", value_as_of: disbursed_at}
+  - {name: revolving_credit, role: feature, availability: at_decision, source_of_claim: "возобновляемая кредитная линия", window_lookback_days: 0, window_source: "выгрузка SBA, поле RevLineCr", value_as_of: disbursed_at}
+  - {name: low_doc, role: feature, availability: at_decision, source_of_claim: "программа упрощённого оформления", window_lookback_days: 0, window_source: "выгрузка SBA, поле LowDoc", value_as_of: disbursed_at}
+  - {name: state, role: feature, availability: at_decision, source_of_claim: "штат заёмщика", window_lookback_days: 0, window_source: "выгрузка SBA, поле State", value_as_of: disbursed_at}
+  - {name: bank_state, role: feature, availability: at_decision, source_of_claim: "штат банка", window_lookback_days: 0, window_source: "выгрузка SBA, поле BankState", value_as_of: disbursed_at}
+  - {name: sector, role: feature, availability: at_decision, source_of_claim: "код сборки: первые две цифры NAICS", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: disbursed_at}
+  - {name: approval_lag_days, role: feature, availability: at_decision, source_of_claim: "код сборки: дни от одобрения до выдачи", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: disbursed_at}
 
   # Известно к моменту выдачи, но признаком не объявлено.
   - {name: approved_at, role: ignored, temporal: instant}
@@ -95,8 +95,8 @@ columns:
   # MIS_Status в этот прогон не входит по устройству контракта: его роль уже
   # занята ролью статуса, и объявить ту же колонку признаком нельзя. Это тоже
   # ответ — структурный, а не проверочный.
-  - {name: balance_gross, role: feature, availability: at_decision, source_of_claim: "ЛОЖНОЕ объявление ради проверки P-4", window_lookback_days: 0, window_source: "выгрузка SBA, поле BalanceGross"}
-  - {name: charged_off_amount, role: feature, availability: at_decision, source_of_claim: "ЛОЖНОЕ объявление ради проверки P-4", window_lookback_days: 0, window_source: "выгрузка SBA, поле ChgOffPrinGr"}
+  - {name: balance_gross, role: feature, availability: at_decision, source_of_claim: "ЛОЖНОЕ объявление ради проверки P-4", window_lookback_days: 0, window_source: "выгрузка SBA, поле BalanceGross", value_as_of: disbursed_at}
+  - {name: charged_off_amount, role: feature, availability: at_decision, source_of_claim: "ЛОЖНОЕ объявление ради проверки P-4", window_lookback_days: 0, window_source: "выгрузка SBA, поле ChgOffPrinGr", value_as_of: disbursed_at}
 
 # --- КОНТРАКТ ИСХОДА ---------------------------------------------------------
 

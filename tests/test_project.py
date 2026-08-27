@@ -29,6 +29,7 @@ FORM = textwrap.dedent("""
         source_of_claim: "генератор мира"
         window_lookback_days: 0
         window_source: "код мира"
+        value_as_of: decided_at
       - {name: size, role: ignored}
       - {name: region, role: ignored}
     outcome:

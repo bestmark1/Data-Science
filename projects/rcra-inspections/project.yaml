@@ -59,14 +59,14 @@ columns:
   # ПОВОД ПРОВЕРКИ — ось кейса. Объявляется обычным признаком, потому что иначе
   # объявить его нечем: роли «причина, по которой строка существует» в форме
   # нет. Это и есть предмет предсказания P-1.
-  - {name: EVALUATION_TYPE, role: feature, availability: at_decision, source_of_claim: "код повода из выгрузки EPA", window_lookback_days: 0, window_source: "выгрузка RCRA_EVALUATIONS"}
+  - {name: EVALUATION_TYPE, role: feature, availability: at_decision, source_of_claim: "код повода из выгрузки EPA", window_lookback_days: 0, window_source: "выгрузка RCRA_EVALUATIONS", value_as_of: EVALUATION_START_DATE}
   # ПРИЧИНА НАБЛЮДЕНИЯ. Объявлена ролью, введённой по итогам этого же кейса:
   # прежде повод приходилось объявлять обычным признаком, и ядро не отличало
   # его от штата или отрасли.
   - {name: trigger_kind, role: observation_reason}
 
-  - {name: EVALUATION_AGENCY, role: feature, availability: at_decision, source_of_claim: "орган, проводящий проверку", window_lookback_days: 0, window_source: "выгрузка RCRA_EVALUATIONS"}
-  - {name: ACTIVITY_LOCATION, role: feature, availability: at_decision, source_of_claim: "штат ведения дела", window_lookback_days: 0, window_source: "выгрузка RCRA_EVALUATIONS"}
+  - {name: EVALUATION_AGENCY, role: feature, availability: at_decision, source_of_claim: "орган, проводящий проверку", window_lookback_days: 0, window_source: "выгрузка RCRA_EVALUATIONS", value_as_of: EVALUATION_START_DATE}
+  - {name: ACTIVITY_LOCATION, role: feature, availability: at_decision, source_of_claim: "штат ведения дела", window_lookback_days: 0, window_source: "выгрузка RCRA_EVALUATIONS", value_as_of: EVALUATION_START_DATE}
 
   # Свойства площадки взяты из справочника СЕГОДНЯШНЕГО состояния: истории он
   # не хранит. Проверка S10 возразила на все шесть — 100% строк.
@@ -92,7 +92,7 @@ columns:
   # История площадки: нарушения, установленные СТРОГО РАНЬШЕ этой проверки.
   # Часы окна — время установления нарушения, то есть момент, когда о нём стало
   # известно, а не когда оно случилось.
-  - {name: prior_violations, role: feature, availability: at_decision, source_of_claim: "код сборки: накопительный счёт нарушений на площадке", window_lookback_days: 20000, window_source: "код сборки build.py, вся история площадки", window_clock: violation_at}
+  - {name: prior_violations, role: feature, availability: at_decision, source_of_claim: "код сборки: накопительный счёт нарушений на площадке", window_lookback_days: 20000, window_source: "код сборки build.py, вся история площадки", window_clock: violation_at, value_as_of: EVALUATION_START_DATE}
 
   # Не участвуют в постановке.
   - {name: EVALUATION_IDENTIFIER, role: ignored}

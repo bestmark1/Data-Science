@@ -58,14 +58,14 @@ columns:
   - {name: status, role: status}
 
   # Признаки, известные в момент расписанного вылета.
-  - {name: origin, role: feature, availability: at_decision, source_of_claim: "аэропорт вылета из расписания", window_lookback_days: 0, window_source: "выгрузка BTS"}
-  - {name: dest, role: feature, availability: at_decision, source_of_claim: "аэропорт прибытия из расписания", window_lookback_days: 0, window_source: "выгрузка BTS"}
-  - {name: origin_state, role: feature, availability: at_decision, source_of_claim: "штат вылета из расписания", window_lookback_days: 0, window_source: "выгрузка BTS"}
-  - {name: dest_state, role: feature, availability: at_decision, source_of_claim: "штат прибытия из расписания", window_lookback_days: 0, window_source: "выгрузка BTS"}
-  - {name: scheduled_minutes, role: feature, availability: at_decision, source_of_claim: "расписанная длительность рейса", window_lookback_days: 0, window_source: "выгрузка BTS"}
-  - {name: distance, role: feature, availability: at_decision, source_of_claim: "расстояние между аэропортами", window_lookback_days: 0, window_source: "выгрузка BTS"}
-  - {name: day_of_week, role: feature, availability: at_decision, source_of_claim: "день недели из даты рейса", window_lookback_days: 0, window_source: "выгрузка BTS"}
-  - {name: CRSDepTime, role: feature, availability: at_decision, source_of_claim: "расписанное время вылета в минутах от полуночи", window_lookback_days: 0, window_source: "код сборки build.py"}
+  - {name: origin, role: feature, availability: at_decision, source_of_claim: "аэропорт вылета из расписания", window_lookback_days: 0, window_source: "выгрузка BTS", value_as_of: scheduled_departure}
+  - {name: dest, role: feature, availability: at_decision, source_of_claim: "аэропорт прибытия из расписания", window_lookback_days: 0, window_source: "выгрузка BTS", value_as_of: scheduled_departure}
+  - {name: origin_state, role: feature, availability: at_decision, source_of_claim: "штат вылета из расписания", window_lookback_days: 0, window_source: "выгрузка BTS", value_as_of: scheduled_departure}
+  - {name: dest_state, role: feature, availability: at_decision, source_of_claim: "штат прибытия из расписания", window_lookback_days: 0, window_source: "выгрузка BTS", value_as_of: scheduled_departure}
+  - {name: scheduled_minutes, role: feature, availability: at_decision, source_of_claim: "расписанная длительность рейса", window_lookback_days: 0, window_source: "выгрузка BTS", value_as_of: scheduled_departure}
+  - {name: distance, role: feature, availability: at_decision, source_of_claim: "расстояние между аэропортами", window_lookback_days: 0, window_source: "выгрузка BTS", value_as_of: scheduled_departure}
+  - {name: day_of_week, role: feature, availability: at_decision, source_of_claim: "день недели из даты рейса", window_lookback_days: 0, window_source: "выгрузка BTS", value_as_of: scheduled_departure}
+  - {name: CRSDepTime, role: feature, availability: at_decision, source_of_claim: "расписанное время вылета в минутах от полуночи", window_lookback_days: 0, window_source: "код сборки build.py", value_as_of: scheduled_departure}
 
   # Был контролем К-1: задержка вылета известна только ПОСЛЕ фактического
   # вылета. Объявлялась доступной при решении; ядро возразило само — сила
