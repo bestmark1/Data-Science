@@ -60,7 +60,10 @@ columns:
   # объявить его нечем: роли «причина, по которой строка существует» в форме
   # нет. Это и есть предмет предсказания P-1.
   - {name: EVALUATION_TYPE, role: feature, availability: at_decision, source_of_claim: "код повода из выгрузки EPA", window_lookback_days: 0, window_source: "выгрузка RCRA_EVALUATIONS"}
-  - {name: trigger_kind, role: feature, availability: at_decision, source_of_claim: "код сборки: разбиение поводов по triggers.py", window_lookback_days: 0, window_source: "код сборки build.py"}
+  # ПРИЧИНА НАБЛЮДЕНИЯ. Объявлена ролью, введённой по итогам этого же кейса:
+  # прежде повод приходилось объявлять обычным признаком, и ядро не отличало
+  # его от штата или отрасли.
+  - {name: trigger_kind, role: observation_reason}
 
   - {name: EVALUATION_AGENCY, role: feature, availability: at_decision, source_of_claim: "орган, проводящий проверку", window_lookback_days: 0, window_source: "выгрузка RCRA_EVALUATIONS"}
   - {name: ACTIVITY_LOCATION, role: feature, availability: at_decision, source_of_claim: "штат ведения дела", window_lookback_days: 0, window_source: "выгрузка RCRA_EVALUATIONS"}

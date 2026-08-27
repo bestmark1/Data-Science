@@ -706,3 +706,33 @@ def premise_contradicted_by_data(world: World) -> World:
     живой колонке статуса, и расхождение обязано быть названо.
     """
     return world
+
+
+def outcome_depends_on_the_reason(world: World, seed: int = 47, shift_days: int = 5) -> World:
+    """Доля исхода различается у наблюдений с разной ПРИЧИНОЙ появления.
+
+    Воспроизводит десятый кейс: у проверок по сигналу нарушение находилось в
+    15.0% случаев, у плановых — в 35.5%, и модель, обученная на одном поводе,
+    теряла на другом 0.215 разрешающей способности.
+
+    Повод назначается жребием, а затем одной его половине срок удлиняется:
+    события у неё чаще успевают в срок, и доля исхода расходится. Жребий важен —
+    иначе повод оказался бы связан ещё и с признаками, и кейс воспроизводил бы
+    два дефекта вместо одного.
+
+    Сдвиг подобран так, чтобы расхождение было СОПОСТАВИМО с настоящим, а не
+    вырожденным: пять дней дают 14.3% против 5.3% — отношение 2.70, близко к
+    2.4 на данных десятого кейса. Восемь дней обнуляли долю одного повода
+    вовсе, и кейс воспроизводил бы крайность вместо дефекта.
+    """
+    rng = np.random.default_rng(seed)
+    by_signal = pl.Series(rng.random(world.main.height) < 0.4)
+    frame = world.main.with_columns(
+        pl.when(by_signal).then(pl.lit("по поводу")).otherwise(pl.lit("плановая")).alias("reason"),
+        pl.when(by_signal)
+        .then(pl.col("deadline_on").dt.offset_by(f"{shift_days}d"))
+        .otherwise(pl.col("deadline_on"))
+        .alias("deadline_on"),
+    )
+    schema = _add_column(world.schema, ColumnSpec(name="reason", role=Role.OBSERVATION_REASON))
+    return World(frames={**world.frames, "main": frame}, schema=schema)

@@ -746,9 +746,99 @@ class UnobservedCostIsNamed:
         return signals
 
 
+@dataclass(frozen=True)
+class ReasonForObservationTransfers:
+    """N17. Смысл задачи меняется вместе с ПРИЧИНОЙ наблюдения.
+
+    Строка существует не сама по себе. Проверка приходит на площадку по жалобе
+    или по расписанию, анализ назначают заболевшему, инспекция идёт туда, где
+    подозревают. Метрика, измеренная на смеси поводов, верна для смеси и неверна
+    для каждой части — а применяют её всегда к части.
+
+    Десятый кейс измерил цену: доля нарушений 35.5% у плановых проверок против
+    15.0% у вызванных сигналом, и модель, обученная на одном поводе и
+    применённая к другому, теряет **0.215** разрешающей способности.
+
+    Проверяется доля класса, а не качество модели: ядро предсказаний не
+    производит. Расхождение долей — необходимый признак того, что задача у
+    поводов разная, и его достаточно, чтобы возразить.
+
+    Пропускается, если колонка повода не объявлена. Требовать её всюду значило
+    бы требовать ответа, которого неоткуда взять: в большинстве выгрузок
+    причины наблюдения нет. Но пропуск виден в отчёте, и молчание перестаёт
+    быть незаметным.
+    """
+
+    requirement: str = "N17"
+    premises: frozenset[Premise] = frozenset({Premise.BINARY_TARGET})
+    detects: frozenset[Finding] = frozenset({Finding.OBSERVATION_REASON_MATTERS})
+
+    ratio: float = 1.5
+    """Во сколько раз доли у разных поводов могут различаться."""
+
+    min_rows: int = MIN_ROWS
+    """Повод, встречающийся реже, в сравнение не входит: доля по горстке строк
+    гуляет сама по себе."""
+
+    def run(self, context: Context) -> list[Signal]:
+        declared = context.world.schema.by_role(Role.OBSERVATION_REASON)
+        if not declared:
+            raise NotApplicable(
+                "причина наблюдения не объявлена: нечем сказать, почему строка существует"
+            )
+
+        column = declared[0].name
+        parts = [p.evaluate for p in _require_split(context).parts if LABEL in p.evaluate.columns]
+        if not parts:
+            raise NotApplicable("оценочных частей с меткой нет")
+        frame = _observable(pl.concat(parts, how="vertical_relaxed"))
+        if column not in frame.columns or frame.height < self.min_rows:
+            raise NotApplicable("строк с наблюдаемым исходом слишком мало")
+
+        rates = (
+            frame.group_by(column)
+            .agg(pl.len().alias("rows"), pl.col(LABEL).mean().alias("rate"))
+            .filter(pl.col("rows") >= self.min_rows)
+            .sort(column, nulls_last=True)
+        )
+        if rates.height < 2:
+            raise NotApplicable("поводов с достаточным числом строк меньше двух")
+
+        low = rates.filter(pl.col("rate") == pl.col("rate").min()).row(0, named=True)
+        high = rates.filter(pl.col("rate") == pl.col("rate").max()).row(0, named=True)
+        if high["rate"] <= 0:
+            return []  # исхода нет ни у одного повода: расходиться нечему
+
+        # Нулевая доля у ОДНОГО повода при ненулевой у другого — расхождение
+        # бесконечной кратности, а не повод к раннему возврату. Ровно эту ошибку
+        # уже проходила N3, и я повторил её здесь дословно: первая версия
+        # молчала на самом крайнем случае из всех.
+        spread = math.sqrt(
+            _rate_error(low["rate"], low["rows"]) ** 2
+            + _rate_error(high["rate"], high["rows"]) ** 2
+        )
+        if low["rate"] > 0 and high["rate"] / low["rate"] < self.ratio:
+            return []
+        if high["rate"] - low["rate"] <= SIGMA * spread:
+            return []
+
+        return [
+            Signal(
+                Finding.OBSERVATION_REASON_MATTERS,
+                f"доля положительного класса зависит от причины наблюдения: у "
+                f"{high[column]!r} она {high['rate']:.1%} ({high['rows']:,} строк), у "
+                f"{low[column]!r} — {low['rate']:.1%} ({low['rows']:,}). Задача у этих "
+                "поводов разная, и метрика, измеренная на их смеси, не переносится ни на "
+                "один из них по отдельности",
+                blocking=True,
+            )
+        ]
+
+
 DRIFT_CHECKS = [
     NonDegenerateOutcome(),
     UnobservedCostIsNamed(),
+    ReasonForObservationTransfers(),
     TargetRateStationarity(),
     ComparableSupport(),
     FeatureRelationStability(),
