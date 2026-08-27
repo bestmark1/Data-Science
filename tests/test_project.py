@@ -322,3 +322,37 @@ def test_override_reaches_the_checks_from_the_working_path() -> None:
         s.blocking and s.finding is Finding.UNDECLARED_COLUMN for s in passed.checks.signals
     )
     assert "колонка проверена вручную" in passed.study.render()
+
+
+def test_entry_cost_is_measured_by_features_not_by_status_vocabulary() -> None:
+    """Мера стоимости входа не должна расти со словарём статусов источника.
+
+    Тринадцатый кейс объявил двадцать причин отсутствия события — по одной на
+    значение статуса — и получил 56.9% при пороге в половину. Форма, свалившая
+    бы статусы в кучи, прошла бы порог и была бы хуже: склейка причин с разным
+    смыслом есть ошибка, которую ловит первый кейс проекта.
+    """
+    base = form()
+    share = base.feature_uncertainty_share()
+
+    richer = form(
+        outcome={
+            **base.outcome.model_dump(mode="json"),
+            "missing_causes": [
+                *base.outcome.model_dump(mode="json")["missing_causes"],
+                {
+                    "name": "ещё одна различимая причина",
+                    "meaning": "unobserved",
+                    "status_value": "paused",
+                },
+            ],
+        }
+    )
+
+    assert richer.feature_uncertainty_share() == share, (
+        "доля по признакам не должна зависеть от числа объявленных причин"
+    )
+    assert (
+        len(richer.unverifiable_by_kind()["причины"])
+        == len(base.unverifiable_by_kind()["причины"]) + 1
+    ), "вопросы о причинах обязаны считаться отдельно"
