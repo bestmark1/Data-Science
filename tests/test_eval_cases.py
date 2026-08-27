@@ -164,3 +164,21 @@ def test_negative_controls_exist_for_the_bench_to_mean_anything() -> None:
     controls = [b.id for b in ALL if b.case.expectation.is_negative_control]
 
     assert len(controls) >= 10, f"отрицательных контролей слишком мало: {len(controls)}"
+
+
+def test_recurrence_ledger_does_not_overpromise() -> None:
+    """Журнал повторов обязан говорить, чего он НЕ покрывает.
+
+    Первая его версия обещала «против каждого урока стоит ответ», а покрывала
+    три находки из тринадцати и пять требований из тридцати двух. Документ,
+    обещающий больше, чем даёт, хуже отсутствующего: на него ссылаются как на
+    полный.
+    """
+    from pathlib import Path
+
+    ledger = (Path(__file__).resolve().parent.parent / "docs" / "recurrence-ledger.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "не все" in ledger.lower(), "журнал не оговаривает своей неполноты"
+    assert "Три слоя защиты" in ledger, "не сказано, чем защищено то, чего в журнале нет"
