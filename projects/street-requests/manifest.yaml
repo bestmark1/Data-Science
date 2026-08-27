@@ -1,0 +1,9 @@
+source: NYC 311, обращения к Department of Transportation
+license: открытые данные города Нью-Йорка (объявлено источником)
+url: https://data.cityofnewyork.us/d/erm2-nwe9
+retrieved_at: '2026-08-27'
+files:
+- name: dot_requests_2020_2023.csv
+  sha256: 04a80fc3638b023411f0eb7b8cf431deed00ed40ee80c7d16d23993447a20179
+  bytes: 199603547
+derived: []

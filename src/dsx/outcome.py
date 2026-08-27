@@ -18,12 +18,43 @@
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from dsx.roles import Schema, TemporalKind
+
+RESERVED_DIRECTION_WORDS = frozenset(
+    {
+        "позже",
+        "раньше",
+        "ранее",
+        "до",
+        "после",
+        "прежде",
+        "менее",
+        "более",
+        "свыше",
+        "течение",
+        "пределах",
+        "успеет",
+        "уложится",
+        "опоздает",
+        "просрочка",
+    }
+)
+"""Слова, которыми о сроке высказывается СУЖДЕНИЕ. Ядро оставляет их за собой:
+в имени они означали бы, что направление объявлено дважды и из разных мест."""
+
+
+def _contains_word(text: str, word: str) -> bool:
+    """Есть ли слово в тексте как отдельное слово, а не как часть другого.
+
+    Без этого «до» нашлось бы в «доставка», а «более» — в «наиболее».
+    """
+    return word in re.findall(r"[а-яёa-z]+", text.lower())
 
 
 class ComparisonMode(StrEnum):
@@ -141,8 +172,72 @@ class OutcomeDefinition(BaseModel):
 
     Объявление проверяется данными — тем и отличается от обещания."""
 
-    estimand: Annotated[str, Field(min_length=1)]
-    """Что именно оценивается, словами. Заполняется до вычисления таргета."""
+    event_name: Annotated[str, Field(min_length=1)]
+    """Как называется событие ИМЕНЕМ: «закрытие обращения», «отказ узла».
+
+    Существительное, а не утверждение. Всё, что несёт логическую силу —
+    направление, сравнение, обращение с ненаблюдаемым, — дописывает ядро."""
+
+    deadline_name: Annotated[str, Field(min_length=1)]
+    """Как называется срок ИМЕНЕМ: «сутки от приёма», «назначенная дата»."""
+
+    @model_validator(mode="after")
+    def _names_do_not_state_the_logic(self) -> OutcomeDefinition:
+        """Автор называет вещи, ядро высказывает о них суждение.
+
+        Второй кейс: estimand был свободным текстом, я написал «отказ в течение
+        30 дней», а вычислялось «отказ позже 30 дней». Ядро не возразило,
+        потому что сверять свободный текст с вычислением нечем.
+
+        Отсюда разделение источников. Автор объявляет ИМЕНА, направление
+        объявляет `positive_class`, и предложение собирает `estimand`. Разойтись
+        словам с вычислением негде: источник один.
+
+        Проверка ниже стережёт границу. Написав в имени «в течение», автор
+        вернул бы направление в текст — и вернул бы вместе с ним ровно ту
+        ошибку, ради которой поле разбиралось.
+        """
+        for field, value in (
+            ("event_name", self.event_name),
+            ("deadline_name", self.deadline_name),
+        ):
+            said = sorted(w for w in RESERVED_DIRECTION_WORDS if _contains_word(value, w))
+            if said:
+                raise ValueError(
+                    f"{field} содержит слова направления {said}: "
+                    f"{value!r}. Имя называет вещь, а направление объявляет "
+                    "positive_class и высказывает ядро. Слово в имени вернуло бы "
+                    "расхождение между написанным и вычисляемым"
+                )
+        return self
+
+    @property
+    def estimand(self) -> str:
+        """Что оценивается — предложение, СОБРАННОЕ из вычисляемого.
+
+        Не поле. Автор его не пишет и переписать не может: каждое слово,
+        несущее логику, взято из величины, по которой ядро считает.
+        """
+        side = "не позже" if self.positive_class is PositiveClass.EVENT_WITHIN_DEADLINE else "позже"
+        head = (
+            f"положительным считается: {self.event_name} наступает {side}, чем {self.deadline_name}"
+        )
+        if self.positive_class is PositiveClass.EVENT_AFTER_DEADLINE:
+            head += ", либо не наступает вовсе"
+        scale = (
+            " Сравнение приведено к календарной дате."
+            if self.comparison is ComparisonMode.BY_DATE
+            else " Сравнение без приведения грануляции."
+        )
+        by_meaning: dict[str, list[str]] = {}
+        for cause in self.missing_causes:
+            by_meaning.setdefault(cause.meaning.value, []).append(cause.name)
+        causes = " ".join(
+            f"Отсутствие события по причине {', '.join(repr(n) for n in sorted(names))} "
+            f"означает {meaning!r}."
+            for meaning, names in sorted(by_meaning.items())
+        )
+        return f"{head}.{scale} {causes}".strip()
 
     @model_validator(mode="after")
     def _status_values_are_unique(self) -> OutcomeDefinition:

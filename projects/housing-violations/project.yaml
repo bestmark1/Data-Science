@@ -81,7 +81,8 @@ outcome:
   deadline_column: due_at_original
   comparison: by_date
   positive_class: event_within_deadline
-  estimand: "устранение нарушения будет подтверждено не позже срока, назначенного при выдаче"
+  event_name: "устранение нарушения"
+  deadline_name: "срок, назначенный при выдаче"
   degenerate_beyond: 0.1
 
   missing_causes:

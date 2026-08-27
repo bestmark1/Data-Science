@@ -94,7 +94,8 @@ outcome:
   deadline_column: due_0m
   comparison: direct
   positive_class: event_after_deadline
-  estimand: "рейс прибудет позже расписанного времени прибытия"
+  event_name: "прибытие рейса"
+  deadline_name: "расписанное время прибытия"
   degenerate_beyond: 0.1
 
   missing_causes:

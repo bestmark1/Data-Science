@@ -119,7 +119,8 @@ outcome:
   deadline_column: due_at
   comparison: direct
   positive_class: event_within_deadline
-  estimand: "проект будет завершён в течение 180 дней после подачи заявки"
+  event_name: "завершение проекта"
+  deadline_name: "180 суток от подачи заявки"
   degenerate_beyond: 0.1
 
   missing_causes:

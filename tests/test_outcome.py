@@ -36,7 +36,8 @@ def definition(**overrides) -> OutcomeDefinition:
         "comparison": ComparisonMode.BY_DATE,
         "positive_class": PositiveClass.EVENT_AFTER_DEADLINE,
         "missing_causes": [BY_STATUS],
-        "estimand": "событие позже назначенного срока",
+        "event_name": "событие",
+        "deadline_name": "назначенный срок",
     }
     return OutcomeDefinition(**{**payload, **overrides})
 
@@ -170,10 +171,50 @@ def test_differing_meanings_are_reported_as_conflated() -> None:
     assert contract.fallback_meaning() is None
 
 
-def test_estimand_is_required() -> None:
+def test_event_name_is_required() -> None:
     with pytest.raises(ValidationError):
-        definition(estimand="")
+        definition(event_name="")
 
 
 def test_components_are_listed_for_leakage_control() -> None:
     assert definition().components() == frozenset({"event_at", "deadline_on"})
+
+
+# --- estimand собирается, а не пишется --------------------------------------
+#
+# Второй кейс: объявлено «отказ в течение 30 дней», вычислялось «отказ позже
+# 30 дней», ядро не возразило. Источников было два, и они разошлись.
+
+
+def test_estimand_follows_the_direction_that_is_computed() -> None:
+    """Переворот positive_class переворачивает предложение. В этом всё дело."""
+    late = definition(positive_class=PositiveClass.EVENT_AFTER_DEADLINE).estimand
+    early = definition(positive_class=PositiveClass.EVENT_WITHIN_DEADLINE).estimand
+
+    assert "наступает позже" in late
+    assert "не наступает вовсе" in late, "невозникшее событие тоже положительно"
+    assert "наступает не позже" in early
+    assert late != early
+
+
+def test_estimand_names_what_the_missing_causes_mean() -> None:
+    """Смысл причин — тоже вычисление, и он тоже попадает в предложение."""
+    assert "means" not in definition().estimand
+    assert "означает" in definition().estimand
+
+
+def test_direction_word_in_a_name_is_refused() -> None:
+    """Имя, высказывающее суждение, вернуло бы второй источник направления."""
+    with pytest.raises(ValidationError, match="слова направления"):
+        definition(event_name="отказ в течение 30 дней")
+    with pytest.raises(ValidationError, match="слова направления"):
+        definition(deadline_name="срок, после которого поздно")
+
+
+def test_a_direction_word_inside_another_word_is_not_a_direction_word() -> None:
+    """«до» живёт внутри «доставки», «более» — внутри «наиболее».
+
+    Отрицательный контроль: запрет, срабатывающий на честных именах, сделал бы
+    поле незаполнимым и вернул бы автора к вранью в обход.
+    """
+    assert definition(event_name="доставка заказа", deadline_name="обещанная дата").estimand

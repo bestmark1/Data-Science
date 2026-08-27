@@ -307,7 +307,8 @@ def test_known_at_respects_the_declared_comparison() -> None:
                     assumption="принимается, что запись полна",
                 )
             ],
-            estimand="событие позже срока",
+            event_name="событие",
+            deadline_name="назначенный срок",
         )
 
     direct = with_label_known_at(world, definition(ComparisonMode.DIRECT))[KNOWN_AT][0]

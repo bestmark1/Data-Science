@@ -113,8 +113,8 @@ def _outcome(
                 status_value="pending",
             ),
         ],
-        estimand="событие произошло позже назначенного срока среди объектов, "
-        "которые предполагалось обработать",
+        event_name="событие",
+        deadline_name="назначенный срок",
         expected_positive_rate=expected_positive_rate,
         degenerate_beyond=degenerate_beyond,
     )

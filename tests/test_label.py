@@ -61,7 +61,8 @@ def test_by_date_and_direct_comparison_differ() -> None:
                     status_value="completed",
                 )
             ],
-            estimand="событие позже срока",
+            event_name="событие",
+            deadline_name="назначенный срок",
         )
 
     by_date = positive_rate(compute(world, definition(ComparisonMode.BY_DATE)))
@@ -90,7 +91,8 @@ def test_unknown_status_is_refused() -> None:
                 status_value="completed",
             )
         ],
-        estimand="событие позже срока",
+        event_name="событие",
+        deadline_name="назначенный срок",
     )
 
     with pytest.raises(LabelError, match="не объявлено"):
@@ -123,7 +125,8 @@ def test_indistinguishable_causes_do_not_cover_a_visible_status() -> None:
                 assumption="принимается, что таких строк немного",
             )
         ],
-        estimand="событие позже срока",
+        event_name="событие",
+        deadline_name="назначенный срок",
     )
 
     with pytest.raises(LabelError, match="не покрывают"):

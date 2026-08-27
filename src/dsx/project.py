@@ -131,7 +131,15 @@ class OutcomeForm(BaseModel):
     deadline_column: Annotated[str, Field(min_length=1)]
     comparison: ComparisonMode
     positive_class: PositiveClass
-    estimand: Annotated[str, Field(min_length=1)]
+    event_name: Annotated[str, Field(min_length=1)]
+    """Имя события. Существительное: «закрытие обращения», «отказ узла».
+
+    Прежде здесь стоял `estimand` — свободное предложение, в котором автор
+    объявлял направление вторично и мог разойтись с вычислением. Теперь
+    предложение собирает ядро, а автор называет вещи."""
+
+    deadline_name: Annotated[str, Field(min_length=1)]
+    """Имя срока. Существительное: «сутки от приёма», «назначенная дата»."""
     missing_causes: Annotated[list[CauseForm], Field(min_length=1)]
 
     expected_positive_rate: Annotated[float, Field(gt=0.0, lt=1.0)] | None = None
@@ -161,7 +169,8 @@ class OutcomeForm(BaseModel):
             deadline_column=self.deadline_column,
             comparison=self.comparison,
             positive_class=self.positive_class,
-            estimand=self.estimand,
+            event_name=self.event_name,
+            deadline_name=self.deadline_name,
             expected_positive_rate=self.expected_positive_rate,
             degenerate_beyond=self.degenerate_beyond,
             missing_causes=[c.to_cause() for c in self.missing_causes],
@@ -392,7 +401,7 @@ class ProjectForm(BaseModel):
         questions.append(
             f"Верно ли, что исходом является {self.outcome.event_column!r}, а сроком "
             f"{self.outcome.deadline_column!r}? (иначе отчёт считает не то, что заявлено "
-            "словами: estimand с вычислением не связан)"
+            "словами)"
         )
         questions.append(
             f"Верно ли, что положительным исходом считается {self.outcome.positive_class.value!r}? "
@@ -429,7 +438,7 @@ class ProjectForm(BaseModel):
         """
         return (
             len(self.columns)
-            + 5  # event_column, deadline_column, comparison, positive_class, estimand
+            + 6  # event/deadline column и имя, comparison, positive_class
             + len(self.outcome.missing_causes)
             + 5  # target_kind, outcome_timing, has_process, is_stream, object_lifetime
             + len(self.split.windows)

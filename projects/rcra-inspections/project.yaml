@@ -108,7 +108,8 @@ outcome:
   deadline_column: horizon_30d
   comparison: by_date
   positive_class: event_within_deadline
-  estimand: "по следам проверки будет установлено нарушение в течение 30 дней после её начала"
+  event_name: "установление нарушения по следам проверки"
+  deadline_name: "30 суток от начала проверки"
   degenerate_beyond: 0.1
 
   missing_causes:
