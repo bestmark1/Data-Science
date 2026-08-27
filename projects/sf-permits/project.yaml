@@ -1,0 +1,158 @@
+# ФОРМА ТРИНАДЦАТОГО КЕЙСА
+#
+# Предсказывается: будет ли разрешение выдано в течение 30 дней после подачи
+# заявки.
+#
+# Кейс намеренно ОБЫЧНЫЙ: новая отрасль, ни одной новой оси. В первом прогоне
+# намеренно присутствует контроль К-1 §5 пре-регистрации.
+
+title: "SF Building Permits: разрешение выдано в течение 30 дней после подачи"
+
+# Конец наблюдения: срез, объявленный самим источником в колонке data_as_of.
+observed_until: 2025-08-07T00:00:00
+observed_until_source: "колонка data_as_of выгрузки: источник сам объявляет момент среза"
+
+# --- ДОПУЩЕНИЯ ---------------------------------------------------------------
+
+assumptions:
+  - statement: "единица решения — заявка, а не пара «заявка-участок»"
+    basis: data
+    author: "автор"
+    evidence: "расчёт: 306 091 строка на 280 380 заявок; строки одной заявки различаются только кварталом и участком, а дата подачи, дата выдачи, статус, тип и смета внутри заявки совпадают"
+    consequence: "если ведомство решает по каждому участку отдельно, единица объявлена крупнее нужной, и заявка на сто один участок считается один раз вместо ста одного"
+
+  - statement: "квартал и участок взяты первыми попавшимися среди покрытых заявкой"
+    basis: data
+    author: "автор"
+    evidence: "расчёт: заявок, покрывающих больше одного квартала, — 49 из 280 380 (0.02%)"
+    consequence: "у этих 49 заявок признак квартала произволен; у остальных он единственно возможный, и произвол касается двух сотых процента"
+
+  - statement: "моментом решения является подача заявки"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если очередь формируется позже — при приёме к рассмотрению, — момент выбран раньше, чем он происходит"
+
+  - statement: "отсутствие даты выдачи означает, что разрешение не выдано, а не потерю записи"
+    basis: data
+    author: "автор"
+    evidence: "расчёт: даты выдачи нет у 17 972 заявок (6.4%), и их статусы объявлены причинами по отдельности"
+    consequence: "если выдачи теряются, отрицательный класс загрязнён, и модель занижает долю выданных"
+
+# --- СХЕМА -------------------------------------------------------------------
+
+columns:
+  - {name: permit_number, role: entity_id}
+  - {name: block, role: natural_key}
+  - {name: supervisor_district, role: group_id}
+  - {name: filed_date, role: decision_time, temporal: date}
+  - {name: issued_date, role: event_time, temporal: date}
+  - {name: due_30d, role: deadline, temporal: date, value_as_of: filed_date}
+  - {name: status, role: status}
+
+  # Признаки, известные при подаче заявки.
+  - {name: permit_type, role: feature, availability: at_decision, source_of_claim: "тип разрешения из заявки", window_lookback_days: 0, window_source: "выгрузка DBI", value_as_of: filed_date}
+  - {name: permit_type_definition, role: feature, availability: at_decision, source_of_claim: "расшифровка типа разрешения", window_lookback_days: 0, window_source: "выгрузка DBI", value_as_of: filed_date}
+  - {name: estimated_cost, role: feature, availability: at_decision, source_of_claim: "смета, заявленная при подаче", window_lookback_days: 0, window_source: "выгрузка DBI", value_as_of: filed_date}
+  - {name: number_of_existing_stories, role: feature, availability: at_decision, source_of_claim: "число существующих этажей из заявки", window_lookback_days: 0, window_source: "выгрузка DBI", value_as_of: filed_date}
+  - {name: number_of_proposed_stories, role: feature, availability: at_decision, source_of_claim: "число проектируемых этажей из заявки", window_lookback_days: 0, window_source: "выгрузка DBI", value_as_of: filed_date}
+  - {name: plansets, role: feature, availability: at_decision, source_of_claim: "число комплектов чертежей", window_lookback_days: 0, window_source: "выгрузка DBI", value_as_of: filed_date}
+  - {name: site_permit, role: feature, availability: at_decision, source_of_claim: "признак площадочного разрешения", window_lookback_days: 0, window_source: "выгрузка DBI", value_as_of: filed_date}
+  - {name: fire_only_permit, role: feature, availability: at_decision, source_of_claim: "признак противопожарного разрешения", window_lookback_days: 0, window_source: "выгрузка DBI", value_as_of: filed_date}
+  - {name: application_submission_method, role: feature, availability: at_decision, source_of_claim: "способ подачи заявки", window_lookback_days: 0, window_source: "выгрузка DBI", value_as_of: filed_date}
+  - {name: existing_use, role: feature, availability: at_decision, source_of_claim: "существующее назначение здания", window_lookback_days: 0, window_source: "выгрузка DBI", value_as_of: filed_date}
+  - {name: proposed_use, role: feature, availability: at_decision, source_of_claim: "проектируемое назначение", window_lookback_days: 0, window_source: "выгрузка DBI", value_as_of: filed_date}
+  - {name: existing_units, role: feature, availability: at_decision, source_of_claim: "число существующих квартир", window_lookback_days: 0, window_source: "выгрузка DBI", value_as_of: filed_date}
+  - {name: proposed_units, role: feature, availability: at_decision, source_of_claim: "число проектируемых квартир", window_lookback_days: 0, window_source: "выгрузка DBI", value_as_of: filed_date}
+  - {name: adu, role: feature, availability: at_decision, source_of_claim: "признак вспомогательного жилого помещения", window_lookback_days: 0, window_source: "выгрузка DBI", value_as_of: filed_date}
+  - {name: zipcode, role: feature, availability: at_decision, source_of_claim: "почтовый индекс участка", window_lookback_days: 0, window_source: "выгрузка DBI", value_as_of: filed_date}
+  - {name: neighborhoods_analysis_boundaries, role: feature, availability: at_decision, source_of_claim: "аналитический район города", window_lookback_days: 0, window_source: "выгрузка DBI", value_as_of: filed_date}
+
+  # Был контролем К-1: день изменения состояния известен только ПОСЛЕ исхода.
+  # Объявлен признаком момента подачи с ЧЕСТНЫМ моментом фиксации — и ядро
+  # возразило немедленно. Тот же признак с ЛОЖНЫМ объявлением (контроль К-4,
+  # форма project-lie.yaml) прошёл молча: предел требования именно там, где
+  # объявлен.
+  - {name: status_date, role: ignored, temporal: date}
+
+  # Не участвуют в постановке.
+  - {name: lot, role: ignored}
+  - {name: revised_cost, role: ignored}
+  - {name: approved_date, role: ignored, temporal: date}
+  - {name: completed_date, role: ignored, temporal: date}
+  - {name: data_as_of, role: ignored, temporal: date}
+  - {name: due_60d, role: ignored, temporal: date}
+  - {name: due_90d, role: ignored, temporal: date}
+  - {name: due_180d, role: ignored, temporal: date}
+
+# --- КОНТРАКТ ИСХОДА ---------------------------------------------------------
+
+outcome:
+  event_column: issued_date
+  deadline_column: due_30d
+  comparison: by_date
+  positive_class: event_within_deadline
+  estimand: "разрешение будет выдано в течение 30 дней после подачи заявки"
+  degenerate_beyond: 0.1
+
+  missing_causes:
+    - {name: "разрешение выдано и работы завершены", meaning: not_occurred, status_value: "complete",
+       assumption: "завершённая заявка без даты выдачи означает потерю записи, а не отсутствие выдачи"}
+    - {name: "разрешение выдано", meaning: not_occurred, status_value: "issued",
+       assumption: "то же"}
+    - {name: "заявка отозвана заявителем", meaning: excluded, status_value: "withdrawn",
+       assumption: "отозванная заявка не предполагалась к исполнению и из популяции исключается"}
+    - {name: "заявка отменена", meaning: excluded, status_value: "cancelled",
+       assumption: "то же"}
+    - {name: "срок заявки истёк", meaning: not_occurred, status_value: "expired",
+       assumption: "истёкшая заявка разрешения не получила; это наблюдение, а не пропуск"}
+    - {name: "в выдаче отказано", meaning: not_occurred, status_value: "disapproved",
+       assumption: "отказ есть наблюдение исхода"}
+    - {name: "в выдаче отказано (denied)", meaning: not_occurred, status_value: "denied",
+       assumption: "то же"}
+    - {name: "разрешение отозвано ведомством", meaning: not_occurred, status_value: "revoked",
+       assumption: "то же"}
+    - {name: "заявка подана и рассматривается", meaning: unobserved, status_value: "filed",
+       assumption: "идущее рассмотрение исхода ещё не показало"}
+    - {name: "заявка одобрена, разрешение не выдано", meaning: unobserved, status_value: "approved",
+       assumption: "то же"}
+    - {name: "выдача в процессе", meaning: unobserved, status_value: "issuing",
+       assumption: "то же"}
+    - {name: "проверка чертежей", meaning: unobserved, status_value: "plancheck",
+       assumption: "то же"}
+    - {name: "первичная сортировка", meaning: unobserved, status_value: "triage",
+       assumption: "то же"}
+    - {name: "заявка восстановлена", meaning: unobserved, status_value: "reinstated",
+       assumption: "то же"}
+    - {name: "рассмотрение приостановлено", meaning: unobserved, status_value: "suspend",
+       assumption: "приостановленное может как возобновиться, так и прекратиться; исход неизвестен"}
+    - {name: "подана апелляция", meaning: unobserved, status_value: "appeal",
+       assumption: "то же"}
+    - {name: "решение оставлено в силе", meaning: unobserved, status_value: "upheld",
+       assumption: "то же"}
+    - {name: "решение отменено", meaning: unobserved, status_value: "overruled",
+       assumption: "то же"}
+    - {name: "заявка неполна", meaning: unobserved, status_value: "incomplete",
+       assumption: "то же"}
+    - {name: "состояние не записано", meaning: unobserved,
+       assumption: "источник называл состояние двух заявок словом 'unknown'; оно превращено в пропуск при сборке, и различить эти строки по данным теперь нечем"}
+
+# --- ТИП ЗАДАЧИ --------------------------------------------------------------
+
+task:
+  target_kind: binary
+  outcome_timing: delayed
+  has_process: true
+  is_stream: true
+  object_lifetime: recurring
+
+# --- СПЛИТ -------------------------------------------------------------------
+# Отсчёт от 2015-01-02. Метки зреют за 30 дней. Первый год целиком уходит в
+# обучение первого окна.
+
+split:
+  windows:
+    - {name: w0, start_day: 365, stop_day: 1096}    # 2016-2017
+    - {name: w1, start_day: 1096, stop_day: 1827}   # 2018-2019
+    - {name: w2, start_day: 1827, stop_day: 2557}   # 2020-2021
+  reserve_from_day: 2557                            # 2022-2023
+  reserve_until_day: 3285

@@ -1,0 +1,9 @@
+source: San Francisco Department of Building Inspection
+license: открытые данные города Сан-Франциско (объявлено источником)
+url: https://data.sfgov.org/d/i98e-djp9
+retrieved_at: '2026-08-27'
+files:
+- name: sf_permits_2015_2023.csv
+  sha256: 7917321ead0d36322915b16f1ccc2aeda648a2a123f5ca3c73e8d923ff6eac9d
+  bytes: 98306189
+derived: []
