@@ -118,8 +118,8 @@ def test_injected_world_actually_differs_from_the_clean_one(bundle) -> None:
     но отсутствие изменений означает его отсутствие наверняка.
 
     Сличается не только мир. Дефект бывает не в данных: объявленная наугад
-    предпосылка расходится с данными, не трогая их, а отсутствие резерва —
-    свойство протокола, а не таблицы. Требовать от таких кейсов изменённых
+    предпосылка расходится с данными, не трогая их; отсутствие резерва и
+    расположение окон — свойства протокола, а не таблицы. Требовать от таких кейсов изменённых
     данных значило бы запретить их вовсе.
     """
     clean = BY_ID["clean-baseline"]
@@ -130,6 +130,7 @@ def test_injected_world_actually_differs_from_the_clean_one(bundle) -> None:
         or injected.schema != clean.build().schema
         or bundle.outcome != clean.outcome
         or bundle.declared_process != clean.declared_process
+        or bundle.overlapping_windows != clean.overlapping_windows
         or bundle.reserve != clean.reserve
         or bundle.lifetime != clean.lifetime
         or bundle.target_kind != clean.target_kind

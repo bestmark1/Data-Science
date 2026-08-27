@@ -44,12 +44,31 @@ def context_for(bundle):
     world = bundle.build()
     frame = world.main
     snapshot = max(frame["decided_at"].max(), frame["event_at"].max())
-    lo = frame["decided_at"].min()
+    lo, hi = frame["decided_at"].min(), frame["decided_at"].max()
+
+    # Окна ставятся ДОЛЕЙ периода мира, а не числом дней от его начала.
+    #
+    # Прежде они стояли на 300-м дне жёстко, и это молча предполагало, что все
+    # миры стенда длиной с базовый — 539 дней. Мир `clean-short-period` длится
+    # 69 дней: все три окна оказывались ЗА его пределами, оценочные части были
+    # пусты, резерв пуст. Отрицательный контроль, на котором нечему сработать,
+    # не доказывает молчания проверок — он его имитирует.
+    #
+    # Нашла это проверка P9, введённая после одиннадцатого кейса; до неё
+    # пустота была невидима, потому что пустоту никто не проверял.
+    span = max((hi - lo).days, 4)
+    # Шаг меньше ширины окна означает перекрытие: так воспроизводится дефект
+    # протокола, до которого инжектор данных не дотягивается.
+    step = 0.04 if bundle.overlapping_windows else 0.08
     windows = [
-        Window(f"w{i}", lo + dt.timedelta(days=300 + i * 45), lo + dt.timedelta(days=345 + i * 45))
+        Window(
+            f"w{i}",
+            lo + dt.timedelta(days=int(span * (0.55 + step * i))),
+            lo + dt.timedelta(days=int(span * (0.63 + step * i))),
+        )
         for i in range(3)
     ]
-    reserve_from = lo + dt.timedelta(days=480) if bundle.reserve else None
+    reserve_from = lo + dt.timedelta(days=int(span * 0.88)) if bundle.reserve else None
     try:
         split = split_by_windows(world, bundle.outcome, windows, snapshot, reserve_from)
     except Exception:

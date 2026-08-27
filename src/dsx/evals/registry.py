@@ -50,6 +50,13 @@ class Bundle:
     резерва нет, объявляет это явно.
     """
 
+    overlapping_windows: bool = False
+    """Ставить ли окна с перекрытием.
+
+    Окна задаёт стенд, а не мир, поэтому дефект протокола иначе не
+    воспроизвести: инжектор данных до расположения окон не дотягивается.
+    """
+
     declared_process: bool | None = None
     """Наличие процесса, ОБЪЯВЛЕННОЕ автором кейса, а не выведенное из данных.
 
@@ -127,6 +134,7 @@ def _bundle(
     target_kind: TargetKind | None = None,
     expected_positive_rate: float | None = None,
     degenerate_beyond: float | None = FIXTURE_DEGENERATE_BEYOND,
+    overlapping_windows: bool = False,
 ) -> Bundle:
     return Bundle(
         case=Case(
@@ -142,6 +150,7 @@ def _bundle(
         lifetime=lifetime,
         reserve=reserve,
         declared_process=declared_process,
+        overlapping_windows=overlapping_windows,
         target_kind=target_kind,
     )
 
@@ -165,16 +174,20 @@ ALL: tuple[Bundle, ...] = (
     _bundle(
         "clean-small",
         "Чистый мир, малый объём",
-        "На малой выборке проверки не должны выдавать дефект из-за шума.",
-        set(),
+        "На малой выборке проверки не должны выдавать дефект ИЗ ДАННЫХ: шум не есть "
+        "находка. Но объём здесь мал по-настоящему — в оценочных частях по 43-55 строк "
+        "с наблюдаемым исходом, — и проверка P9 возражает верно: измерять на них нечего. "
+        "Это не ложная тревога, а разные предметы: данные чисты, протокол негоден.",
+        {Finding.UNUSABLE_MEASURED_PART},
         lambda: build_world(rows=600, seed=23),
+        caught_by={"P9"},
     ),
     _bundle(
         "clean-short-period",
         "Чистый мир, короткий период",
         "Короткий период — не то же самое, что обрыв сбора данных.",
         set(),
-        lambda: build_world(rows=1200, days=70, seed=31),
+        lambda: build_world(rows=1800, days=70, seed=31),
     ),
     _bundle(
         "clean-with-children",
@@ -439,6 +452,36 @@ ALL: tuple[Bundle, ...] = (
         {Finding.GROUP_OVERLAP_ACROSS_SPLITS},
         lambda: inj.declared_group(inj.grouped_objects(build_world())),
         caught_by={"N14"},
+    ),
+    _bundle(
+        "clean-windows-adjacent",
+        "Чистый мир, окна встык без перекрытия",
+        "Отрицательный контроль к P10. Проверка, возражающая на окнах, соприкасающихся "
+        "границами, запретила бы обычное скользящее разбиение: конец одного окна и "
+        "начало следующего — одна и та же точка, и решений в общем куске нет.",
+        set(),
+        lambda: build_world(rows=2400, seed=37),
+    ),
+    _bundle(
+        "windows-overlap",
+        "Оценочные периоды окон перекрываются",
+        "Проба четырьмя постановками показала, что перекрытие проходило молча: окна "
+        "300-400, 350-450 и 400-500 давали отчёт, ничем не отличимый от правильного. "
+        "Решение из общего куска попадает в оценку дважды, и устойчивость связи по "
+        "окнам меряется частично по одним и тем же строкам.",
+        {Finding.WINDOWS_OVERLAP},
+        build_world,
+        caught_by={"P10"},
+        overlapping_windows=True,
+    ),
+    _bundle(
+        "clean-protocol-at-the-limit",
+        "Чистый мир, части чуть выше порога пригодности",
+        "Отрицательный контроль к P9. Проверка, срабатывающая на частях, которые лишь "
+        "немного крупнее порога, сделала бы порог бессмысленным: тогда негодным было бы "
+        "всё, кроме заведомо крупного.",
+        set(),
+        lambda: build_world(rows=1800, seed=29),
     ),
     _bundle(
         "training-part-is-empty",

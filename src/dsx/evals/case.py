@@ -62,6 +62,8 @@ class Finding(StrEnum):
     INFORMATIVE_UNOBSERVABILITY = "informative_unobservability"
     OBSERVATION_REASON_MATTERS = "observation_reason_matters"
     UNUSABLE_TRAINING_PART = "unusable_training_part"
+    UNUSABLE_MEASURED_PART = "unusable_measured_part"
+    WINDOWS_OVERLAP = "windows_overlap"
 
 
 class Expectation(BaseModel):

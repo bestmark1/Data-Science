@@ -8,6 +8,7 @@ import polars as pl
 
 from dsx.checks.base import Context, NotApplicable, Signal
 from dsx.evals.case import Finding
+from dsx.label import LABEL
 from dsx.roles import Role
 from dsx.split import (
     SplitResult,
@@ -181,6 +182,107 @@ class TrainingPartIsUsable:
 
 
 @dataclass(frozen=True)
+class MeasuredPartsAreUsable:
+    """P9. Часть, на которой меряют, слишком мала, чтобы что-то показать.
+
+    Пустая обучающая часть была найдена одиннадцатым кейсом и закрыта P8. Но
+    закрыт был экземпляр, а не класс: проба четырьмя постановками показала, что
+    молча проходят ещё три — пустая ОЦЕНОЧНАЯ часть, окно шириной в один день
+    и резерв в один день. Все три дают отчёт, выглядящий нормальным.
+
+    Судится число строк С НАБЛЮДАЕМЫМ ИСХОДОМ, а не всего: строки без метки в
+    измерении не участвуют, и часть из тысячи незрелых строк так же пуста, как
+    часть из нуля.
+
+    Порог тот же, что у проверок дрейфа: ниже сотни наблюдений доля класса
+    неотличима от любой другой, и всякое сравнение с ней — описание шума.
+    """
+
+    requirement: str = "P9"
+    premises: frozenset[Premise] = frozenset({Premise.UNIVERSAL})
+    detects: frozenset[Finding] = frozenset({Finding.UNUSABLE_MEASURED_PART})
+
+    minimum: int = 100
+    """Ниже этого числа наблюдаемых исходов часть объявляется негодной."""
+
+    def _observable(self, frame: pl.DataFrame) -> int:
+        if frame is None or LABEL not in frame.columns:
+            return 0 if frame is None else frame.height
+        return frame.filter(pl.col(LABEL).is_not_null()).height
+
+    def run(self, context: Context) -> list[Signal]:
+        split = context.split
+        if not isinstance(split, SplitResult) or not split.parts:
+            raise NotApplicable("временной сплит не построен")
+
+        signals = [
+            Signal(
+                Finding.UNUSABLE_MEASURED_PART,
+                f"в окне {part.name!r} наблюдаемых исходов в оценочной части "
+                f"{self._observable(part.evaluate):,} при пороге {self.minimum}: "
+                "измерять нечего, и всякое число по этому окну описывает шум",
+                blocking=True,
+            )
+            for part in split.parts
+            if self._observable(part.evaluate) < self.minimum
+        ]
+
+        # Резерв уже мог переехать в журнал расхода; тогда судить его здесь
+        # нечем, и молчание честнее выдуманного числа.
+        if split.reserved is not None:
+            observed = self._observable(split.reserved)
+            if observed < self.minimum:
+                signals.append(
+                    Signal(
+                        Finding.UNUSABLE_MEASURED_PART,
+                        f"в резерве наблюдаемых исходов {observed:,} при пороге "
+                        f"{self.minimum}: измерительный инструмент короче собственной "
+                        "погрешности",
+                        blocking=True,
+                    )
+                )
+        return signals
+
+
+@dataclass(frozen=True)
+class WindowsDoNotOverlap:
+    """P10. Окна перекрываются между собой во времени.
+
+    Скользящие окна вложены ПО СОСТАВУ ОБУЧЕНИЯ — это устройство протокола, и
+    ради него существует резерв. Но оценочные периоды обязаны быть
+    непересекающимися: решение, попавшее в оценку двух окон, учитывается дважды,
+    и устойчивость связи «по окнам» меряется частично по одним и тем же строкам.
+
+    Проба показала, что перекрытие проходило молча: окна 300–400, 350–450 и
+    400–500 дали отчёт, ничем не отличимый от правильного.
+    """
+
+    requirement: str = "P10"
+    premises: frozenset[Premise] = frozenset({Premise.UNIVERSAL})
+    detects: frozenset[Finding] = frozenset({Finding.WINDOWS_OVERLAP})
+
+    def run(self, context: Context) -> list[Signal]:
+        split = context.split
+        if not isinstance(split, SplitResult) or len(split.parts) < 2:
+            raise NotApplicable("окон меньше двух: перекрываться нечему")
+
+        ordered = sorted(split.parts, key=lambda p: p.window.start)
+        return [
+            Signal(
+                Finding.WINDOWS_OVERLAP,
+                f"оценочные периоды окон {earlier.name!r} и {later.name!r} "
+                f"перекрываются: первое кончается {earlier.window.stop:%Y-%m-%d}, "
+                f"второе начинается {later.window.start:%Y-%m-%d}. Решения из общего "
+                "куска попадают в оценку дважды, и устойчивость связи по окнам "
+                "меряется частично по одним и тем же строкам",
+                blocking=True,
+            )
+            for earlier, later in zip(ordered, ordered[1:], strict=False)
+            if later.window.start < earlier.window.stop
+        ]
+
+
+@dataclass(frozen=True)
 class GroupDependence:
     """N14. Объекты одной группы попали и в обучение, и в оценку.
 
@@ -345,6 +447,8 @@ class LabelImmaturity:
 
 SPLIT_CHECKS = [
     TrainingPartIsUsable(),
+    MeasuredPartsAreUsable(),
+    WindowsDoNotOverlap(),
     EntityOverlapAcrossSplits(),
     FeatureWindowOverlap(),
     GroupDependence(),
