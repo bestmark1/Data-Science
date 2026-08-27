@@ -243,3 +243,52 @@ def test_tiny_monotone_difference_is_not_a_trend() -> None:
     context = _windows_with_rates(context_for(BY_ID["clean-baseline"]), [0.0600, 0.0601, 0.0602])
 
     assert not any("однонаправленно" in s.detail for s in TargetRateStationarity().run(context))
+
+
+# --- что дрейф делает ЗА последним окном ------------------------------------
+#
+# Прежняя формулировка обещала, что смещение тем сильнее, чем дальше от
+# обучения. Обещание было о будущем, которого проверка не измеряла, хотя
+# резерв лежит сразу за последним окном. Ниже проверяется, что теперь она
+# говорит ровно то, что видела.
+
+
+def test_trend_that_continues_into_the_reserve_is_named_as_continuing() -> None:
+    context = _windows_with_rates(context_for(BY_ID["clean-baseline"]), [0.056, 0.065, 0.076])
+    _reserve_with_rate(context, 0.090, rows=40000)
+
+    detail = next(
+        s.detail for s in TargetRateStationarity().run(context) if "однонаправленно" in s.detail
+    )
+
+    assert "направление продолжается" in detail
+    assert "РАЗВЕРНУЛОСЬ" not in detail
+
+
+def test_trend_that_reverses_in_the_reserve_is_named_as_reversed() -> None:
+    """Четырнадцатый кейс: 45.9% → 47.6% → 52.1% по окнам, 42.1% в резерве."""
+    # Окна крупные: при шести тысячах строк шум выборки сам переставляет
+    # 45.9% и 47.6% местами, и монотонности не остаётся.
+    context = _windows_with_rates(
+        context_for(BY_ID["clean-baseline"]), [0.459, 0.476, 0.521], rows=40000
+    )
+    _reserve_with_rate(context, 0.421, rows=40000)
+
+    detail = next(
+        s.detail for s in TargetRateStationarity().run(context) if "однонаправленно" in s.detail
+    )
+
+    assert "РАЗВЕРНУЛОСЬ" in detail
+    assert "тем сильнее" not in detail, "обещание о продолжении осталось в формулировке"
+
+
+def test_trend_without_a_reserve_says_it_has_nothing_to_say() -> None:
+    """Молчание означало бы, что направление продлевается. Оно так не означает."""
+    context = _windows_with_rates(context_for(BY_ID["clean-baseline"]), [0.056, 0.065, 0.076])
+    context.split.reserved = None
+
+    detail = next(
+        s.detail for s in TargetRateStationarity().run(context) if "однонаправленно" in s.detail
+    )
+
+    assert "сказать нечем" in detail

@@ -150,7 +150,9 @@ class TargetRateStationarity:
             )
         ]
 
-    def _trend_signals(self, windows: list[tuple[str, pl.DataFrame]]) -> list[Signal]:
+    def _trend_signals(
+        self, context: Context, windows: list[tuple[str, pl.DataFrame]]
+    ) -> list[Signal]:
         """Медленный однонаправленный дрейф, невидимый сравнению по кратности.
 
         Соседние окна различаются мало, а накопленное за период различие велико.
@@ -161,6 +163,14 @@ class TargetRateStationarity:
         Требуется одновременно направленность и различимость: три окна,
         упорядоченные случайно, дают монотонность с вероятностью около трети,
         поэтому одной её мало.
+
+        Направление НЕ переносится за последнее окно само собой. На
+        четырнадцатом кейсе доля росла 45.9% → 47.6% → 52.1%, а в резерве,
+        лежащем сразу следом, падала до 42.1%. Прежняя формулировка обещала,
+        что смещение тем сильнее, чем дальше от обучения, — обещание о
+        будущем, которого проверка не измеряла, хотя резерв был у неё под
+        рукой. Разворот — известие ХУДШЕЕ продолжения: направление нельзя
+        продлить даже на шаг вперёд.
         """
         if len(windows) < 3:
             return []
@@ -187,15 +197,57 @@ class TargetRateStationarity:
                 Finding.NON_STATIONARY_TARGET,
                 f"доля положительного класса однонаправленно {direction} по окнам "
                 f"({shown}). Соседние окна различаются мало, и сравнение по кратности "
-                "этого не видит, но накопленный дрейф смещает модель тем сильнее, чем "
-                "дальше от обучения делается предсказание",
+                f"этого не видит, но за период накопилось "
+                f"{abs(rates[-1] - rates[0]):.1%}. "
+                + self._beyond_last_window(context, rates, rising),
                 blocking=True,
             )
         ]
 
+    def _beyond_last_window(self, context: Context, rates: list[float], rising: bool) -> str:
+        """Что делает доля СРАЗУ ЗА последним окном — по резерву, а не по вере.
+
+        Возвращает готовую фразу. Когда сказать нечего, так и говорит: молчание
+        здесь означало бы, что направление продлевается, а это и есть
+        непроверенное обещание.
+        """
+        split = _require_split(context)
+        if split.reserved is None:
+            return (
+                "Продолжается ли направление за последним окном, сказать нечем: резерв не объявлен"
+            )
+        reserved = _observable(split.reserved)
+        if reserved.height < MIN_ROWS:
+            return (
+                "Продолжается ли направление за последним окном, сказать нечем: "
+                f"в резерве наблюдаемых исходов {reserved.height}, меньше {MIN_ROWS}"
+            )
+
+        after = float(reserved[LABEL].mean())
+        last = rates[-1]
+        spread = _rate_error(after, reserved.height)
+        if abs(after - last) <= SIGMA * spread:
+            return (
+                f"В резерве, лежащем сразу следом, доля {after:.1%} — от последнего "
+                "окна неотличима: направление за окнами не продолжается и не "
+                "разворачивается, оно там просто кончается"
+            )
+        if (after > last) == rising:
+            return (
+                f"В резерве, лежащем сразу следом, доля {after:.1%} — направление "
+                "продолжается, и чем дальше от обучения делается предсказание, тем "
+                "сильнее смещение"
+            )
+        return (
+            f"В резерве, лежащем сразу следом, доля {after:.1%} — направление "
+            "РАЗВЕРНУЛОСЬ. Это известие хуже продолжения: доля меняется, но её "
+            "направление не продлевается даже на шаг вперёд, и поправка «по тренду» "
+            "уводила бы в сторону, противоположную нужной"
+        )
+
     def run(self, context: Context) -> list[Signal]:
         windows = _windows_with_labels(context)
-        signals = self._reserve_signals(context, windows) + self._trend_signals(windows)
+        signals = self._reserve_signals(context, windows) + self._trend_signals(context, windows)
         rates = {name: float(frame[LABEL].mean()) for name, frame in windows}
         sizes = {name: frame.height for name, frame in windows}
 
