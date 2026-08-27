@@ -67,10 +67,10 @@ columns:
   - {name: day_of_week, role: feature, availability: at_decision, source_of_claim: "день недели из даты рейса", window_lookback_days: 0, window_source: "выгрузка BTS"}
   - {name: CRSDepTime, role: feature, availability: at_decision, source_of_claim: "расписанное время вылета в минутах от полуночи", window_lookback_days: 0, window_source: "код сборки build.py"}
 
-  # КОНТРОЛЬ К-1. Задержка вылета известна только ПОСЛЕ фактического вылета,
-  # то есть после момента решения. Объявлена доступной при решении — объявление
-  # заведомо ложное. Ядру о подлоге не сообщается.
-  - {name: departure_delay, role: feature, availability: at_decision, source_of_claim: "задержка вылета по данным BTS", window_lookback_days: 0, window_source: "выгрузка BTS"}
+  # Был контролем К-1: задержка вылета известна только ПОСЛЕ фактического
+  # вылета. Объявлялась доступной при решении; ядро возразило само — сила
+  # разделения 0.36 при типичной 0.03 — и объявление снято.
+  - {name: departure_delay, role: ignored}
 
   # Не участвуют в постановке.
   - {name: flight_date, role: ignored, temporal: date}
