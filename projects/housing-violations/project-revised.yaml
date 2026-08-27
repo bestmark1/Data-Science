@@ -1,0 +1,115 @@
+# ФОРМА ДВЕНАДЦАТОГО КЕЙСА
+#
+# Предсказывается: будет ли устранение нарушения подтверждено не позже срока,
+# назначенного ведомством при выдаче.
+#
+# Кейс намеренно ОБЫЧНЫЙ: новая отрасль, ни одной новой оси. В первом прогоне
+# намеренно присутствуют положительные контроли §5 пре-регистрации.
+
+title: "NYC HPD: КОНТРОЛЬ К-4 — сроком объявлен ПЕРЕСМОТРЕННЫЙ"
+
+# Конец наблюдения: день сбора. Набор обновляется ежедневно, объявленного среза
+# источник не публикует.
+observed_until: 2026-08-27T00:00:00
+observed_until_source: "дата сбора выгрузки; набор обновляется ежедневно и объявленного среза не публикует"
+
+# --- ДОПУЩЕНИЯ ---------------------------------------------------------------
+
+assumptions:
+  - statement: "моментом решения является день инспекции, когда нарушение зафиксировано и срок назначен"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если срок назначается позже, при рассылке уведомления, момент выбран раньше, чем он происходит, и часть признаков в тот день ещё неизвестна"
+
+  - statement: "срок, назначенный при выдаче, после исхода не переписывается; пересмотренный срок хранится ОТДЕЛЬНОЙ колонкой"
+    basis: data
+    author: "автор"
+    evidence: "расчёт: пересмотренный срок стоит у 18 865 нарушений из 2 445 469 (0.8%)"
+    consequence: "если ведомство переписывает исходный срок на месте, измеренная доля соблюдения завышена, и это неотличимо от честного соблюдения"
+
+  - statement: "отсутствие даты подтверждения означает, что устранение не подтверждено, а не потерю записи"
+    basis: domain_knowledge
+    author: "автор"
+    evidence: "расчёт: подтверждения нет у 1 407 807 нарушений (57.6%)"
+    consequence: "если подтверждения теряются, отрицательный класс загрязнён, и модель занижает долю соблюдения"
+
+  - statement: "здание является объектом, о котором решение принимается многократно"
+    basis: data
+    author: "автор"
+    evidence: "расчёт: 146 739 зданий, 99.3% нарушений приходится на здания с более чем одним"
+    consequence: "если нарушения независимы, объект объявлен там, где его нет, и пересечение между обучением и оценкой мнимо"
+
+# --- СХЕМА -------------------------------------------------------------------
+
+columns:
+  - {name: violation_id, role: entity_id}
+  - {name: building_id, role: natural_key}
+  - {name: owner_id, role: group_id}
+  - {name: inspected_at, role: decision_time, temporal: date}
+  - {name: certified_at, role: event_time, temporal: date}
+  - {name: due_at_original, role: ignored, temporal: date}
+  - {name: violation_status, role: status}
+
+  # Признаки, известные в день инспекции.
+  - {name: severity, role: feature, availability: at_decision, source_of_claim: "класс нарушения, присваиваемый инспектором", window_lookback_days: 0, window_source: "выгрузка HPD"}
+  - {name: boro, role: feature, availability: at_decision, source_of_claim: "район города", window_lookback_days: 0, window_source: "выгрузка HPD"}
+  - {name: novtype, role: feature, availability: at_decision, source_of_claim: "тип уведомления о нарушении", window_lookback_days: 0, window_source: "выгрузка HPD"}
+  - {name: rentimpairing, role: feature, availability: at_decision, source_of_claim: "признак нарушения, ущемляющего право на аренду", window_lookback_days: 0, window_source: "выгрузка HPD"}
+  - {name: story, role: feature, availability: at_decision, source_of_claim: "этаж, где найдено нарушение", window_lookback_days: 0, window_source: "выгрузка HPD"}
+  - {name: communityboard, role: feature, availability: at_decision, source_of_claim: "муниципальный округ", window_lookback_days: 0, window_source: "выгрузка HPD"}
+
+  # КОНТРОЛЬ К-1. Текущее состояние нарушения отражает его ИТОГ и известно
+  # только после. Колонка СТРОКОВАЯ — именно такие проверка N6 пропускала до
+  # десятого кейса. Ядру о подлоге не сообщается.
+  - {name: current_status, role: feature, availability: at_decision, source_of_claim: "текущее состояние нарушения по данным HPD", window_lookback_days: 0, window_source: "выгрузка HPD"}
+
+  # Не участвуют в постановке.
+  - {name: due_at_revised, role: deadline, temporal: date, value_as_of: currentstatusdate}
+  - {name: approveddate, role: ignored, temporal: date}
+  - {name: originalcertifybydate, role: ignored, temporal: date}
+  - {name: newcertifybydate, role: ignored, temporal: date}
+  - {name: novissueddate, role: ignored, temporal: date}
+  - {name: currentstatusdate, role: ignored, temporal: date}
+  - {name: apartment, role: ignored}
+
+# --- КОНТРАКТ ИСХОДА ---------------------------------------------------------
+
+outcome:
+  event_column: certified_at
+  deadline_column: due_at_revised
+  comparison: by_date
+  positive_class: event_within_deadline
+  estimand: "устранение будет подтверждено не позже ПЕРЕСМОТРЕННОГО срока"
+  degenerate_beyond: 0.1
+
+  missing_causes:
+    - name: "нарушение закрыто"
+      meaning: not_occurred
+      status_value: "Close"
+      assumption: "закрытое нарушение без даты подтверждения означает закрытие иным путём — например, снятие при повторной инспекции, — а не потерю записи"
+    - name: "нарушение открыто"
+      meaning: not_occurred
+      status_value: "Open"
+      assumption: "открытое нарушение без подтверждения означает, что устранение не подтверждено; срок при этом истёк, и исход наблюдаем"
+
+# --- ТИП ЗАДАЧИ --------------------------------------------------------------
+
+task:
+  target_kind: binary
+  outcome_timing: delayed
+  has_process: true
+  is_stream: true
+  object_lifetime: recurring
+
+# --- СПЛИТ -------------------------------------------------------------------
+# Отсчёт от 2022-01-01. Первое полугодие целиком уходит в обучение первого
+# окна: окно, которому не на чем учиться, ловится проверкой P8 — она введена
+# одиннадцатым кейсом ровно после такой ошибки.
+
+split:
+  windows:
+    - {name: w0, start_day: 365, stop_day: 548}    # 2023, первое полугодие
+    - {name: w1, start_day: 548, stop_day: 730}    # 2023, второе полугодие
+    - {name: w2, start_day: 730, stop_day: 912}    # 2024, первое полугодие
+  reserve_from_day: 912                            # 2024, второе полугодие
+  reserve_until_day: 1096

@@ -1,0 +1,9 @@
+source: NYC Department of Housing Preservation and Development
+license: открытые данные города Нью-Йорка (объявлено источником)
+url: https://data.cityofnewyork.us/d/wvxf-dwi5
+retrieved_at: '2026-08-27'
+files:
+- name: housing_violations_2022_2024.csv
+  sha256: c6c883c30c43c3c5ca18a65b27bf4ddaf7febd15055b3a99e2430d5728fd0185
+  bytes: 703444923
+derived: []
