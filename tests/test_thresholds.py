@@ -292,3 +292,46 @@ def test_trend_without_a_reserve_says_it_has_nothing_to_say() -> None:
     )
 
     assert "сказать нечем" in detail
+
+
+# --- порог кратности прибит с обеих сторон ----------------------------------
+#
+# Мутация исходника показала: `ratio` в N3 можно было сдвинуть с 1.5 на 3.0 или
+# на 0.75, и весь набор из семисот двух тестов оставался зелёным. Стенд
+# доказывал, что проверка ЕСТЬ, и молчал о том, где у неё граница: инжекторы
+# подкладывают дефект с огромным запасом, и ни один кейс не стоял вплотную.
+#
+# Прибить число — значит поставить два случая по разные стороны от него.
+
+
+def test_ratio_just_past_the_threshold_is_reported() -> None:
+    """Кратность 1.7: больше полутора, меньше трёх.
+
+    Убивает мутанта `ratio` 1.5 → 3.0: при ослабленном пороге этот дефект
+    прошёл бы молча.
+    """
+    context = _windows_with_rates(
+        context_for(BY_ID["clean-baseline"]), [0.05, 0.085, 0.06], rows=40000
+    )
+    context.split.reserved = None
+
+    signals = TargetRateStationarity().run(context)
+
+    assert any("различается между окнами" in s.detail for s in signals)
+
+
+def test_ratio_just_under_the_threshold_is_silent() -> None:
+    """Кратность 1.2: меньше полутора, больше трёх четвертей.
+
+    Убивает мутанта `ratio` 1.5 → 0.75: при ужесточённом пороге это колебание
+    стало бы ложной тревогой. Отрицательный контроль к предыдущему тесту:
+    вместе они говорят, что граница проходит именно там, где объявлена.
+    """
+    context = _windows_with_rates(
+        context_for(BY_ID["clean-baseline"]), [0.05, 0.060, 0.055], rows=40000
+    )
+    context.split.reserved = None
+
+    signals = TargetRateStationarity().run(context)
+
+    assert not any("различается между окнами" in s.detail for s in signals)
