@@ -19,6 +19,7 @@ from dsx.checks.drift import (
     ExpectedRateHolds,
     FeatureRelationStability,
     TargetRateStationarity,
+    UnobservedCostIsNamed,
     support_overlap,
 )
 from dsx.checks.empirical import ImplausibleSeparation
@@ -451,3 +452,69 @@ def test_relation_weakening_under_the_threshold_is_silent() -> None:
     )
 
     assert not any("раза" in signal.detail for signal in FeatureRelationStability().run(context))
+
+
+def test_separation_exceeding_the_typical_one_is_reported() -> None:
+    """Сила 0.40 при типичной 0.13 — превышение втрое.
+
+    Убивает мутанта `excess` 2.5 → 4.0. Признак не вопиющий (0.40 меньше 0.45),
+    поэтому назвать его может только второе условие — превышение остальных.
+
+    Снизу `excess` прибит УЖЕ: случай 0.40 при типичной 0.20 обязан молчать, а
+    при пороге 1.75 заговорил бы. Отдельный тест на это не нужен, и добавлять
+    его значило бы изображать покрытие там, где оно есть.
+    """
+    context = _features_with_strengths(
+        context_for(BY_ID["clean-baseline"]),
+        {"lead_days": 0.40, "size": 0.13, "region": 0.13},
+    )
+
+    assert ImplausibleSeparation().run(context)
+
+
+# --- порог цены ненаблюдаемости прибит с обеих сторон -----------------------
+#
+# `N16.share = 0.05` решил дело в четырнадцатом кейсе: пока ненаблюдаемых было
+# 5.4%, проверка называла цену — границы, в которых лежит правда; после отброса
+# испорченных строк доля упала до 1.01%, и проверка замолчала. Молчание было
+# верным, но проходило оно ровно по этому числу.
+
+
+def _unobserved_share(context, share: float, rows: int = 20000, seed: int = 7):
+    """Сделать заданную долю исходов ненаблюдаемой во всех окнах."""
+    rng = np.random.default_rng(seed)
+    for part in context.split.parts:
+        observed = (rng.random(rows) < 0.4).astype("int8")
+        missing = rng.random(rows) < share
+        labels = [
+            None if gone else int(value) for value, gone in zip(observed, missing, strict=True)
+        ]
+        part.evaluate = pl.DataFrame(
+            {
+                LABEL: pl.Series(labels, dtype=pl.Int8),
+                "__outcome_reason": ["observed"] * rows,
+            }
+        )
+    context.split.reserved = None
+    return context
+
+
+def test_unobserved_share_past_the_threshold_is_priced() -> None:
+    """Семь процентов: больше пяти, меньше десяти.
+
+    Убивает мутанта `share` 0.05 → 0.1.
+    """
+    context = _unobserved_share(context_for(BY_ID["clean-baseline"]), 0.07)
+
+    assert any("не наблюдается" in s.detail for s in UnobservedCostIsNamed().run(context))
+
+
+def test_unobserved_share_under_the_threshold_is_silent() -> None:
+    """Три с половиной процента: меньше пяти, больше двух с половиной.
+
+    Убивает мутанта `share` 0.05 → 0.025. Цена ненаблюдаемости здесь мала, и
+    называть её значило бы поднимать тревогу на ширине в три процентных пункта.
+    """
+    context = _unobserved_share(context_for(BY_ID["clean-baseline"]), 0.035)
+
+    assert not any("не наблюдается" in s.detail for s in UnobservedCostIsNamed().run(context))
