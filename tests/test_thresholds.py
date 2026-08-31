@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 
 import numpy as np
@@ -340,3 +341,61 @@ def test_ratio_just_under_the_threshold_is_silent() -> None:
     signals = TargetRateStationarity().run(context)
 
     assert not any("различается между окнами" in s.detail for s in signals)
+
+
+# --- порог вопиющей силы связи прибит снизу ---------------------------------
+#
+# `blatant = 0.45` поднимает вопрос независимо от остальных признаков. Мутация
+# показала, что ослабить его до 0.225 можно было незаметно. Сверху мутанта нет
+# и быть не может: сила связи по построению не превосходит 0.5, и порог 0.9
+# просто выключил бы ветвь — область смысла этого не допускает.
+
+
+def _features_with_strengths(context, strengths: dict[str, float], seed: int = 5):
+    """Подменить объявленные признаки на связи ЗАДАННОЙ силы.
+
+    Для двоичного признака сила равна (q1 - q0) / 2, где q — доля единиц среди
+    своего класса. Отсюда q1 = 0.5 + сила, q0 = 0.5 - сила, и никакой подгонки
+    не требуется: проверено счётом до третьего знака.
+    """
+    from dsx.label import compute
+
+    labels = compute(context.world, context.outcome)[LABEL].to_numpy()
+    rng = np.random.default_rng(seed)
+    columns = []
+    for name, strength in strengths.items():
+        chance = np.where(labels == 1, 0.5 + strength, 0.5 - strength)
+        columns.append(pl.Series(name, (rng.random(len(labels)) < chance).astype(float)))
+    world = context.world.replace_main(context.world.main.with_columns(columns))
+    # Context заморожен намеренно: подменять мир на месте — значит менять
+    # предмет проверки после того, как она его получила.
+    return dataclasses.replace(context, world=world)
+
+
+def test_separation_just_under_blatant_is_silent() -> None:
+    """Сила 0.40 при типичной 0.20: ниже 0.45, но выше 0.225.
+
+    Убивает мутанта `blatant` 0.45 → 0.225. Признак не проходит и по второму
+    условию — 0.40 меньше, чем 0.20 * 2.5, — поэтому единственное, что могло
+    бы его выдать, это порог вопиющей силы.
+    """
+    context = _features_with_strengths(
+        context_for(BY_ID["clean-baseline"]),
+        {"lead_days": 0.40, "size": 0.20, "region": 0.20},
+    )
+
+    assert not ImplausibleSeparation().run(context)
+
+
+def test_separation_above_blatant_is_reported() -> None:
+    """Сила 0.48 при той же типичной 0.20 обязана быть названа.
+
+    Отрицательный контроль к предыдущему: без него молчание объяснялось бы
+    поломкой опоры, а не порогом.
+    """
+    context = _features_with_strengths(
+        context_for(BY_ID["clean-baseline"]),
+        {"lead_days": 0.48, "size": 0.20, "region": 0.20},
+    )
+
+    assert ImplausibleSeparation().run(context)
