@@ -404,6 +404,14 @@ class LabelImmaturity:
     premises: frozenset[Premise] = frozenset({Premise.DELAYED_OUTCOME})
     detects: frozenset[Finding] = frozenset({Finding.LABEL_IMMATURITY})
     tolerance: float = 0.01
+    """Какую долю незрелых строк в оценочной части терпеть молча.
+
+    Доля от объёма части, а не число строк: одна незрелая строка на сто тысяч
+    вывода не меняет, а один процент — уже меняет. Значение вне (0, 1)
+    означало бы «терпеть всегда» или «не терпеть никогда».
+
+    Смысл был дописан при объявлении области: порог стоял без пояснения.
+    """
 
     def run(self, context: Context) -> list[Signal]:
         split = _require_split(context)
