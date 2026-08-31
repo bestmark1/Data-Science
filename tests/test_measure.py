@@ -15,6 +15,7 @@ import pytest
 
 from dsx.label import LABEL
 from dsx.measure import (
+    BINS,
     BaselineRule,
     RuleKind,
     calibration_error,
@@ -302,3 +303,50 @@ def test_window_stability_spends_the_windows() -> None:
     stability_across_windows(sl, scores, CONSTANT)
 
     assert all(sl.is_spent(name) for name in ("w0", "w1", "w2"))
+
+
+# --- число корзин достаточно мелко ------------------------------------------
+
+
+def _miscalibrated(seed: int = 23, rows: int = 20000):
+    """Оценки, систематически расходящиеся с наблюдаемой долей."""
+    rng = np.random.default_rng(seed)
+    labels = rng.integers(0, 2, rows)
+    scores = np.clip(0.5 + 0.25 * (labels * 2 - 1) + rng.normal(0, 0.22, rows), 0.001, 0.999)
+    return scores, labels
+
+
+def test_calibration_error_has_converged_by_the_declared_bin_count() -> None:
+    """Измельчение корзин вдвое не должно менять ответ.
+
+    Это и есть свойство, ради которого выбрано число корзин, — а не само
+    число. Проверять равенство десяти значило бы прибивать величину, о которой
+    ничего не сказано; проверять сходимость значит сказать, ПОЧЕМУ десяти
+    достаточно.
+
+    Мутация показала асимметрию. При пяти корзинах ответ 0.094, при десяти
+    0.108: огрубление ЗАНИЖАЕТ ошибку калибровки, потому что внутри широкой
+    корзины расхождения разных знаков гасят друг друга. Измельчение сверх
+    десяти не меняет ничего, и мутант в эту сторону выживает по праву — его
+    выживание есть свидетельство сходимости, а не дыра.
+    """
+    scores, labels = _miscalibrated()
+
+    coarse = calibration_error(scores, labels, bins=BINS)
+    fine = calibration_error(scores, labels, bins=2 * BINS)
+
+    assert abs(coarse - fine) < 0.005, (
+        f"при {BINS} корзинах ответ {coarse:.4f}, при {2 * BINS} — {fine:.4f}: "
+        "корзины слишком широки, и ошибка калибровки занижена"
+    )
+
+
+def test_coarser_bins_understate_the_calibration_error() -> None:
+    """Отрицательный контроль: занижение при огрублении показано, а не заявлено.
+
+    Без него предыдущий тест говорил бы «разница мала» и не отличал бы
+    сошедшуюся сетку от нечувствительной меры.
+    """
+    scores, labels = _miscalibrated()
+
+    assert calibration_error(scores, labels, bins=5) < calibration_error(scores, labels, bins=BINS)
