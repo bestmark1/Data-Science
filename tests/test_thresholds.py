@@ -399,3 +399,55 @@ def test_separation_above_blatant_is_reported() -> None:
     )
 
     assert ImplausibleSeparation().run(context)
+
+
+# --- порог ослабления связи прибит с обеих сторон ---------------------------
+#
+# `N4.ratio = 3.0` — во сколько раз связь признака с исходом может ослабнуть
+# между окнами. Мутация показала, что сдвинуть его на 2.0 или на 5.0 можно
+# было незаметно.
+
+
+def _relation_across_windows(
+    context, name: str, values: list[float], rows: int = 20000, seed: int = 5
+):
+    """Задать связь признака с исходом ОТДЕЛЬНО В КАЖДОМ ОКНЕ.
+
+    Та же двоичная опора, что и у силы связи: q1 = 0.5 + a, q0 = 0.5 - a даёт
+    связь ровно a. Здесь она нужна по окнам, потому что N4 сравнивает окна
+    между собой, а не с общим уровнем.
+    """
+    rng = np.random.default_rng(seed)
+    for part, value in zip(context.split.parts, values, strict=False):
+        labels = (rng.random(rows) < 0.4).astype("int8")
+        chance = np.where(labels == 1, 0.5 + value, 0.5 - value)
+        feature = (rng.random(rows) < chance).astype(float)
+        part.evaluate = pl.DataFrame(
+            {LABEL: labels, "__outcome_reason": ["observed"] * rows, name: feature}
+        )
+    context.split.reserved = None
+    return context
+
+
+def test_relation_weakening_past_the_threshold_is_reported() -> None:
+    """Ослабление вчетверо: больше трёх, меньше пяти.
+
+    Убивает мутанта `ratio` 3.0 → 5.0.
+    """
+    context = _relation_across_windows(
+        context_for(BY_ID["clean-baseline"]), "lead_days", [0.36, 0.30, 0.09]
+    )
+
+    assert any("раза" in signal.detail for signal in FeatureRelationStability().run(context))
+
+
+def test_relation_weakening_under_the_threshold_is_silent() -> None:
+    """Ослабление в два с половиной раза: меньше трёх, больше двух.
+
+    Убивает мутанта `ratio` 3.0 → 2.0. Отрицательный контроль к предыдущему.
+    """
+    context = _relation_across_windows(
+        context_for(BY_ID["clean-baseline"]), "lead_days", [0.36, 0.30, 0.144]
+    )
+
+    assert not any("раза" in signal.detail for signal in FeatureRelationStability().run(context))
