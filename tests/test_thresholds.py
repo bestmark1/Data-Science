@@ -23,6 +23,7 @@ from dsx.checks.drift import (
     support_overlap,
 )
 from dsx.checks.empirical import ImplausibleSeparation
+from dsx.checks.split_checks import MeasuredPartsAreUsable, TrainingPartIsUsable
 from dsx.evals.case import Finding
 from dsx.evals.registry import BY_ID
 from dsx.label import LABEL
@@ -518,3 +519,97 @@ def test_unobserved_share_under_the_threshold_is_silent() -> None:
     context = _unobserved_share(context_for(BY_ID["clean-baseline"]), 0.035)
 
     assert not any("не наблюдается" in s.detail for s in UnobservedCostIsNamed().run(context))
+
+
+# --- пороги пригодности частей прибиты с обеих сторон -----------------------
+#
+# `P8.minimum` и `P9.minimum` равны сотне строк: ниже учиться не на чем и
+# мерить нечего. Оба сдвигались вдвое незаметно.
+
+
+def _train_rows(context, rows: int):
+    for part in context.split.parts:
+        part.train = part.train.head(rows)
+    return context
+
+
+def _observable_rows(context, rows: int):
+    for part in context.split.parts:
+        part.evaluate = part.evaluate.head(rows)
+    if context.split.reserved is not None:
+        context.split.reserved = context.split.reserved.head(rows)
+    return context
+
+
+def test_training_part_above_the_minimum_is_accepted() -> None:
+    """Полтораста строк: больше сотни, меньше двух сотен.
+
+    Убивает мутанта `P8.minimum` 100 → 200.
+    """
+    assert not TrainingPartIsUsable().run(_train_rows(context_for(BY_ID["clean-baseline"]), 150))
+
+
+def test_training_part_below_the_minimum_is_refused() -> None:
+    """Семьдесят пять строк: меньше сотни, больше полусотни.
+
+    Убивает мутанта `P8.minimum` 100 → 50. Отрицательный контроль к предыдущему.
+    """
+    assert TrainingPartIsUsable().run(_train_rows(context_for(BY_ID["clean-baseline"]), 75))
+
+
+def test_measured_part_above_the_minimum_is_accepted() -> None:
+    """Убивает мутанта `P9.minimum` 100 → 200."""
+    assert not MeasuredPartsAreUsable().run(
+        _observable_rows(context_for(BY_ID["clean-baseline"]), 150)
+    )
+
+
+def test_measured_part_below_the_minimum_is_refused() -> None:
+    """Убивает мутанта `P9.minimum` 100 → 50."""
+    assert MeasuredPartsAreUsable().run(_observable_rows(context_for(BY_ID["clean-baseline"]), 75))
+
+
+# --- порог дробности категорий прибит с обеих сторон ------------------------
+#
+# `MIN_PER_CATEGORY = 50` отсекает случай, где сила связи оказалась бы
+# свойством дробности признака, а не самого признака: на пределе каждая
+# категория описывает одну строку и разделяет идеально. Порог введён ради
+# строковой утечки десятого кейса и до сих пор не держался ничем.
+
+
+def _pure_categories(context, count: int, column: str = "region", seed: int = 3):
+    """Строковый признак, чьи категории ЧИСТЫ по исходу.
+
+    Половина категорий достаётся положительным строкам, половина —
+    отрицательным, поэтому разделение идеальное, а вопрос остаётся один:
+    посмотрит ли проверка на признак при такой дробности.
+    """
+    from dsx.label import compute
+
+    labels = compute(context.world, context.outcome)[LABEL].to_numpy()
+    rng = np.random.default_rng(seed)
+    half = max(1, count // 2)
+    values = [f"c{rng.integers(0, half) + (half if value == 1 else 0)}" for value in labels]
+    world = context.world.replace_main(context.world.main.with_columns(pl.Series(column, values)))
+    return dataclasses.replace(context, world=world)
+
+
+def test_categories_large_enough_are_examined() -> None:
+    """Шестьдесят категорий на четыре тысячи строк — по 67 на категорию.
+
+    Больше полусотни, меньше сотни: убивает мутанта 50 → 100. Утечка идеальна,
+    и промолчать проверка может только отказавшись смотреть.
+    """
+    assert ImplausibleSeparation().run(_pure_categories(context_for(BY_ID["clean-baseline"]), 60))
+
+
+def test_categories_too_fine_are_not_examined() -> None:
+    """Сто двадцать категорий — по 33 на категорию.
+
+    Меньше полусотни, больше двадцати пяти: убивает мутанта 50 → 25. Утечка та
+    же самая, и молчание здесь верно: при такой дробности идеальное разделение
+    было бы свойством дробления, а не признака.
+    """
+    assert not ImplausibleSeparation().run(
+        _pure_categories(context_for(BY_ID["clean-baseline"]), 120)
+    )
