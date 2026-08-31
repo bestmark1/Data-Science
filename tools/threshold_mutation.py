@@ -47,7 +47,7 @@ from typing import NamedTuple
 
 sys.path.insert(0, "src")
 
-from dsx.checks.domains import DOMAINS  # noqa: E402
+from dsx.checks.domains import DOMAINS, Domain  # noqa: E402
 
 
 class Threshold(NamedTuple):
@@ -138,6 +138,26 @@ def _numeric_fields(path: Path) -> list[Threshold]:
     return _module_constants(tree, path.stem) + found
 
 
+def _variants(value: float | int, domain: Domain | None) -> list[float | int]:
+    """Ослабленное и ужесточённое значение — вдвое ОТ СВОЕЙ ОПОРЫ.
+
+    Опора — нижняя граница области, а не ноль. Для кратности она равна единице:
+    «в полтора раза» ослабляется до «в 1.25 раза», а не до «в 0.75 раза».
+    Половина кратности вообще не кратность — она лежит за областью смысла, и
+    прежний оператор, деливший на два от нуля, ни разу не проверил кратности
+    снизу. Пять из семи выпавших мест были именно такими: виноват был оператор,
+    а не код.
+
+    Для долей и счётчиков опора равна нулю, и правило сводится к прежнему.
+    """
+    anchor = domain.low if domain is not None and domain.low else 0.0
+    made: list[float | int] = []
+    for factor in (0.5, 2.0):
+        new = anchor + (value - anchor) * factor
+        made.append(max(1, int(new)) if isinstance(value, int) else new)
+    return made
+
+
 def _mutate(path: Path, lineno: int, old: float | int, new: float | int) -> bool:
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     line = lines[lineno - 1]
@@ -174,9 +194,7 @@ def main() -> int:
     for path in _paths():
         for lineno, name, value, key in _numeric_fields(path):
             domain = DOMAINS.get(key)
-            for factor in (0.5, 2.0):
-                new = value * factor
-                new = max(1, int(new)) if isinstance(value, int) else new
+            for new in _variants(value, domain):
                 if new == value:
                     continue
                 label = f"{path.stem}:{name}={value}→{new}"
