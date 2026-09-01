@@ -21,6 +21,7 @@ from dsx.measure import (
     calibration_error,
     discrimination,
     measure_against_baseline,
+    measure_contrast,
 )
 from dsx.policy import Blocked
 from dsx.samples import Extent, Purpose, SampleLedger
@@ -350,3 +351,65 @@ def test_coarser_bins_understate_the_calibration_error() -> None:
     scores, labels = _miscalibrated()
 
     assert calibration_error(scores, labels, bins=5) < calibration_error(scores, labels, bins=BINS)
+
+
+# --- сравнение двух постановок на одной выборке -----------------------------
+#
+# `measure_contrast` работает с шестого кейса и вызывается двумя проектами, но
+# НАБОРОМ ТЕСТОВ не исполнялся ни разу: замер достижимости показал его среди
+# тридцати пяти таких функций. Каждый из трёх дефектов последних заходов лежал
+# ровно в таком коде — вызываемом, но не прогоняемом.
+
+
+def _contrast_ledger(rows: int, frame: pl.DataFrame) -> SampleLedger:
+    """Журнал, ВЛАДЕЮЩИЙ данными: иначе выдать по checkout нечего.
+
+    Владение здесь не подробность вызова, а суть учёта: единственный способ
+    получить кадр — через журнал, и расход записывается тем же действием.
+    """
+    ledger = SampleLedger()
+    ledger.register(
+        "резерв",
+        Extent(
+            units=frozenset(str(index) for index in range(rows)),
+            since=dt.datetime(2024, 1, 1),
+            until=dt.datetime(2024, 12, 31),
+        ),
+        frame=frame,
+    )
+    return ledger
+
+
+def test_contrast_spends_the_sample_once_for_two_models() -> None:
+    """Две постановки сравниваются одним расходом выборки.
+
+    В этом весь смысл парного сравнения: выдать выборку дважды значило бы
+    израсходовать её дважды, и второе измерение перестало бы быть независимым.
+    """
+    rng = np.random.default_rng(3)
+    rows = 4000
+    labels = rng.integers(0, 2, rows)
+    strong = np.clip(0.5 + 0.25 * (labels * 2 - 1) + rng.normal(0, 0.25, rows), 0.01, 0.99)
+    weak = np.clip(0.5 + 0.05 * (labels * 2 - 1) + rng.normal(0, 0.25, rows), 0.01, 0.99)
+    ledger = _contrast_ledger(rows, pl.DataFrame({LABEL: labels}))
+
+    contrast = measure_contrast(
+        ledger,
+        "резерв",
+        pl.Series("сильная", strong),
+        pl.Series("слабая", weak),
+        left_name="сильная",
+        right_name="слабая",
+    )
+
+    assert len(ledger.accesses) == 1, "парное сравнение обязано расходовать выборку один раз"
+    assert "сильная" in str(contrast)
+
+
+def test_contrast_refuses_an_unregistered_sample() -> None:
+    """Имя, придуманное на ходу, обходит учёт расхода."""
+    rng = np.random.default_rng(5)
+    scores = pl.Series(rng.random(500))
+
+    with pytest.raises(Blocked, match="не зарегистрирована"):
+        measure_contrast(SampleLedger(), "выдуманная", scores, scores, "a", "b")
