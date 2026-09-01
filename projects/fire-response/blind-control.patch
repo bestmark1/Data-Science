@@ -1,0 +1,30 @@
+diff --git a/projects/fire-response/blind-control.sealed.md b/projects/fire-response/blind-control.sealed.md
+new file mode 100644
+index 0000000..9a7b3cc
+--- /dev/null
++++ b/projects/fire-response/blind-control.sealed.md
+@@ -0,0 +1,9 @@
++ОЖИДАЕМАЯ НАХОДКА: undeclared_column
++
++Выбран пункт `undeclared_column`: он проверяет соответствие фактически
++построенной таблицы объявленной схеме и не опирается на уже отмеченные в кейсе
++контроли времени и пропусков.
++
++В `projects/fire-response/build.py` в агрегацию вызова добавлена строка
++`pl.col("dispatch_dttm").min().alias("dispatch_at"),`.
++Она создаёт в итоговой таблице колонку `dispatch_at`, которой нет среди
++объявлений `columns` в `project.yaml`.
+diff --git a/projects/fire-response/build.py b/projects/fire-response/build.py
+index 8e2f6d9..468e203 100644
+--- a/projects/fire-response/build.py
++++ b/projects/fire-response/build.py
+@@ -65,6 +65,7 @@ def build() -> pl.DataFrame:
+     calls = ordered.group_by("call_number", maintain_order=True).agg(
+         pl.col("received_dttm").min().alias("received_at"),
+         # Первый ПРИБЫВШИЙ, а не первый отправленный: отправленная машина могла
+         # не доехать, и тогда исход вызова определяет следующая.
+         pl.col("on_scene_dttm").min().alias("on_scene_at"),
++        pl.col("dispatch_dttm").min().alias("dispatch_at"),
+         # КОНТРОЛЬ К-1: момент, когда расчёт освободился. Он наступает ПОСЛЕ
+         # прибытия, и объявлять его признаком момента приёма — подлог.
+         pl.col("available_dttm").min().alias("available_at"),

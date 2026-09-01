@@ -73,9 +73,9 @@ columns:
   - {name: at_night, role: feature, availability: at_decision, direction: increases, source_of_claim: "час приёма вызова", window_lookback_days: 0, window_source: "выгрузка SFFD", value_as_of: received_at}
   - {name: at_rush_hour, role: feature, availability: at_decision, direction: decreases, source_of_claim: "час приёма вызова", window_lookback_days: 0, window_source: "выгрузка SFFD", value_as_of: received_at}
 
-  # КОНТРОЛЬ К-1. Момент, когда расчёт освободился, наступает ПОСЛЕ прибытия.
-  # Момент фиксации объявлен честно — собой. Ядру о подлоге не сообщается.
-  - {name: available_at, role: feature, availability: at_decision, source_of_claim: "момент освобождения расчёта", window_lookback_days: 0, window_source: "выгрузка SFFD", value_as_of: available_at}
+  # Был контролем К-1: момент освобождения расчёта наступает ПОСЛЕ прибытия.
+  # Ядро возразило по 336 135 строкам из 336 390 — 99.9%.
+  - {name: available_at, role: ignored, temporal: instant}
 
   - {name: disposition, role: ignored}
 

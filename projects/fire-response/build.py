@@ -72,7 +72,14 @@ def build() -> pl.DataFrame:
         *[pl.col(name).first().alias(name) for name in AT_RECEIPT],
     )
 
-    broken = pl.col("call_number").is_null() | pl.col("received_at").is_null()
+    # Прибытие раньше приёма невозможно: 19 вызовов. Либо часы расчёта разошлись
+    # с часами диспетчерской, либо запись заведена задним числом. Исходом своего
+    # решения такая строка быть не может.
+    broken = (
+        pl.col("call_number").is_null()
+        | pl.col("received_at").is_null()
+        | (pl.col("on_scene_at") < pl.col("received_at")).fill_null(False)
+    )
     kept = calls.filter(~broken)
     lost = calls.height - kept.height
     print(
@@ -80,10 +87,15 @@ def build() -> pl.DataFrame:
         f"потеряно {lost:,}, осталось {kept.height:,}"
     )
 
-    # КОНТРОЛЬ К-3: отсутствие, записанное значением, намеренно не вычищается.
-
     hour = pl.col("received_at").dt.hour()
     return kept.with_columns(
+        # Отсутствие, записанное значением: строка 'None' в районе у 121 вызова.
+        # Оставлено в первом прогоне контролем К-3 и превращено в пропуск после
+        # того, как ядро назвало колонку поимённо.
+        pl.when(pl.col("neighborhoods_analysis_boundaries") == "None")
+        .then(None)
+        .otherwise(pl.col("neighborhoods_analysis_boundaries"))
+        .alias("neighborhoods_analysis_boundaries"),
         (pl.col("received_at") + pl.duration(seconds=TARGET_SECONDS)).alias("due_at"),
         # Ночь: дороги свободны, и расчёт доезжает быстрее. Направление
         # объявляется ядру доменным знанием и проверяется им же (N8).
