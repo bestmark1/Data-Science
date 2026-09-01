@@ -1,0 +1,12 @@
+source: 'Austin Animal Center: приёмы и исходы'
+license: открытые данные города Остина (объявлено источником)
+url: https://data.austintexas.gov/
+retrieved_at: '2026-09-01'
+files:
+- name: intakes_2016_2023.csv
+  sha256: 58a8bb71d768f520798b90ed8e325d33a2b5977912f60537566dc5f0fd0da2ab
+  bytes: 17861950
+- name: outcomes_2016_2024.csv
+  sha256: 84d6a64691aa1bc0a64a66200fbe5a199a333b71303e7edab2a16f6dc432902b
+  bytes: 11258541
+derived: []
