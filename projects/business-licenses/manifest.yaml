@@ -1,0 +1,9 @@
+source: 'Чикаго: заявки на лицензию бизнеса'
+license: открытые данные города Чикаго (объявлено источником)
+url: https://data.cityofchicago.org/d/r5kz-chrr
+retrieved_at: '2026-09-02'
+files:
+- name: applications_2015_2023.csv
+  sha256: f917f36707398e8a5143b8f70c79ef66fd04ee96080b21255b98c0583400ec18
+  bytes: 23001836
+derived: []

@@ -1,0 +1,114 @@
+# ФОРМА СЕМНАДЦАТОГО КЕЙСА
+#
+# Предсказывается: донесёт ли заявитель требуемые документы за месяц.
+#
+# Новая ось: предсказывается поведение ТРЕТЬЕЙ СТОРОНЫ, а не работа ведомства.
+# Главное назначение — первая настоящая проверка нового прибора N13: допуск к
+# ожиданию объявлен ДО данных.
+#
+# В первом прогоне присутствуют контроли К-1 и К-2 §5 пре-регистрации.
+
+title: "Чикаго: донесёт ли заявитель документы за месяц"
+
+observed_until: 2024-03-01T00:00:00
+observed_until_source: "популяция кончается 2023-12-29; два месяца запаса на то, чтобы заявка, поданная в конце года, успела получить отметку выполнения требований"
+
+# --- ДОПУЩЕНИЯ ---------------------------------------------------------------
+
+assumptions:
+  - statement: "моментом решения является подача заявки"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если город заводит запись позже фактической подачи, момент выбран позже, чем он происходит, и часть ожидания заявителя выпадает из счёта"
+
+  - statement: "исходом управляет заявитель, а не ведомство"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если отметка о выполнении требований ставится по расписанию проверок города, а не по факту доноса документов, предсказывается работа ведомства, и вся постановка описана неверно"
+
+  - statement: "срок в месяц объявлен автором, а не взят из регламента города"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если у Чикаго свой норматив, доля к сроку описывает не тот норматив; месяц выбран как административная мера, а не как найденное правило"
+
+  - statement: "ожидаемая доля объявлена широким допуском намеренно"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "опубликованной статистики по этой отрасли автор не имеет; узкий допуск был бы притворством, а широкий признаёт незнание вслух и делает его видимым в отчёте"
+
+# --- СХЕМА -------------------------------------------------------------------
+
+columns:
+  - {name: id, role: entity_id}
+  - {name: license_id, role: natural_key}
+  - {name: applied_at, role: decision_time, temporal: date}
+  - {name: requirements_met_at, role: event_time, temporal: date}
+  - {name: due_at, role: deadline, temporal: date, value_as_of: applied_at}
+  - {name: license_status, role: status}
+  - {name: community_area, role: group_id}
+
+  # Признаки, известные в момент подачи заявки.
+  - {name: application_type, role: feature, availability: at_decision, source_of_claim: "вид заявки: первичная, продление, смена места", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: applied_at}
+  - {name: license_code, role: feature, availability: at_decision, source_of_claim: "код запрашиваемой лицензии", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: applied_at}
+  - {name: license_description, role: feature, availability: at_decision, source_of_claim: "название запрашиваемой лицензии", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: applied_at}
+  - {name: business_activity, role: feature, availability: at_decision, source_of_claim: "заявленный вид деятельности", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: applied_at}
+  - {name: ward, role: feature, availability: at_decision, source_of_claim: "округ по адресу заведения", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: applied_at}
+  - {name: police_district, role: feature, availability: at_decision, source_of_claim: "полицейский район по адресу", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: applied_at}
+  - {name: neighborhood, role: feature, availability: at_decision, source_of_claim: "название местности по адресу", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: applied_at}
+
+  # КОНТРОЛЬ К-1. Дата выдачи наступает ПОСЛЕ выполнения требований. Момент
+  # фиксации объявлен честно — собой. Ядру о подлоге не сообщается.
+  - {name: issued_at, role: feature, availability: at_decision, source_of_claim: "дата выдачи лицензии", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: issued_at}
+
+  - {name: payment_date, role: ignored, temporal: date}
+  - {name: expiration_date, role: ignored, temporal: date}
+  - {name: license_status_change_date, role: ignored, temporal: date}
+  - {name: conditional_approval, role: ignored}
+  - {name: precinct, role: ignored}
+
+# --- КОНТРАКТ ИСХОДА ---------------------------------------------------------
+
+outcome:
+  event_column: requirements_met_at
+  deadline_column: due_at
+  comparison: by_date
+  positive_class: event_within_deadline
+  event_name: "выполнение требований заявителем"
+  deadline_name: "месяц от подачи заявки"
+  degenerate_beyond: 0.05
+
+  # ОЖИДАНИЕ И ДОПУСК (N13), объявлены ДО просмотра данных. Допуск широк
+  # намеренно: опубликованной статистики у отрасли нет, знание автора — общее
+  # соображение о выгоде заявителя, и узкий допуск был бы притворством.
+  expected_positive_rate: 0.70
+  expected_within: 0.25
+
+  missing_causes:
+    - {name: "лицензия действует", meaning: not_occurred, status_value: "AAI",
+       assumption: "действующая лицензия без отметки о выполнении требований означала бы потерю записи, а не невыполнение"}
+    - {name: "лицензия аннулирована заявителем", meaning: excluded, status_value: "AAC",
+       assumption: "заявитель сам отозвал заявку, и требований от него больше не ждали: из популяции такая строка выводится"}
+    - {name: "лицензия отозвана городом", meaning: excluded, status_value: "REV",
+       assumption: "город прекратил лицензию сам; дальнейшее поведение заявителя к делу не относится"}
+    - {name: "заявка в рассмотрении", meaning: unobserved, status_value: "INQ",
+       assumption: "решение по заявке ещё не принято, и исход не наблюдаем"}
+
+# --- ТИП ЗАДАЧИ --------------------------------------------------------------
+
+task:
+  target_kind: binary
+  outcome_timing: delayed
+  has_process: true
+  is_stream: true
+  object_lifetime: recurring
+
+# --- СПЛИТ -------------------------------------------------------------------
+# Отсчёт от 2015-01-01. Метка зреет за месяц, поэтому окна ставятся вплотную.
+
+split:
+  windows:
+    - {name: w0, start_day: 365, stop_day: 1461}    # 2016 — 2018
+    - {name: w1, start_day: 1461, stop_day: 2192}   # 2019 — 2020
+    - {name: w2, start_day: 2192, stop_day: 2922}   # 2021 — 2022
+  reserve_from_day: 2922                            # 2023 год целиком
+  reserve_until_day: 3287
