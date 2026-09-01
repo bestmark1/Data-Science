@@ -128,6 +128,9 @@ def main() -> int:
         return model, names
 
     known_model, known_names = fit(KNOWN)
+    # Ядру объявляется объединение входов ОБЕИХ постановок: измеряются они на
+    # одной выборке, и утечка в любой из них портит общий вывод (P11).
+    result.uses([*shared, KNOWN, EXPORT])
     export_model, export_names = fit(EXPORT)
 
     reserve = result.samples.checkout(RESERVE, Purpose.AUDIT, "подготовка оценок")

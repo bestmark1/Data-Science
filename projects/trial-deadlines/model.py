@@ -120,6 +120,12 @@ def main() -> int:
     categories = category_map(table, names)
 
     result = run(form, table, PROJECT / "report", overrides=ledger())
+    # Ядру объявляется, чем ДЕЙСТВИТЕЛЬНО питалась модель (P11). Здесь
+    # список берётся из самого формуляра, и утечка невозможна по
+    # построению, — но объявление обязательно всё равно: механизм,
+    # который можно не позвать, в этом проекте ломался трижды.
+    result.uses(names)
+
     print(result.summary())
 
     last = result.split.parts[-1]

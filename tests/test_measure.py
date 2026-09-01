@@ -46,6 +46,10 @@ def world(seed: int = 5) -> pl.DataFrame:
 
 def ledger_with(frame: pl.DataFrame, name: str = "резерв") -> SampleLedger:
     sl = SampleLedger()
+    # Входы модели объявляются всегда: без объявления измерение отказывает (P11).
+    # Требование введено после того, как утечка, спрятанная ролью `ignored`,
+    # подняла разрешающую способность на восемь пунктов при молчании ядра.
+    sl.declare_features(["signal", "risk", "noise"])
     sl.register(
         name,
         Extent(
@@ -258,6 +262,7 @@ def test_segment_section_names_the_ordering_rule() -> None:
 def _windowed_ledger(flip: bool) -> tuple[SampleLedger, dict[str, pl.Series]]:
     """Три окна. При flip знак превосходства в третьем меняется на обратный."""
     sl = SampleLedger()
+    sl.declare_features(["signal", "risk", "noise"])
     scores: dict[str, pl.Series] = {}
     for index, name in enumerate(("w0", "w1", "w2")):
         frame = world(seed=index + 1)
@@ -368,6 +373,7 @@ def _contrast_ledger(rows: int, frame: pl.DataFrame) -> SampleLedger:
     получить кадр — через журнал, и расход записывается тем же действием.
     """
     ledger = SampleLedger()
+    ledger.declare_features(["сильная", "слабая"])
     ledger.register(
         "резерв",
         Extent(
@@ -413,3 +419,45 @@ def test_contrast_refuses_an_unregistered_sample() -> None:
 
     with pytest.raises(Blocked, match="не зарегистрирована"):
         measure_contrast(SampleLedger(), "выдуманная", scores, scores, "a", "b")
+
+
+# --- ядро обязано знать, чем питалась модель (P11) ---------------------------
+#
+# Пятнадцатый кейс: ядро проверяло объявленную СХЕМУ и не знало входов модели.
+# Признаки жили отдельным списком в коде проекта, связи с формуляром не было.
+# Опыт на закрытом кейсе: колонка, объявленная `role: ignored` и скормленная
+# модели в обход, подняла разрешающую способность с 0.7178 до 0.8009, и сигналы
+# ядра совпали ДОСЛОВНО. Дыра обесценивала N6, S10 и подложенные контроли разом.
+
+
+def test_measurement_refuses_until_model_inputs_are_declared() -> None:
+    """Необъявленные входы означают, что измерять нечего.
+
+    Требование стоит на самом измерении, а не рядом с ним: механизм, который
+    можно не позвать, в этом проекте ломался трижды.
+    """
+    frame = world()
+    ledger = SampleLedger()
+    ledger.register(
+        "резерв",
+        Extent(
+            units=frozenset(str(i) for i in range(frame.height)),
+            since=dt.datetime(2024, 1, 1),
+            until=dt.datetime(2024, 6, 1),
+        ),
+        frame=frame,
+    )
+
+    with pytest.raises(Blocked, match="входы модели не объявлены"):
+        measure_against_baseline(ledger, "резерв", frame["signal"], CONSTANT)
+
+
+def test_declared_inputs_let_the_measurement_through() -> None:
+    """Отрицательный контроль: объявление снимает отказ и ничего больше."""
+    frame = world()
+    ledger = ledger_with(frame)
+
+    verdict = measure_against_baseline(ledger, "резерв", frame["signal"], CONSTANT)
+
+    assert ledger.features == ("signal", "risk", "noise")
+    assert verdict.rows > 0

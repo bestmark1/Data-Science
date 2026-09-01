@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Annotated
 
@@ -85,13 +86,14 @@ class Access(BaseModel):
 
 
 class SampleLedger:
-    """Учёт обращений к выборкам (P1, P2, P7)."""
+    """Учёт обращений к выборкам (P1, P2, P7) и того, чем питалась модель (P11)."""
 
     def __init__(self, ledger: OverrideLedger | None = None) -> None:
         self._accesses: list[Access] = []
         self._known: set[str] = set()
         self._extents: dict[str, Extent] = {}
         self._frames: dict[str, object] = {}
+        self._features: tuple[str, ...] | None = None
         self._overrides = ledger or OverrideLedger()
 
     # --- регистрация ------------------------------------------------------
@@ -115,6 +117,50 @@ class SampleLedger:
 
     def extent(self, sample: str) -> Extent | None:
         return self._extents.get(sample)
+
+    # --- чем питалась модель (P11) ---------------------------------------
+
+    def declare_features(self, names: Sequence[str]) -> None:
+        """Записать колонки, которые модель ДЕЙСТВИТЕЛЬНО получила на вход.
+
+        Пятнадцатый кейс: ядро проверяло объявленную СХЕМУ и не знало, чем
+        питается модель. Признаки жили отдельным списком в коде проекта, и
+        связи между ним и формуляром не было никакой.
+
+        Цена показана опытом на закрытом кейсе. Колонка `outcome_subtype`,
+        объявленная признаком, мгновенно даёт `value_revised_after_decision` на
+        113 790 строках из 116 671 — контроль К-1 её ловил. Объявленная
+        `role: ignored` и скормленная модели в обход, она подняла разрешающую
+        способность с 0.7178 до 0.8009, и ядро не сказало НИ СЛОВА: сигналы
+        совпали дословно.
+
+        Дыра обесценивала три механизма разом — N6, S10 и подложенные контроли:
+        любую утечку достаточно было объявить `ignored`.
+
+        Список проверяется на согласие со схемой вызывающей стороной, у которой
+        схема есть; журнал хранит факт объявления и сами имена.
+        """
+        self._features = tuple(names)
+
+    @property
+    def features(self) -> tuple[str, ...] | None:
+        """Объявленные входы модели. None — объявления не было."""
+        return self._features
+
+    def require_features(self) -> None:
+        """Отказать в измерении, пока входы модели не объявлены.
+
+        Необязательное объявление никто не делает, и механизм, которого можно
+        не позвать, в этом проекте ломался трижды. Поэтому отказывает само
+        измерение: обойти его, ничего не заметив, нельзя.
+        """
+        if self._features is None:
+            self._overrides.enforce(
+                "P11",
+                "входы модели не объявлены: измерять нечего, пока неизвестно, "
+                "чем модель питалась. Объявите их через result.uses(...) — "
+                "иначе утечку достаточно объявить в схеме ролью ignored",
+            )
 
     def _require_known(self, sample: str) -> None:
         if sample not in self._known:

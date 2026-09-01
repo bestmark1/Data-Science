@@ -241,6 +241,7 @@ def measure_against_baseline(
     метрику, подкрутить порог и посмотреть снова здесь невозможно.
     """
     frame = ledger.checkout(sample, Purpose.MEASUREMENT, decision)
+    ledger.require_features()
     assert isinstance(frame, pl.DataFrame)
 
     if scores.len() != frame.height:
@@ -358,6 +359,7 @@ def measure_contrast(
     разброс выборки, который у обеих постановок общий и потому сокращается.
     """
     frame = ledger.checkout(sample, Purpose.MEASUREMENT, decision)
+    ledger.require_features()
     assert isinstance(frame, pl.DataFrame)
 
     for name, scores in ((left_name, left_scores), (right_name, right_scores)):

@@ -110,6 +110,14 @@ def main() -> int:
     categories = category_map(table)
 
     result = run(form, table, PROJECT / "report", overrides=ledger())
+
+    # Ядру объявляется, чем ДЕЙСТВИТЕЛЬНО питалась модель. Без этого
+
+    # измерение отказывает (P11): утечку иначе достаточно объявить в
+
+    # схеме ролью ignored, и ядро о ней не узнает.
+
+    result.uses(FEATURES)
     print(result.summary())
 
     last = result.split.parts[-1]

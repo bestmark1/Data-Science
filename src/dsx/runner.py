@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from dsx.evals.world import World
 from dsx.policy import OverrideLedger
 from dsx.project import ProjectForm
 from dsx.report import Study
+from dsx.roles import Availability, Role
 from dsx.samples import SampleLedger
 from dsx.split import (
     SplitResult,
@@ -42,6 +44,17 @@ RESERVE = "резерв"
 роли — способ незаметно измерить дважды."""
 
 
+class LeakageError(Exception):
+    """Модель получила на вход то, что признаком момента решения не объявлено.
+
+    Обхода у этого требования нет намеренно. Всякий обход возвращал бы ровно ту
+    дыру, ради которой требование введено: утечку достаточно было бы объявить
+    ролью `ignored` и приложить причину. Если колонка законно доступна в момент
+    решения — объявите её признаком, и ядро проверит это объявление наравне с
+    остальными.
+    """
+
+
 @dataclass
 class Result:
     """Что получилось: данные протокола вместе с отчётом."""
@@ -51,6 +64,39 @@ class Result:
     checks: CheckReport
     samples: SampleLedger
     study: Study
+
+    def uses(self, names: Sequence[str]) -> None:
+        """Объявить колонки, которые модель получила на вход, и сверить со схемой.
+
+        Каждая обязана быть признаком, доступным в момент решения. Иное
+        означает одно из двух, и оба хуже ошибки в модели: либо в модель попало
+        то, чего решавший не знал, либо схема описывает не ту таблицу, по
+        которой считается результат.
+
+        Пятнадцатый кейс показал цену молчания опытом: утечка, объявленная в
+        схеме ролью `ignored` и скормленная модели, подняла разрешающую
+        способность с 0.7178 до 0.8009 при дословно совпавших сигналах.
+        """
+        schema = self.world.schema
+        known = {column.name: column for column in schema.columns}
+        wrong: list[str] = []
+        for name in names:
+            column = known.get(name)
+            if column is None:
+                wrong.append(f"{name!r} — в схеме не объявлена вовсе")
+            elif column.role is not Role.FEATURE:
+                wrong.append(f"{name!r} — объявлена ролью {column.role.value!r}, а не признаком")
+            elif column.availability is not Availability.AT_DECISION:
+                wrong.append(
+                    f"{name!r} — доступность объявлена {column.availability.value!r}, "
+                    "то есть решавшему она известна не была"
+                )
+        if wrong:
+            raise LeakageError(
+                "модель получила на вход то, что признаком момента решения не объявлено: "
+                + "; ".join(wrong)
+            )
+        self.samples.declare_features(names)
 
     def summary(self) -> str:
         lines = [f"решений: {self.world.main.height:,}"]
