@@ -21,7 +21,7 @@ import polars as pl
 
 from dsx.evals.world import World
 from dsx.roles import Role
-from dsx.task import Premise, TaskSpec
+from dsx.task import OutcomeTiming, Premise, TaskSpec
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ class Discrepancy:
         )
 
 
-VERIFIABLE = frozenset({Premise.PROCESS, Premise.STREAM})
+VERIFIABLE = frozenset({Premise.PROCESS, Premise.STREAM, Premise.DELAYED_OUTCOME})
 """Предпосылки, выводимые из данных. Остальные остаются объявлениями."""
 
 
@@ -62,6 +62,46 @@ def _process_observed(world: World) -> tuple[bool, str]:
 
     distinct = world.main[column].n_unique()
     return True, f"статус {column!r} присутствует, значений: {distinct}"
+
+
+def _delay_observed(world: World, event_column: str | None) -> tuple[bool | None, str]:
+    """Наступает ли исход ПОЗЖЕ решения.
+
+    Пятнадцатый кейс назвал класс: предпосылка, выводимая из данных, но не
+    выводимая ядром, выключает проверку по одному слову автора. `DELAYED_OUTCOME`
+    была последней такой. Показано счётом на кейсе стенда `label-immaturity`:
+    объявление `immediate` при 20% незрелых исходов убирало ЧЕТЫРЕ блокирующие
+    находки — по каждому окну и по резерву, — и ни одна проверка не возражала.
+
+    Критерий без порога: медиана задержки среди строк С СОБЫТИЕМ. Больше нуля —
+    исход отложен. Порог здесь был бы лишним: вопрос не «насколько поздно», а
+    «позже ли вообще», и половина строк отвечает на него без произвольных чисел.
+
+    None означает, что судить не по чему: событий в данных нет. Тогда нет и
+    незрелости, и выключенная проверка ничего не теряет.
+    """
+    # Имя колонки берётся из КОНТРАКТА ИСХОДА, а не из роли. Роль события в
+    # схеме может быть иной — на стенде она `outcome_component`, — а
+    # авторитетом здесь является то, по чему считается метка.
+    column = event_column
+    if column is None:
+        return None, "колонка события не названа в контракте исхода"
+    if column not in world.main.columns:
+        return None, f"колонка {column!r} объявлена событием, но отсутствует в данных"
+
+    decided = world.schema.decision_time.name
+    gaps = (
+        world.main.filter(pl.col(column).is_not_null())
+        .select((pl.col(column) - pl.col(decided)).dt.total_seconds().alias("gap"))
+        .get_column("gap")
+    )
+    if gaps.is_empty():
+        return None, f"в колонке {column!r} нет ни одного события"
+
+    median = float(gaps.median())
+    if median > 0:
+        return True, f"медианная задержка исхода {median / 86400:.1f} сут"
+    return False, "медианная задержка исхода не больше нуля: исход известен сразу"
 
 
 def _stream_observed(world: World, irregularity: float = 3.0) -> tuple[bool, str]:
@@ -111,7 +151,7 @@ def _stream_observed(world: World, irregularity: float = 3.0) -> tuple[bool, str
     )
 
 
-def verify(world: World, task: TaskSpec) -> list[Discrepancy]:
+def verify(world: World, task: TaskSpec, event_column: str | None = None) -> list[Discrepancy]:
     """Сверить выводимые предпосылки с данными.
 
     Возвращает расхождения. Пустой список означает, что объявленное совпало с
@@ -120,12 +160,19 @@ def verify(world: World, task: TaskSpec) -> list[Discrepancy]:
     checks = {
         Premise.PROCESS: (_process_observed(world), task.has_process),
         Premise.STREAM: (_stream_observed(world), task.is_stream),
+        Premise.DELAYED_OUTCOME: (
+            _delay_observed(world, event_column),
+            task.outcome_timing is OutcomeTiming.DELAYED,
+        ),
     }
 
+    # Наблюдение None означает, что судить не по чему. Молчание здесь не
+    # согласие с автором, а отсутствие предмета спора, и оно отличается от
+    # совпадения объявленного с наблюдаемым только тем, что сказать нечего.
     return [
         Discrepancy(premise=premise, declared=declared, observed=observed, detail=detail)
         for premise, ((observed, detail), declared) in checks.items()
-        if observed != declared
+        if observed is not None and observed != declared
     ]
 
 

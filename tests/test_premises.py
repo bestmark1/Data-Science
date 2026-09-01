@@ -14,7 +14,7 @@ from dsx.evals.world import World
 from dsx.premises import Premise, unverifiable, verify
 from dsx.roles import ColumnSpec, Role, Schema, TemporalKind
 from dsx.task import OutcomeTiming, TargetKind, TaskSpec
-from harness import task_for
+from harness import context_for, task_for
 
 CLEAN = BY_ID["clean-baseline"]
 
@@ -136,3 +136,55 @@ def test_check_is_silent_when_declaration_matches() -> None:
 @pytest.mark.parametrize("premise", [Premise.PROCESS, Premise.STREAM])
 def test_verifiable_premises_are_actually_verified(premise: Premise) -> None:
     assert premise not in unverifiable()
+
+
+# --- отложенность исхода выводится из данных --------------------------------
+#
+# Пятнадцатый кейс назвал класс: предпосылка, выводимая из данных, но не
+# выводимая ЯДРОМ, выключает проверку по одному слову автора. DELAYED_OUTCOME
+# была последней такой из четырёх.
+#
+# Показано счётом до правки: объявление `immediate` на кейсе стенда
+# `label-immaturity` убирало ЧЕТЫРЕ блокирующие находки о незрелости — по
+# каждому из трёх окон и по резерву, — и ни одна проверка не возражала.
+
+
+def test_a_false_immediate_declaration_is_caught() -> None:
+    """Объявить исход мгновенным при медианной задержке в двадцать суток нельзя."""
+    from dsx.premises import verify
+
+    context = context_for(BY_ID["label-immaturity"])
+    lying = context.task.model_copy(update={"outcome_timing": OutcomeTiming.IMMEDIATE})
+
+    found = verify(context.world, lying, context.outcome.event_column)
+
+    assert [d.premise for d in found] == [Premise.DELAYED_OUTCOME]
+    assert "медианная задержка" in found[0].detail
+
+
+def test_an_honest_delayed_declaration_is_silent() -> None:
+    """Отрицательный контроль: верное объявление возражений не вызывает."""
+    from dsx.premises import verify
+
+    context = context_for(BY_ID["label-immaturity"])
+
+    assert not [
+        d
+        for d in verify(context.world, context.task, context.outcome.event_column)
+        if d.premise is Premise.DELAYED_OUTCOME
+    ]
+
+
+def test_with_no_events_there_is_nothing_to_judge() -> None:
+    """Судить не по чему — не то же самое, что согласиться с автором.
+
+    Без событий нет и незрелости, поэтому выключенная проверка ничего не
+    теряет, а спорить не о чем.
+    """
+    from dsx.premises import _delay_observed
+
+    context = context_for(BY_ID["label-immaturity"])
+    observed, detail = _delay_observed(context.world, None)
+
+    assert observed is None
+    assert "не названа" in detail

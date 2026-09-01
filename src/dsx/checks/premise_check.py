@@ -34,7 +34,7 @@ class PremisesMatchData:
                 "не проводились без основания",
                 blocking=True,
             )
-            for discrepancy in verify(context.world, context.task)
+            for discrepancy in verify(context.world, context.task, context.outcome.event_column)
         ]
 
 
