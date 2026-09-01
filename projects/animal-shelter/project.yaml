@@ -72,10 +72,10 @@ columns:
   - {name: breed, role: feature, availability: at_decision, source_of_claim: "порода, определяемая при приёме", window_lookback_days: 0, window_source: "выгрузка приютa", value_as_of: intake_at}
   - {name: color, role: feature, availability: at_decision, source_of_claim: "окрас, записываемый при приёме", window_lookback_days: 0, window_source: "выгрузка приютa", value_as_of: intake_at}
 
-  # КОНТРОЛЬ К-1. Уточнение исхода проставляется ПРИ ВЫБЫТИИ, то есть после
-  # исхода. Момент фиксации объявлен честно — собой. Ядру о подлоге не
-  # сообщается.
-  - {name: outcome_subtype, role: feature, availability: at_decision, source_of_claim: "уточнение обстоятельств выбытия", window_lookback_days: 0, window_source: "выгрузка приютa", value_as_of: outcome_at}
+  # Был контролем К-1: уточнение исхода проставляется ПРИ ВЫБЫТИИ, то есть
+  # после исхода. Объявлялось признаком момента приёма с честным моментом
+  # фиксации — ядро возразило по 113 790 строкам из 116 697.
+  - {name: outcome_subtype, role: ignored}
 
   - {name: found_location, role: ignored}
   - {name: date_of_birth, role: ignored, temporal: date}

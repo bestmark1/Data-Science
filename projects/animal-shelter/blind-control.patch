@@ -1,0 +1,11 @@
+diff --git a/projects/animal-shelter/blind-control.sealed.md b/projects/animal-shelter/blind-control.sealed.md
+new file mode 100644
+index 0000000..cf28f81
+--- /dev/null
++++ b/projects/animal-shelter/blind-control.sealed.md
+@@ -0,0 +1,4 @@
++# Слепой контроль
++
++ОЖИДАЕМАЯ НАХОДКА: нет, это пустой контроль.
++
++Если бы я подкладывал дефект, выбрал бы `feature_after_decision`: признак, формируемый после момента решения, способен незаметно дать модели утечку будущего и должен быть обнаружен по объявленному времени доступности.
