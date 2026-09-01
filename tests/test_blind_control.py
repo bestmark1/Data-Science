@@ -137,3 +137,53 @@ def test_a_tampered_answer_is_refused(tmp_path) -> None:
     sealed.write_text("ОЖИДАЕМАЯ НАХОДКА: что угодно другое\n", encoding="utf-8")
 
     assert module._verify(tmp_path, digest) == 1
+
+
+BAD_COUNTS_PATCH = """diff --git a/sealed.md b/sealed.md
+new file mode 100644
+--- /dev/null
++++ b/sealed.md
+@@ -0,0 +1,9 @@
++ОЖИДАЕМАЯ НАХОДКА: duplicate_rows
++вторая строка
+"""
+
+
+def test_apply_survives_a_hand_written_hunk_header(tmp_path, monkeypatch) -> None:
+    """Вторая сторона пишет патч руками, и счётчики строк у неё сбиваются.
+
+    Здесь заголовок куска обещает девять строк, а их две. Без `--recount`
+    `git apply` отказывает. Спорить об этом после отказа нельзя: чтобы поправить
+    патч, его пришлось бы прочитать, и слепой контроль перестал бы быть слепым.
+
+    Функция дважды отказывала на живом патче и до сих пор не была прогнана ни
+    одним тестом — она стояла в списке недостижимых с рабочего пути.
+    """
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    patch = tmp_path / "p.patch"
+    patch.write_text(BAD_COUNTS_PATCH, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert _tool()._apply(patch) is True
+    assert (tmp_path / "sealed.md").read_text(encoding="utf-8").startswith("ОЖИДАЕМАЯ")
+
+
+def test_apply_refuses_a_patch_that_fits_nothing(tmp_path, monkeypatch) -> None:
+    """Отрицательный контроль: перебор способов не должен принимать что попало.
+
+    Патч правит строку файла, которого нет. Приняв такое, программа сообщила бы
+    об успешном контроле там, где его не было.
+    """
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    patch = tmp_path / "p.patch"
+    patch.write_text(
+        "diff --git a/нет.md b/нет.md\n--- a/нет.md\n+++ b/нет.md\n@@ -1 +1 @@\n-было\n+стало\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert _tool()._apply(patch) is False

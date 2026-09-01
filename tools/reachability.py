@@ -35,6 +35,12 @@ def _defined() -> dict[tuple[str, int], str]:
         for path in sorted((ROOT / base).rglob("*.py")):
             if "__pycache__" in str(path):
                 continue
+            # Себя измеритель не считает. Его собственные кадры ему невидимы по
+            # построению: `main` и `_defined` уже отработали к моменту
+            # включения профилировщика, а сам профилировщик своих вызовов не
+            # записывает. Три ложных срабатывания, и все — свойство прибора.
+            if path.resolve() == Path(__file__).resolve():
+                continue
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
