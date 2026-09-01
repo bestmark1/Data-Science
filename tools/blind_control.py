@@ -26,6 +26,18 @@
 отпечаток. Права записи второй стороне не выдаются: весь её результат
 помещается в поток вывода.
 
+ДВЕ СТУПЕНИ РАСКРЫТИЯ. Пятнадцатый кейс показал, что одного запечатанного
+файла мало: молчание ядра означало сразу два события — «контроль был пуст» и
+«дефект подложен и не увиден», — и различить их было нечем. Поэтому ответ
+раскрывается порознь и под разными отпечатками:
+
+1. `--verify-empty` — БЫЛ ЛИ контроль пустым. Этого достаточно, чтобы прочесть
+   исход, и недостаточно, чтобы узнать дефект;
+2. `--verify` — сам дефект, для разбора после.
+
+Бит пустоты пишет сама программа, а не вторая сторона: она делает бросок и
+знает ответ достовернее.
+
 ПУСТОЙ КОНТРОЛЬ. С вероятностью, объявленной в `EMPTY_RATE`, второй стороне
 велено НЕ подкладывать ничего. Без этого молчание ядра имело бы единственное
 прочтение — «ядро слепо», — и испытание мерило бы только чувствительность,
@@ -56,6 +68,7 @@ import sys
 from pathlib import Path
 
 SEALED = "blind-control.sealed.md"
+EMPTY_BIT = "blind-control.empty.md"
 PATCH = "blind-control.patch"
 
 EMPTY_RATE = 3
@@ -231,6 +244,14 @@ def _plant(project: Path) -> int:
         print(f"ОТКАЗ: патч применился, но {SEALED} не создан — ответа нет")
         return 1
 
+    # Бит пустоты — отдельный файл под отдельным отпечатком. Раскрывается
+    # первым и говорит ровно одно: было ли что подкладывать.
+    bit = project / EMPTY_BIT
+    bit.write_text(
+        f"Контроль был {'ПУСТЫМ' if empty else 'НЕПУСТЫМ'}.\n\nСоль: {secrets.token_hex(16)}\n",
+        encoding="utf-8",
+    )
+
     # Соль дописывается ПОСЛЕ применения и делает отпечаток неперебираемым даже
     # для короткого ответа. Живёт она в самом запечатанном файле: прятать её
     # отдельно значило бы завести второй секрет там, где хватает одного.
@@ -238,15 +259,19 @@ def _plant(project: Path) -> int:
         handle.write(f"\n\nСоль: {secrets.token_hex(16)}\n")
 
     digest = hashlib.sha256(sealed.read_bytes()).hexdigest()[:12]
-    print(f"Слепой контроль внесён. Отпечаток: {digest}")
-    print("Впишите отпечаток в пре-регистрацию ДО прогона: он и есть то единственное,")
-    print(f"что здесь обеспечено. Ни {SEALED}, ни {PATCH} до записи заключения не читать.")
-    print(f"После прогона: python {Path(__file__).name} {project} --verify {digest}")
+    bit_digest = hashlib.sha256(bit.read_bytes()).hexdigest()[:12]
+    name = Path(__file__).name
+    print("Слепой контроль внесён. Впишите ОБА отпечатка в пре-регистрацию до прогона.")
+    print(f"  бит пустоты: {bit_digest}")
+    print(f"  ответ:       {digest}")
+    print(f"Ни {EMPTY_BIT}, ни {SEALED}, ни {PATCH} до записи заключения не читать.")
+    print(f"После записи заключения: python {name} {project} --verify-empty {bit_digest}")
+    print(f"Затем, для разбора:      python {name} {project} --verify {digest}")
     return 0
 
 
-def _verify(project: Path, expected: str) -> int:
-    sealed = project / SEALED
+def _verify(project: Path, expected: str, filename: str = SEALED) -> int:
+    sealed = project / filename
     if not sealed.exists():
         print(f"ОТКАЗ: {sealed} не найден — раскрывать нечего")
         return 1
@@ -263,9 +288,16 @@ def _verify(project: Path, expected: str) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="слепой контроль над кейсом")
     parser.add_argument("project", type=Path, help="каталог проекта")
-    parser.add_argument("--verify", metavar="ОТПЕЧАТОК", help="раскрыть ответ после прогона")
+    parser.add_argument(
+        "--verify-empty",
+        metavar="ОТПЕЧАТОК",
+        help="раскрыть ПЕРВУЮ ступень: был ли контроль пустым",
+    )
+    parser.add_argument("--verify", metavar="ОТПЕЧАТОК", help="раскрыть сам дефект, для разбора")
     args = parser.parse_args()
 
+    if args.verify_empty:
+        return _verify(args.project, args.verify_empty, EMPTY_BIT)
     if args.verify:
         return _verify(args.project, args.verify)
     return _plant(args.project)

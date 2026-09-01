@@ -101,3 +101,39 @@ def test_an_extracted_patch_actually_applies(tmp_path) -> None:
 
     assert done.returncode == 0, done.stderr
     assert (tmp_path / "sealed.md").read_text(encoding="utf-8").startswith("ОЖИДАЕМАЯ")
+
+
+def test_the_empty_bit_is_sealed_separately_from_the_defect(tmp_path) -> None:
+    """Две ступени раскрытия, и первая не выдаёт дефекта.
+
+    Пятнадцатый кейс: молчание ядра означало сразу два события — «контроль был
+    пуст» и «дефект подложен и не увиден». Различить их было нечем, и заключение
+    автора оказалось неразрешимым по форме.
+
+    Первая ступень отвечает ровно на один вопрос: было ли что подкладывать.
+    """
+    module = _tool()
+
+    assert module.EMPTY_BIT != module.SEALED
+
+    bit = tmp_path / module.EMPTY_BIT
+    bit.write_text("Контроль был ПУСТЫМ.\n\nСоль: abc\n", encoding="utf-8")
+    import hashlib
+
+    digest = hashlib.sha256(bit.read_bytes()).hexdigest()[:12]
+
+    assert module._verify(tmp_path, digest, module.EMPTY_BIT) == 0
+    assert module._verify(tmp_path, "нетакого", module.EMPTY_BIT) == 1
+
+
+def test_a_tampered_answer_is_refused(tmp_path) -> None:
+    """Отпечаток обеспечивает одно: ответ нельзя переписать задним числом."""
+    module = _tool()
+    sealed = tmp_path / module.SEALED
+    sealed.write_text("ОЖИДАЕМАЯ НАХОДКА: duplicate_rows\n", encoding="utf-8")
+    import hashlib
+
+    digest = hashlib.sha256(sealed.read_bytes()).hexdigest()[:12]
+    sealed.write_text("ОЖИДАЕМАЯ НАХОДКА: что угодно другое\n", encoding="utf-8")
+
+    assert module._verify(tmp_path, digest) == 1
