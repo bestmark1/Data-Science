@@ -104,21 +104,59 @@ EMPTY = """
 """
 
 
+HEADER = re.compile(
+    r"^(diff |index |old mode |new mode |new file mode |deleted file mode |"
+    r"similarity index |dissimilarity index |rename from |rename to |copy from |"
+    r"copy to |--- |\+\+\+ |@@ |Binary files )"
+)
+BODY = re.compile(r"^[ +\-\\]")
+
+
 def _extract_patch(raw: str) -> str:
     """Вырезать патч из вывода второй стороны — программой, а не глазами.
 
     Прочитав вывод, человек увидел бы подлог, и контроль перестал бы быть
     слепым для него тоже.
+
+    Первая версия знала три начала строки и обрывала патч на всём остальном.
+    Настоящий патч, создающий файл, второй строкой несёт `new file mode
+    100644`, — и вырезалась ровно одна строка заголовка, 111 байт, после чего
+    `git apply` отказывал. Ни один тест этого не поймал: все проверяли патч,
+    правящий существующий файл.
+
+    Пустая строка тоже тело патча: это контекстная строка пустой строки файла.
+    Прежнее правило требовало хотя бы одного символа и обрывалось на ней.
     """
     start = raw.find("diff --git")
     if start == -1:
         return ""
     lines: list[str] = []
     for line in raw[start:].splitlines():
-        if lines and not re.match(r"^(diff |index |--- |\+\+\+ |@@ |[ +\-\\])", line):
-            break
-        lines.append(line)
+        if not line or HEADER.match(line) or BODY.match(line):
+            lines.append(line)
+            continue
+        break
+    while lines and not lines[-1]:
+        lines.pop()
     return "\n".join(lines) + "\n"
+
+
+def _apply(patch_path: Path) -> bool:
+    """Применить патч, перепробовав обычные различия в его оформлении.
+
+    Вторая сторона пишет патч руками, и счётчики строк в заголовках кусков у
+    неё сбиваются, а префиксы путей бывают и `a/b/`, и без них. Спорить об этом
+    после отказа нельзя: чтобы поправить патч, его пришлось бы прочитать.
+    """
+    for extra in ([], ["-p0"], ["--3way"]):
+        done = subprocess.run(
+            ["git", "apply", "--recount", *extra, str(patch_path)],
+            capture_output=True,
+            text=True,
+        )
+        if done.returncode == 0:
+            return True
+    return False
 
 
 def _findings_catalogue() -> Path | None:
@@ -174,8 +212,7 @@ def _plant(project: Path) -> int:
 
     patch_path = project / PATCH
     patch_path.write_text(patch, encoding="utf-8")
-    applied = subprocess.run(["git", "apply", str(patch_path)], capture_output=True, text=True)
-    if applied.returncode != 0:
+    if not _apply(patch_path):
         # Причину не печатаем: в отказе git цитирует строки патча.
         print(f"ОТКАЗ: патч не применился. Он лежит в {patch_path};")
         print("читать его нельзя — контроль тогда перестанет быть слепым.")
