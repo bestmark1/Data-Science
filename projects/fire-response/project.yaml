@@ -1,0 +1,149 @@
+# ФОРМА ШЕСТНАДЦАТОГО КЕЙСА
+#
+# Предсказывается: прибудет ли первый расчёт на место в пределах норматива в
+# восемь минут от приёма вызова.
+#
+# Кейс выбран ради ТРЁХ объявлений, которых прежние формуляры не делали:
+# доменное направление признака (N8, объявлено в 0 формулярах из 13), ожидаемая
+# доля класса (N13, тоже 0 из 13) и причина наблюдения (N17, 1 из 13).
+#
+# В первом прогоне присутствуют контроли К-1 и К-3 §5 пре-регистрации.
+
+title: "SFFD: прибудет ли расчёт в восемь минут от приёма вызова"
+
+# Конец наблюдения: последний день популяции плюс запас. Норматив зреет за
+# восемь минут, поэтому запас нужен минимальный — сутки.
+observed_until: 2024-01-02T00:00:00
+observed_until_source: "популяция кончается 2023-12-31; сутки запаса на то, чтобы вызов, принятый в последний час года, успел получить отметку прибытия"
+
+# --- ДОПУЩЕНИЯ ---------------------------------------------------------------
+
+assumptions:
+  - statement: "моментом решения является приём вызова диспетчером"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если очередь формируется позже — при передаче расчёту, — момент выбран раньше, чем он происходит, и время обработки вызова диспетчером попадает в исход"
+
+  - statement: "единицей решения является вызов, а не выезд отдельной машины"
+    basis: data
+    author: "автор"
+    evidence: "расчёт: 695 428 строк выездов на 336 390 вызовов, по 2.07 строки на вызов"
+    consequence: "если служба управляет каждой машиной отдельно, объект объявлен крупнее нужного, и различие между расчётами остаётся невидимым"
+
+  - statement: "исход вызова определяет ПЕРВЫЙ ПРИБЫВШИЙ расчёт, а не первый отправленный"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "отправленная машина могла не доехать; если считать по ней, вызов получит время расчёта, которого на месте не было"
+
+  - statement: "норматив составляет восемь минут от приёма вызова"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "число взято ориентиром экстренных служб по памяти автора, а не из отчёта города, который не читался; если у Сан-Франциско норматив иной, доля к сроку описывает не тот норматив"
+
+  - statement: "ночью и вне часов пик расчёт доезжает быстрее"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "это ОДИН факт о городских дорогах, объявленный двумя признаками; независимыми свидетельствами они не являются, и совпадение обоих с данными подтверждает один факт, а не два"
+
+  - statement: "приоритет вызова объясняет, почему строка наблюдается"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "приоритет определяет, шлют ли расчёт и какой; если наблюдаемость от него зависит, измеренное описывает не всю популяцию вызовов"
+
+# --- СХЕМА -------------------------------------------------------------------
+
+columns:
+  - {name: call_number, role: entity_id}
+  - {name: received_at, role: decision_time, temporal: instant}
+  - {name: on_scene_at, role: event_time, temporal: instant}
+  - {name: due_at, role: deadline, temporal: instant, value_as_of: received_at}
+  - {name: call_status, role: status}
+  - {name: original_priority, role: observation_reason}
+  - {name: neighborhoods_analysis_boundaries, role: group_id}
+
+  # Признаки, известные в момент приёма вызова.
+  - {name: call_type, role: feature, availability: at_decision, source_of_claim: "вид вызова со слов заявителя", window_lookback_days: 0, window_source: "выгрузка SFFD", value_as_of: received_at}
+  - {name: call_type_group, role: feature, availability: at_decision, source_of_claim: "группа видов вызова", window_lookback_days: 0, window_source: "выгрузка SFFD", value_as_of: received_at}
+  - {name: battalion, role: feature, availability: at_decision, source_of_claim: "батальон по адресу вызова", window_lookback_days: 0, window_source: "выгрузка SFFD", value_as_of: received_at}
+  - {name: station_area, role: feature, availability: at_decision, source_of_claim: "район станции по адресу вызова", window_lookback_days: 0, window_source: "выгрузка SFFD", value_as_of: received_at}
+  - {name: zipcode_of_incident, role: feature, availability: at_decision, source_of_claim: "почтовый индекс адреса вызова", window_lookback_days: 0, window_source: "выгрузка SFFD", value_as_of: received_at}
+
+  # ДВА ОБЪЯВЛЕННЫХ НАПРАВЛЕНИЯ (N8). Ночью дороги свободны — прибытие в срок
+  # вероятнее; в часы пик наоборот. Одно знание о городе, две стороны.
+  - {name: at_night, role: feature, availability: at_decision, direction: increases, source_of_claim: "час приёма вызова", window_lookback_days: 0, window_source: "выгрузка SFFD", value_as_of: received_at}
+  - {name: at_rush_hour, role: feature, availability: at_decision, direction: decreases, source_of_claim: "час приёма вызова", window_lookback_days: 0, window_source: "выгрузка SFFD", value_as_of: received_at}
+
+  # КОНТРОЛЬ К-1. Момент, когда расчёт освободился, наступает ПОСЛЕ прибытия.
+  # Момент фиксации объявлен честно — собой. Ядру о подлоге не сообщается.
+  - {name: available_at, role: feature, availability: at_decision, source_of_claim: "момент освобождения расчёта", window_lookback_days: 0, window_source: "выгрузка SFFD", value_as_of: available_at}
+
+  - {name: disposition, role: ignored}
+
+# --- КОНТРАКТ ИСХОДА ---------------------------------------------------------
+
+outcome:
+  event_column: on_scene_at
+  deadline_column: due_at
+  comparison: direct
+  positive_class: event_within_deadline
+  event_name: "прибытие первого расчёта на место"
+  deadline_name: "восемь минут от приёма вызова"
+  degenerate_beyond: 0.05
+
+  # ОЖИДАЕМАЯ ДОЛЯ (N13). Объявлена ДО просмотра данных: норматив подразумевает
+  # девять случаев из десяти, городская служба под нагрузкой его обычно не
+  # добирает, и честное ожидание автора — чуть ниже.
+  expected_positive_rate: 0.85
+
+  missing_causes:
+    - {name: "перевозка кодом 2", meaning: unobserved, status_value: "Code 2 Transport",
+       assumption: "пациента везли, значит расчёт прибыл; отсутствие отметки означает пробел в записи, а не отсутствие прибытия"}
+    - {name: "перевозка кодом 3", meaning: unobserved, status_value: "Code 3 Transport",
+       assumption: "то же"}
+    - {name: "пожар", meaning: unobserved, status_value: "Fire",
+       assumption: "то же"}
+    - {name: "прочее", meaning: unobserved, status_value: "Other",
+       assumption: "источник сам называет исход прочим; читать его отрицательным значило бы считать молчание ответом"}
+    - {name: "пациент отказался от перевозки", meaning: unobserved, status_value: "Patient Declined Transport",
+       assumption: "отказаться можно только приехавшему расчёту"}
+    - {name: "отказ от медицинской помощи", meaning: unobserved, status_value: "Against Medical Advice",
+       assumption: "то же"}
+    - {name: "работа судмедэксперта", meaning: unobserved, status_value: "Medical Examiner",
+       assumption: "то же"}
+    - {name: "происшествие со многими пострадавшими", meaning: unobserved, status_value: "Multi-casualty Incident",
+       assumption: "то же"}
+    - {name: "вызов не подтвердился", meaning: not_occurred, status_value: "No Merit",
+       assumption: "происшествия не было, и прибывать было не к чему: событие действительно не наступило"}
+    - {name: "адрес не найден", meaning: not_occurred, status_value: "Unable to Locate",
+       assumption: "расчёт выехал и не нашёл места; прибытия не состоялось, и это наблюдение, а не пробел"}
+    - {name: "заявитель ушёл до прибытия", meaning: not_occurred, status_value: "Gone on Arrival",
+       assumption: "то же"}
+    - {name: "вызов отменён", meaning: excluded, status_value: "Cancelled",
+       assumption: "отменённый вызов службе исполнять не предполагалось, и из популяции он выводится"}
+    - {name: "дубликат записи", meaning: excluded, status_value: "Duplicate",
+       assumption: "та же строка уже учтена под другим номером"}
+    - {name: "передано полиции города", meaning: excluded, status_value: "SFPD",
+       assumption: "вызов передан другой службе, и пожарный расчёт по нему не выезжал"}
+    - {name: "передано дорожной полиции", meaning: excluded, status_value: "CHP",
+       assumption: "то же"}
+
+# --- ТИП ЗАДАЧИ --------------------------------------------------------------
+
+task:
+  target_kind: binary
+  outcome_timing: delayed
+  has_process: true
+  is_stream: true
+  object_lifetime: one_shot
+
+# --- СПЛИТ -------------------------------------------------------------------
+# Отсчёт от 2022-01-01. Метка зреет за восемь минут, поэтому окна ставятся
+# вплотную. Первый квартал уходит в обучение первого окна.
+
+split:
+  windows:
+    - {name: w0, start_day: 90, stop_day: 273}    # II-III кварталы 2022
+    - {name: w1, start_day: 273, stop_day: 456}   # IV квартал 2022 — I 2023
+    - {name: w2, start_day: 456, stop_day: 639}   # II-III кварталы 2023
+  reserve_from_day: 639                           # последняя четверть периода
+  reserve_until_day: 730

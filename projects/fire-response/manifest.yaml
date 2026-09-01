@@ -1,0 +1,9 @@
+source: 'SFFD: вызовы пожарно-спасательной службы Сан-Франциско'
+license: открытые данные города Сан-Франциско (объявлено источником)
+url: https://data.sfgov.org/d/nuek-vuh3
+retrieved_at: '2026-09-01'
+files:
+- name: fire_calls_2022_2023.csv
+  sha256: c4360ea5417d4df38e463738107f9f9dc7ec7ab19b830b523181c61f6f43d29b
+  bytes: 170830193
+derived: []
