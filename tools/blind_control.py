@@ -122,7 +122,17 @@ def _extract_patch(raw: str) -> str:
 
 
 def _findings_catalogue() -> Path | None:
-    return next(Path("src/dsx").rglob("finding*.py"), None)
+    """Файл, где объявлен перечень находок ядра.
+
+    Ищется ПО СОДЕРЖИМОМУ, а не по имени. Первая версия искала `finding*.py` —
+    догадку о названии файла, которую ни разу не запустили; перечень лежит в
+    `evals/case.py`, и при первом же настоящем запуске инструмент отказал, не
+    успев ничего сделать. Имя файла может смениться, объявление класса — нет.
+    """
+    for path in sorted(Path("src/dsx").rglob("*.py")):
+        if "class Finding(" in path.read_text(encoding="utf-8"):
+            return path
+    return None
 
 
 def _plant(project: Path) -> int:
