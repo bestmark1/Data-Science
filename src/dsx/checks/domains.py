@@ -66,7 +66,6 @@ DOMAINS: dict[str, Domain] = {
     "N6.floor": Domain(0.0, 0.5, STRENGTH),
     "N8.floor": Domain(0.0, 0.5, STRENGTH),
     # --- кратности ------------------------------------------------------
-    "N13.ratio": Domain(1.0, None, TIMES),
     "N17.ratio": Domain(1.0, None, TIMES),
     "N3.ratio": Domain(1.0, None, TIMES),
     "N4.ratio": Domain(1.0, None, TIMES),

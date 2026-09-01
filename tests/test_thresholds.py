@@ -119,7 +119,9 @@ def test_single_feature_containing_the_answer_is_caught() -> None:
 
 def test_zero_observed_against_declared_expectation_is_reported() -> None:
     context = context_for(BY_ID["clean-baseline"])
-    outcome = context.outcome.model_copy(update={"expected_positive_rate": 0.2})
+    outcome = context.outcome.model_copy(
+        update={"expected_positive_rate": 0.2, "expected_within": 0.05}
+    )
     for part in context.split.parts:
         part.evaluate = part.evaluate.with_columns(pl.lit(0, dtype=pl.Int8).alias(LABEL))
 
@@ -613,3 +615,62 @@ def test_categories_too_fine_are_not_examined() -> None:
     assert not ImplausibleSeparation().run(
         _pure_categories(context_for(BY_ID["clean-baseline"]), 120)
     )
+
+
+# --- ожидание меряется в долях, а не в разах --------------------------------
+#
+# Шестнадцатый кейс: объявлено 0.85, наблюдается 54.2%. Ошибка автора в
+# тридцать один процентный пункт прошла молча, потому что 0.85/0.542 = 1.57, а
+# порог по кратности стоял на двойке.
+#
+# Шум сюда не годится и это проверено счётом: при 168 тысячах строк три
+# стандартные ошибки составляют 0.36 п.п. Здесь измерение сравнивается с
+# ДОГАДКОЙ, у которой выборочной ошибки нет вовсе.
+
+
+def _expectation(context, expected: float, within: float):
+    return Context(
+        context.world,
+        context.outcome.model_copy(
+            update={"expected_positive_rate": expected, "expected_within": within}
+        ),
+        context.task,
+        context.split,
+    )
+
+
+def _observed_rate(context) -> float:
+    frames = [part.evaluate for part in context.split.parts]
+    return float(pl.concat(frames, how="vertical_relaxed")[LABEL].mean())
+
+
+def test_expectation_outside_its_tolerance_is_reported() -> None:
+    """Случай шестнадцатого кейса: прежний прибор его пропускал."""
+    context = context_for(BY_ID["clean-baseline"])
+    observed = _observed_rate(context)
+
+    signals = ExpectedRateHolds().run(_expectation(context, observed + 0.30, 0.10))
+
+    assert [s.finding for s in signals] == [Finding.RATE_CONTRADICTS_EXPECTATION]
+    assert "допуском 10.0%" in signals[0].detail
+
+
+def test_expectation_inside_its_tolerance_is_silent() -> None:
+    """Отрицательный контроль: ошибка в пределах объявленного — не находка."""
+    context = context_for(BY_ID["clean-baseline"])
+    observed = _observed_rate(context)
+
+    assert not ExpectedRateHolds().run(_expectation(context, observed + 0.05, 0.10))
+
+
+def test_the_old_ratio_instrument_would_have_stayed_silent() -> None:
+    """Показ того, что именно чинится, а не рассказ о нём.
+
+    Доли 0.85 и 0.55 отличаются на тридцать пунктов и в 1.55 раза. Порог по
+    кратности стоял на двойке — и молчал; порог по долям в десять пунктов
+    говорит.
+    """
+    high, low = 0.85, 0.55
+
+    assert high / low < 2.0, "прежний прибор такое расхождение пропускал"
+    assert abs(high - low) > 0.10, "новый прибор его называет"

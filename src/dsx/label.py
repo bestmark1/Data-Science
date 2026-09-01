@@ -209,8 +209,7 @@ def censor_competing_kinds(
     present = set(frame[kind_column].drop_nulls().unique().to_list())
     if kind not in present:
         raise LabelError(
-            f"предсказываемый вид {kind!r} в данных не встречается; "
-            f"есть {sorted(present)!r}"
+            f"предсказываемый вид {kind!r} в данных не встречается; есть {sorted(present)!r}"
         )
     censored = (
         pl.col(kind_column).is_not_null()

@@ -86,6 +86,14 @@ FIXTURE_DEGENERATE_BEYOND = 0.01
 """
 
 
+BENCH_TOLERANCE = 0.02
+"""Допуск к ожиданию на стенде: два процентных пункта.
+
+Мир стенда строится программой, и доля класса в нём известна точно. Допуск
+здесь означает не неуверенность автора, а зазор на случайность генерации.
+"""
+
+
 def _outcome(
     comparison: ComparisonMode = ComparisonMode.BY_DATE,
     expected_positive_rate: float | None = None,
@@ -116,6 +124,10 @@ def _outcome(
         event_name="событие",
         deadline_name="назначенный срок",
         expected_positive_rate=expected_positive_rate,
+        # Допуск обязателен вместе с ожиданием. На стенде он один для всех
+        # кейсов: величина мира известна по построению, и объявлять разную
+        # неуверенность там не о чем.
+        expected_within=None if expected_positive_rate is None else BENCH_TOLERANCE,
         degenerate_beyond=degenerate_beyond,
     )
 

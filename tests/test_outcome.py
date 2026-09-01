@@ -218,3 +218,15 @@ def test_a_direction_word_inside_another_word_is_not_a_direction_word() -> None:
     поле незаполнимым и вернул бы автора к вранью в обход.
     """
     assert definition(event_name="доставка заказа", deadline_name="обещанная дата").estimand
+
+
+def test_an_expectation_without_a_tolerance_is_refused() -> None:
+    """Ожидание без допуска непроверяемо: неизвестно, что считать расхождением."""
+    with pytest.raises(ValidationError, match="не объявлен её допуск"):
+        definition(expected_positive_rate=0.2)
+
+
+def test_a_tolerance_without_an_expectation_is_refused() -> None:
+    """Отрицательный контроль: допускать нечего, если ожидания нет."""
+    with pytest.raises(ValidationError, match="допускать нечего"):
+        definition(expected_within=0.05)

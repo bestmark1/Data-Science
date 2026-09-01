@@ -145,6 +145,9 @@ class OutcomeForm(BaseModel):
     """Имя срока. Существительное: «сутки от приёма», «назначенная дата»."""
     missing_causes: Annotated[list[CauseForm], Field(min_length=1)]
 
+    expected_within: Annotated[float, Field(gt=0.0, lt=1.0)] | None = None
+    """Допуск к ожиданию в долях. Обязателен вместе с ожиданием."""
+
     expected_positive_rate: Annotated[float, Field(gt=0.0, lt=1.0)] | None = None
     """Ожидаемая доля положительного класса по доменному знанию, до просмотра.
 
@@ -176,6 +179,7 @@ class OutcomeForm(BaseModel):
             event_name=self.event_name,
             deadline_name=self.deadline_name,
             expected_positive_rate=self.expected_positive_rate,
+            expected_within=self.expected_within,
             degenerate_beyond=self.degenerate_beyond,
             missing_causes=[c.to_cause() for c in self.missing_causes],
         )
@@ -330,6 +334,21 @@ class ProjectForm(BaseModel):
     assumptions: Annotated[list[AssumptionForm], Field(min_length=1)]
     """Хотя бы одно. Проект без единого записанного допущения означает, что
     допущения принимались молча, а не что их не было."""
+
+    @model_validator(mode="after")
+    def _outcome_contract_holds_at_load_time(self) -> ProjectForm:
+        """Отказать на разборе формы, а не на прогоне.
+
+        Часть требований контракта исхода живёт в `OutcomeDefinition`, а форма —
+        отдельный класс. Без этой строки форма разбиралась молча, и отказ
+        всплывал позже, посреди прогона: автор узнавал о нём после сбора данных
+        и сборки таблицы.
+
+        Правило не переписывается здесь, а вызывается: два места с одним
+        требованием разошлись бы при первой же правке.
+        """
+        self.outcome.to_definition()
+        return self
 
     @model_validator(mode="after")
     def _competing_task_names_the_kind_it_predicts(self) -> ProjectForm:
