@@ -6,7 +6,7 @@ import pytest
 
 from dsx.checks.empirical import separation
 from dsx.evals.registry import BY_ID
-from dsx.evals.world import build_world
+from dsx.evals.world import World, build_world
 from dsx.label import LABEL, LabelError, compute, observable, positive_rate
 from dsx.outcome import (
     ComparisonMode,
@@ -222,3 +222,67 @@ def test_separation_is_none_for_a_constant() -> None:
     constant = pl.Series("c", [1] * frame.height)
 
     assert separation(constant, frame[LABEL]) is None
+
+
+# --- предсказываемый вид при конкурирующих исходах --------------------------
+#
+# Пятнадцатый кейс: честное объявление конкуренции выключало ВОСЕМЬ проверок из
+# тридцати шести по предпосылке binary_target, и вместе с ними — дрейф в
+# девятнадцать процентных пунктов. Двоичная метка при конкуренции существует,
+# своя у каждого вида; не хватало объявления, какой вид предсказывается.
+
+
+def _competing_definition(primary_kind: str | None = None) -> OutcomeDefinition:
+    return OutcomeDefinition(
+        event_column="event_at",
+        deadline_column="deadline_on",
+        comparison=ComparisonMode.BY_DATE,
+        positive_class=PositiveClass.EVENT_WITHIN_DEADLINE,
+        primary_kind=primary_kind,
+        event_name="событие",
+        deadline_name="назначенный срок",
+        missing_causes=[
+            MissingEventCause(
+                name="события не было",
+                meaning=MissingEventMeaning.NOT_OCCURRED,
+                status_value="completed",
+            )
+        ],
+    )
+
+
+def _competing_world():
+    """Мир с двумя видами события: целевым и конкурирующим."""
+    import polars as pl
+
+    world = build_world()
+    kinds = ["target" if index % 2 else "rival" for index in range(world.main.height)]
+    frame = world.main.with_columns(pl.Series("kind", kinds))
+    schema = Schema(columns=(*world.schema.columns, ColumnSpec(name="kind", role=Role.EVENT_KIND)))
+    return World(frames={**world.frames, "main": frame}, schema=schema)
+
+
+def test_a_rival_kind_before_the_deadline_censors_the_row() -> None:
+    """Конкурент оборвал наблюдение: исход неизвестен, а не отрицателен.
+
+    Разметить такую строку нулём значит объявить наблюдением то, чего не
+    наблюдали.
+    """
+    world = _competing_world()
+
+    plain = compute(world, _competing_definition())
+    targeted = compute(world, _competing_definition("target"))
+
+    assert targeted[LABEL].null_count() > plain[LABEL].null_count()
+
+
+def test_naming_a_kind_absent_from_the_data_is_refused() -> None:
+    """Объявление, которому в данных ничто не отвечает, — не объявление."""
+    with pytest.raises(LabelError, match="в данных не встречается"):
+        compute(_competing_world(), _competing_definition("нетакого"))
+
+
+def test_a_predicted_kind_without_a_kind_column_is_refused() -> None:
+    """Отличить целевой вид от конкурирующего нечем — значит нечем и считать."""
+    with pytest.raises(LabelError, match="колонка вида события не названа"):
+        compute(build_world(), _competing_definition("target"))

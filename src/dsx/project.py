@@ -131,6 +131,9 @@ class OutcomeForm(BaseModel):
     deadline_column: Annotated[str, Field(min_length=1)]
     comparison: ComparisonMode
     positive_class: PositiveClass
+    primary_kind: str | None = None
+    """Предсказываемый вид события. Обязателен при конкурирующей задаче."""
+
     event_name: Annotated[str, Field(min_length=1)]
     """Имя события. Существительное: «закрытие обращения», «отказ узла».
 
@@ -169,6 +172,7 @@ class OutcomeForm(BaseModel):
             deadline_column=self.deadline_column,
             comparison=self.comparison,
             positive_class=self.positive_class,
+            primary_kind=self.primary_kind,
             event_name=self.event_name,
             deadline_name=self.deadline_name,
             expected_positive_rate=self.expected_positive_rate,
@@ -326,6 +330,26 @@ class ProjectForm(BaseModel):
     assumptions: Annotated[list[AssumptionForm], Field(min_length=1)]
     """Хотя бы одно. Проект без единого записанного допущения означает, что
     допущения принимались молча, а не что их не было."""
+
+    @model_validator(mode="after")
+    def _competing_task_names_the_kind_it_predicts(self) -> ProjectForm:
+        """Конкурирующая задача обязана назвать предсказываемый вид.
+
+        Без него метка склеивается: положительным становится событие ЛЮБОГО
+        вида, и проверки идут по величине, которой задача не предсказывает.
+        Пятнадцатый кейс обошёлся дороже: там ядро вовсе выключало восемь
+        проверок, лишь бы не считать по склейке. Требование объявления решает
+        обе беды разом.
+        """
+        if self.task.target_kind is not TargetKind.COMPETING:
+            return self
+        if not self.outcome.primary_kind:
+            raise ValueError(
+                "задача объявлена конкурирующей, но предсказываемый вид не назван: "
+                "укажите outcome.primary_kind. Без него метка склеивает виды, и "
+                "проверки пойдут по величине, которую задача не предсказывает"
+            )
+        return self
 
     def unverifiable_by_kind(self) -> dict[str, tuple[str, ...]]:
         """Непроверяемые объявления, разложенные по РОДУ.

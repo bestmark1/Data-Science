@@ -167,7 +167,7 @@ def compute(
     )
 
     absent = pl.col(definition.event_column).is_null()
-    return frame.with_columns(
+    labelled = frame.with_columns(
         pl.when(premature)
         .then(None)
         .when(absent)
@@ -180,6 +180,48 @@ def compute(
         .when(absent)
         .then(missing_reason)
         .otherwise(pl.lit(OutcomeReason.OBSERVED.value))
+        .alias(REASON),
+    )
+    if definition.primary_kind is None:
+        return labelled
+    return censor_competing_kinds(labelled, definition, world, definition.primary_kind)
+
+
+def censor_competing_kinds(
+    frame: pl.DataFrame, definition: OutcomeDefinition, world: World, kind: str
+) -> pl.DataFrame:
+    """Обнулить в пустоту строки, где раньше срока наступил ДРУГОЙ вид события.
+
+    Наступление конкурирующего вида обрывает наблюдение за целевым: животное
+    усыпили — и что стало бы с его усыновлением, неизвестно. Разметить такую
+    строку нулём значит объявить наблюдением то, чего не наблюдали.
+
+    Конкурент ПОСЛЕ срока наблюдению не мешает: к концу срока уже видно, что
+    целевого события не было.
+    """
+    columns = world.schema.by_role(Role.EVENT_KIND)
+    if not columns:
+        raise LabelError(
+            f"объявлен предсказываемый вид {kind!r}, но колонка вида события "
+            "не названа: отличить целевой вид от конкурирующего нечем"
+        )
+    kind_column = columns[0].name
+    present = set(frame[kind_column].drop_nulls().unique().to_list())
+    if kind not in present:
+        raise LabelError(
+            f"предсказываемый вид {kind!r} в данных не встречается; "
+            f"есть {sorted(present)!r}"
+        )
+    censored = (
+        pl.col(kind_column).is_not_null()
+        & (pl.col(kind_column) != kind)
+        & (pl.col(definition.event_column) <= pl.col(definition.deadline_column))
+    )
+    return frame.with_columns(
+        pl.when(censored).then(None).otherwise(pl.col(LABEL)).alias(LABEL),
+        pl.when(censored)
+        .then(pl.lit(OutcomeReason.CENSORED.value))
+        .otherwise(pl.col(REASON))
         .alias(REASON),
     )
 

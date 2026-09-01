@@ -170,7 +170,15 @@ class TaskSpec(BaseModel):
             case Premise.DELAYED_OUTCOME:
                 return self.outcome_timing is OutcomeTiming.DELAYED
             case Premise.BINARY_TARGET:
-                return self.target_kind is TargetKind.BINARY
+                # Конкурирующая задача тоже даёт двоичную метку — свою у
+                # каждого вида. Пятнадцатый кейс показал цену прежнего ответа:
+                # честное объявление конкуренции выключало восемь проверок из
+                # тридцати шести, и вместе с ними дрейф в девятнадцать пунктов.
+                #
+                # Опирается на то, что форма ТРЕБУЕТ назвать предсказываемый
+                # вид при конкурирующей задаче. Без этого требования проверки
+                # пошли бы по склеенной метке, то есть по не той величине.
+                return self.target_kind in (TargetKind.BINARY, TargetKind.COMPETING)
             case Premise.STREAM:
                 return self.is_stream
 

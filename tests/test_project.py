@@ -357,3 +357,18 @@ def test_entry_cost_is_measured_by_features_not_by_status_vocabulary() -> None:
         len(richer.unverifiable_by_kind()["причины"])
         == len(base.unverifiable_by_kind()["причины"]) + 1
     ), "вопросы о причинах обязаны считаться отдельно"
+
+
+def test_a_competing_task_must_name_the_kind_it_predicts(tmp_path) -> None:
+    """Конкуренция без названного вида пустила бы проверки по склеенной метке.
+
+    Пятнадцатый кейс: ядро вместо этого выключало восемь проверок из тридцати
+    шести, и вместе с ними — дрейф в девятнадцать процентных пунктов. Лечится
+    не ослаблением предпосылки, а требованием объявления.
+    """
+    text = FORM.replace("target_kind: binary", "target_kind: competing")
+    path = tmp_path / "project.yaml"
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValidationError, match="предсказываемый вид не назван"):
+        load(path)
