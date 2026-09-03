@@ -492,6 +492,29 @@ def event_before_decision(world: World, count: int = 25, seed: int = 37) -> Worl
     )
 
 
+def outcome_at_decision(world: World, share: float = 0.4, seed: int = 53) -> World:
+    """Датировать событие ТЕМ ЖЕ моментом, что и решение.
+
+    Не невозможно, а бесполезно: предсказывать нечего, исход уже наступил.
+    Семнадцатый кейс: у 67.5% заявок отметка выполнения требований стояла днём
+    подачи, и назвать это было нечем — доля класса не отличает редкий исход от
+    известного заранее.
+    """
+    rng = np.random.default_rng(seed)
+    frame = world.main
+    picked = rng.random(frame.height) < share
+    return world.replace_main(
+        frame.with_columns(pl.Series("_pick", picked))
+        .with_columns(
+            pl.when(pl.col("_pick"))
+            .then(pl.col("decided_at"))
+            .otherwise(pl.col("event_at"))
+            .alias("event_at")
+        )
+        .drop("_pick")
+    )
+
+
 def sentinel_as_value(world: World, token: str = "NA", share: float = 0.3, seed: int = 41) -> World:
     """Записать отсутствие строкой вместо пустого значения.
 

@@ -389,11 +389,19 @@ class EventBeforeDecision:
     Две строки из миллиона — мелочь по величине и не мелочь по природе: это
     либо ошибка выгрузки, либо признак того, что момент решения выбран не там,
     где он на самом деле происходит.
+
+    Заодно называется и соседний случай: событие, датированное ТЕМ ЖЕ моментом,
+    что и решение. Оно не невозможно — оно бесполезно: предсказывать нечего,
+    исход уже наступил. Семнадцатый кейс: у 67.5% заявок отметка выполнения
+    требований стоит днём подачи, и ни одна проверка этого не назвала. Доля
+    класса такого не видит — она не отличает редкий исход от известного заранее.
     """
 
     requirement: str = "A13"
     premises: frozenset[Premise] = frozenset({Premise.UNIVERSAL})
-    detects: frozenset[Finding] = frozenset({Finding.EVENT_BEFORE_DECISION})
+    detects: frozenset[Finding] = frozenset(
+        {Finding.EVENT_BEFORE_DECISION, Finding.OUTCOME_KNOWN_AT_DECISION}
+    )
 
     def run(self, context: Context) -> list[Signal]:
         frame = context.world.main
@@ -402,14 +410,32 @@ class EventBeforeDecision:
         if event not in frame.columns or decided not in frame.columns:
             raise NotApplicable("колонка события или момента решения отсутствует в данных")
 
+        simultaneous = frame.filter(
+            pl.col(event).is_not_null() & (pl.col(event) == pl.col(decided))
+        )
+        signals = []
+        if not simultaneous.is_empty():
+            share = simultaneous.height / frame.height
+            signals.append(
+                Signal(
+                    Finding.OUTCOME_KNOWN_AT_DECISION,
+                    f"у {simultaneous.height:,} строк ({share:.1%}) событие {event!r} "
+                    f"датировано тем же моментом, что и решение. Предсказывать там нечего: "
+                    "исход уже наступил. При суточной грануляции отличить «уже случилось» "
+                    "от «случилось в тот же день позже» нечем, и это тоже часть ответа",
+                    blocking=False,
+                )
+            )
+
         premature = frame.filter(pl.col(event).is_not_null() & (pl.col(event) < pl.col(decided)))
         if premature.is_empty():
-            return []
+            return signals
 
         worst = premature.select(
             (pl.col(decided) - pl.col(event)).dt.total_days().max().alias("d")
         ).item()
         return [
+            *signals,
             Signal(
                 Finding.EVENT_BEFORE_DECISION,
                 f"у {premature.height:,} строк событие {event!r} датировано раньше момента "
@@ -417,7 +443,7 @@ class EventBeforeDecision:
                 "не может: либо выгрузка испорчена, либо момент решения выбран не там, где "
                 "он происходит",
                 blocking=True,
-            )
+            ),
         ]
 
 

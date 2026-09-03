@@ -53,6 +53,7 @@ class Finding(StrEnum):
     RATE_CONTRADICTS_EXPECTATION = "rate_contradicts_expectation"
     UNDECLARED_COLUMN = "undeclared_column"
     EVENT_BEFORE_DECISION = "event_before_decision"
+    OUTCOME_KNOWN_AT_DECISION = "outcome_known_at_decision"
     SENTINEL_AS_VALUE = "sentinel_as_value"
     GROUP_OVERLAP_ACROSS_SPLITS = "group_overlap_across_splits"
     UNDECLARED_GROUP = "undeclared_group"
