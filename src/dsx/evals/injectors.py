@@ -584,7 +584,7 @@ def degenerate_outcome(world: World, past_deadline_days: int = 1) -> World:
 
 
 def window_clock_from_the_event(
-    world: World, lookback_days: float = 30.0, lag_days: int = 5
+    world: World, lookback_days: float = 30.0, lag_days: int = 5, share: float = 1.0, seed: int = 53
 ) -> World:
     """Окно признака отсчитано по времени СОБЫТИЯ, а не по времени сведений о нём.
 
@@ -595,11 +595,22 @@ def window_clock_from_the_event(
 
     Колонка добавляется, потому что в чистом мире её нет: событие там лежит
     ПОСЛЕ решения, а нужен случай, где запись описывает уже случившееся.
+
+    `share` — у какой доли строк часы отстают. Единица портит все строки, и
+    такой кейс о ГРАНИЦЕ проверки не говорит ничего: сто процентов больше любого
+    порога, и мутация двигала порог вдвое в обе стороны незаметно. Доля около
+    объявленных пяти процентов ставит случай по одну или другую сторону границы.
     """
+    rng = np.random.default_rng(seed)
     moment = world.schema.decision_time.name
-    frame = world.main.with_columns(
-        (pl.col(moment) - pl.duration(days=lag_days)).alias("occurred_at")
+    struck = rng.random(world.main.height) < share
+    frame = world.main.with_columns(pl.Series("_struck", struck)).with_columns(
+        pl.when(pl.col("_struck"))
+        .then(pl.col(moment) - pl.duration(days=lag_days))
+        .otherwise(pl.col(moment))
+        .alias("occurred_at")
     )
+    frame = frame.drop("_struck")
     world = World(
         frames={**world.frames, "main": frame},
         schema=Schema(
@@ -612,7 +623,9 @@ def window_clock_from_the_event(
     return declare_feature_windows(world, lookback_days, clock="occurred_at")
 
 
-def deadline_revised_after_decision(world: World, lag_days: int = 120) -> World:
+def deadline_revised_after_decision(
+    world: World, lag_days: int = 120, share: float = 1.0, seed: int = 59
+) -> World:
     """Срок зафиксирован ПОЗЖЕ момента решения: значение переписано задним числом.
 
     Воспроизводит девятый кейс. Там срок клинического исследования, обещанный
@@ -622,10 +635,23 @@ def deadline_revised_after_decision(world: World, lag_days: int = 120) -> World:
 
     Колонка момента фиксации добавляется, потому что в чистом мире её нет:
     там срок назначается в момент решения и не меняется.
+
+    `share` — у какой доли строк срок переписан задним числом. Смысл тот же,
+    что и у соседнего инжектора: кейс, портящий все строки, доказывает
+    срабатывание и молчит о границе.
     """
+    rng = np.random.default_rng(seed)
     moment = world.schema.decision_time.name
-    frame = world.main.with_columns(
-        (pl.col(moment) + pl.duration(days=lag_days)).alias("deadline_fixed_at")
+    struck = rng.random(world.main.height) < share
+    frame = (
+        world.main.with_columns(pl.Series("_struck", struck))
+        .with_columns(
+            pl.when(pl.col("_struck"))
+            .then(pl.col(moment) + pl.duration(days=lag_days))
+            .otherwise(pl.col(moment))
+            .alias("deadline_fixed_at")
+        )
+        .drop("_struck")
     )
     columns = [
         c.model_copy(update={"value_as_of": "deadline_fixed_at"}) if c.role is Role.DEADLINE else c
