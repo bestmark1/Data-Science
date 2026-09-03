@@ -1,0 +1,9 @@
+source: 'Нью-Йорк: наряды на работы с городскими деревьями'
+license: открытые данные города Нью-Йорка (объявлено источником)
+url: https://data.cityofnewyork.us/d/bdjm-n7q4
+retrieved_at: '2026-09-03'
+files:
+- name: tree_work_orders_2021_2023.csv
+  sha256: 00292126685bea0a93bedb87405a9e1aca1812da075aafabcac512a340b128eb
+  bytes: 87409359
+derived: []

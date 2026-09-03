@@ -1,0 +1,137 @@
+# ФОРМА ВОСЕМНАДЦАТОГО КЕЙСА
+#
+# Предсказывается: будет ли наряд на работы с деревом закрыт за 90 суток.
+#
+# Кейс намеренно ОБЫЧНЫЙ: ни одной новой оси. Он нужен, чтобы испытать делом
+# два механизма, до сих пор не работавших на настоящих данных, — блок обещаний
+# §3а и двухступенчатое раскрытие слепого контроля.
+#
+# Набор заменён до первого прогона: в первоначальном `mu46-p9is` дата закрытия
+# была пуста у 100% строк. Запись — в §3б пре-регистрации.
+#
+# В первом прогоне присутствует контроль К-2 §5 пре-регистрации. Контроль К-1
+# НЕИСПОЛНИМ в опечатанном виде: он требует объявить `closeddate` признаком, а
+# эта колонка — событие контракта исхода. Роль занята. Подменять опечатанное
+# другой колонкой значило бы переписывать пре-регистрацию задним числом.
+
+title: "Нью-Йорк: будет ли наряд на дерево закрыт за 90 суток"
+
+observed_until: 2024-06-01T00:00:00
+observed_until_source: "популяция кончается 2023-12-30; 90 суток срока доводят последний наряд до 2024-03-29, ещё два месяца — запас на то, чтобы закрытие успело попасть в выгрузку"
+
+# --- ДОПУЩЕНИЯ ---------------------------------------------------------------
+
+assumptions:
+  - statement: "моментом решения является заведение наряда"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если наряд заводится позже фактического обращения, момент выбран позже, чем он происходит, и часть ожидания выпадает из счёта"
+
+  - statement: "закрытие наряда означает выполнение работы"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "у отменённых нарядов дата закрытия тоже проставлена — 11 771 из 24 204. Значит колонка означает «наряд закрыт в системе», а не «работа сделана». Отменённые выведены из популяции ПОСТРОИТЕЛЕМ, и ядро этого решения не видит: статус оно читает только у строк без события"
+
+  - statement: "отменённые наряды выводятся из популяции построителем, а не контрактом исхода"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "объявления `Cancel -> excluded` недостаточно: ядро применяет смысл статуса ТОЛЬКО к строкам без события, а у 11 771 отменённого наряда событие есть, и они получили бы метку успеха. Класс 13 журнала: ядро не видит построителя, и единственный прибор, который увидит это решение, — объявленная ожидаемая доля"
+
+  - statement: "наряд, открытый после истечения срока, — работа, НЕ закрытая к сроку"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если статус `Open` означает не «работа идёт», а «запись брошена», то 111 810 нарядов отнесены к отрицательным без основания, и доля занижена. Решение принято предметно, но прикидка доли при нём была сделана автором ДО объявления — это названо вслух, потому что умолчание здесь неотличимо от подбора"
+
+  - statement: "срок в 90 суток объявлен автором, а не взят из регламента города"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если у Нью-Йорка свой норматив на уход за деревьями, доля к сроку описывает не тот норматив; квартал выбран как естественная мера сезонных работ, а не как найденное правило"
+
+  - statement: "ожидаемая доля объявлена широким допуском намеренно"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "опубликованного норматива автор не имеет; узкий допуск был бы притворством. Плата за широту видна в этом же кейсе: ожидание ошиблось на 24 процентных пункта и прошло"
+
+# --- СХЕМА -------------------------------------------------------------------
+
+columns:
+  - {name: objectid, role: entity_id}
+  - {name: created_at, role: decision_time, temporal: instant}
+  - {name: closed_at, role: event_time, temporal: instant}
+  - {name: due_at, role: deadline, temporal: instant, value_as_of: created_at}
+  - {name: wostatus, role: status}
+  - {name: nta, role: group_id}
+
+  # Обещано пре-регистрацией §3а: приоритет присваивается при заведении наряда
+  # и определяет, как скоро работу возьмут.
+  - {name: wopriority, role: observation_reason}
+
+  # Признаки, известные в момент заведения наряда.
+  - {name: wocategory, role: feature, availability: at_decision, source_of_claim: "категория работ", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: created_at}
+  - {name: wotype, role: feature, availability: at_decision, source_of_claim: "вид работ", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: created_at}
+  - {name: boroughcode, role: feature, availability: at_decision, source_of_claim: "район города по адресу дерева", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: created_at}
+  - {name: communityboard, role: feature, availability: at_decision, source_of_claim: "муниципальный совет по адресу", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: created_at}
+  - {name: zipcode, role: feature, availability: at_decision, source_of_claim: "почтовый индекс по адресу дерева", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: created_at}
+  - {name: citycouncil, role: feature, availability: at_decision, source_of_claim: "избирательный округ по адресу", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: created_at}
+
+  # Известны ПОСЛЕ решения: назначаются при планировании работ или
+  # обнаруживаются при их исполнении.
+  - {name: woentity, role: ignored}
+  - {name: wocontract, role: ignored}
+  - {name: cancelreason, role: ignored}
+  - {name: sidewalkdamage, role: ignored}
+  - {name: wowireconflict, role: ignored}
+  - {name: wowoodremains, role: ignored}
+  - {name: parkzone, role: ignored}
+  - {name: canceldate, role: ignored, temporal: instant}
+  - {name: actualfinishdate, role: ignored, temporal: instant}
+  - {name: projstartdate, role: ignored, temporal: instant}
+  - {name: updateddate, role: ignored, temporal: instant}
+
+# --- КОНТРАКТ ИСХОДА ---------------------------------------------------------
+
+outcome:
+  event_column: closed_at
+  deadline_column: due_at
+  comparison: direct
+  positive_class: event_within_deadline
+  event_name: "закрытие наряда на работы"
+  deadline_name: "90 суток от заведения наряда"
+  degenerate_beyond: 0.05
+
+  # ОЖИДАНИЕ И ДОПУСК (N13), объявлены ДО данных.
+  expected_positive_rate: 0.50
+  expected_within: 0.25
+
+  missing_causes:
+    - {name: "наряд не закрыт", meaning: not_occurred, status_value: "Open",
+       assumption: "наряд, открытый после истечения срока, означает работу, не закрытую к сроку, а не потерю записи"}
+    - {name: "наряд в очереди", meaning: not_occurred, status_value: "Pending",
+       assumption: "ожидание очереди — это и есть незакрытая работа, а не отдельное состояние вне счёта"}
+    - {name: "наряд в работе", meaning: not_occurred, status_value: "In Process",
+       assumption: "начатая, но не закрытая работа к сроку не закрыта"}
+    - {name: "закрыт без времени закрытия", meaning: unobserved, status_value: "Closed",
+       assumption: "43 657 нарядов объявлены закрытыми, а момента закрытия у них нет. Это потеря записи, а не наблюдение: считать их закрытыми к сроку значило бы выдумать время, а незакрытыми — назвать выполненную работу невыполненной"}
+    - {name: "наряд заменён другим решением", meaning: excluded, status_value: "Alternate",
+       assumption: "состояние `Alternate` понято как замена наряда иным способом ведения работ; что именно город обозначает им, из выгрузки не следует, и это вопрос владельцу данных"}
+
+# --- ТИП ЗАДАЧИ --------------------------------------------------------------
+
+task:
+  target_kind: binary
+  outcome_timing: delayed
+  has_process: true
+  is_stream: true
+  object_lifetime: recurring
+
+# --- СПЛИТ -------------------------------------------------------------------
+# Отсчёт от 2021-01-01. Метка зреет 90 суток, поэтому между окнами оставлен
+# разрыв в квартал: наряд из конца окна не должен зреть уже внутри следующего.
+
+split:
+  windows:
+    - {name: w0, start_day: 0, stop_day: 275}      # 2021, кроме последнего квартала
+    - {name: w1, start_day: 365, stop_day: 640}    # 2022, кроме последнего квартала
+    - {name: w2, start_day: 730, stop_day: 1005}   # 2023, кроме последнего квартала
+  reserve_from_day: 1005                           # последний квартал 2023
+  reserve_until_day: 1095
