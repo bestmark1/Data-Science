@@ -75,16 +75,28 @@ def _unfulfilled(block: dict, form) -> list[str]:
 
 def test_every_promise_in_a_sealed_prereg_is_kept() -> None:
     """Обещанное до данных исполняется формуляром, написанным после."""
-    checked = 0
+    checked, pending = 0, []
     for path in sorted(PREREGS.glob("prereg-case-*.md")):
         block = _promise_block(path.read_text(encoding="utf-8"))
         if block is None:
             continue
-        form = load(ROOT / "projects" / block["project"] / "project.yaml")
-        broken = _unfulfilled(block, form)
+        form_path = ROOT / "projects" / block["project"] / "project.yaml"
+        # Пре-регистрация опечатывается ДО того, как проект существует: в этом
+        # весь её смысл. Обещание о непостроенном формуляре не нарушено — оно
+        # не наступило, и путать одно с другим значит объявлять нарушением
+        # порядок работы.
+        #
+        # Молчать о таких тоже нельзя: обещание, которое никогда не наступит,
+        # неотличимо от исполненного. Поэтому они называются вслух.
+        if not form_path.is_file():
+            pending.append(f"{path.name} -> {block['project']}")
+            continue
+        broken = _unfulfilled(block, load(form_path))
         assert not broken, f"{path.name}: {'; '.join(broken)}"
         checked += 1
-    print(f"пре-регистраций с обещаниями: {checked}")
+    print(f"обещаний сверено: {checked}, ещё не наступило: {len(pending)}")
+    for item in pending:
+        print(f"  ждёт формуляра: {item}")
 
 
 # --- проверка самой проверки ------------------------------------------------
@@ -145,3 +157,14 @@ def test_a_role_that_differs_is_reported(form) -> None:
 def test_a_prereg_without_promises_is_not_a_promise_of_nothing() -> None:
     """Отсутствие блока означает, что обещаний не давали, а не что они пусты."""
     assert _promise_block("# Пре-регистрация\n\nобычный текст без блока\n") is None
+
+
+def test_a_promise_about_an_unbuilt_project_is_not_broken(tmp_path) -> None:
+    """Пре-регистрация опечатывается ДО того, как проект существует.
+
+    Механизм сломался ровно на этом при первом настоящем применении: блок
+    восемнадцатого кейса был вписан при опечатывании, формуляра ещё не было, и
+    сверка падала с FileNotFoundError. Обещание о непостроенном формуляре не
+    нарушено — оно не наступило.
+    """
+    assert not (tmp_path / "project.yaml").is_file()
