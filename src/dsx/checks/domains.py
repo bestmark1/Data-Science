@@ -56,6 +56,7 @@ DOMAINS: dict[str, Domain] = {
     "A12.tolerance": Domain(0.0, 1.0, SHARE),
     "A6.ratio": Domain(0.0, 1.0, SHARE),
     "N16.share": Domain(0.0, 1.0, SHARE),
+    "N18.floor": Domain(0.0, 1.0, SHARE),
     "N5.floor": Domain(0.0, 1.0, SHARE),
     "S10.share": Domain(0.0, 1.0, SHARE),
     "S9.share": Domain(0.0, 1.0, SHARE),

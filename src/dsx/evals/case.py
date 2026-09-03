@@ -62,6 +62,7 @@ class Finding(StrEnum):
     VALUE_REVISED_AFTER_DECISION = "value_revised_after_decision"
     INFORMATIVE_UNOBSERVABILITY = "informative_unobservability"
     OBSERVATION_REASON_MATTERS = "observation_reason_matters"
+    OBSERVABILITY_VARIES_OVER_TIME = "observability_varies_over_time"
     UNUSABLE_TRAINING_PART = "unusable_training_part"
     UNUSABLE_MEASURED_PART = "unusable_measured_part"
     WINDOWS_OVERLAP = "windows_overlap"

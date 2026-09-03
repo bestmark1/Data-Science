@@ -78,6 +78,7 @@ def context_for(bundle):
         bundle.outcome,
         task_for(world, bundle.lifetime, bundle.target_kind, bundle.declared_process),
         split,
+        snapshot,
     )
 
 

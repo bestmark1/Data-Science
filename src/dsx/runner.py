@@ -196,7 +196,9 @@ def run(
     split.purged_by_window = purge_overlapping_train(split.parts, world, reach)
 
     overrides = overrides or OverrideLedger()
-    checks = run_checks(list(ALL_CHECKS), Context(world, definition, task, split), overrides)
+    checks = run_checks(
+        list(ALL_CHECKS), Context(world, definition, task, split, snapshot), overrides
+    )
 
     samples = SampleLedger(overrides)
     for part in split.parts:

@@ -905,6 +905,118 @@ class ReasonForObservationTransfers:
         ]
 
 
+@dataclass(frozen=True)
+class ObservabilityHoldsOverTime:
+    """N18. Событие перестают записывать посреди периода.
+
+    Восемнадцатый кейс, дважды подряд. Первый набор нарядов на работы с
+    деревьями нёс дату закрытия пустой у 100% строк — это видно сразу. Второй
+    нёс её заполненной у 48.5% популяции и прошёл объявленный порог
+    наблюдаемости вдвое. Внутри лежал обрыв: с июля 2023 дата закрытия не
+    проставлена НИ У ОДНОГО наряда — 69 600 подряд, при том что 34 550 из них
+    числятся закрытыми по статусу, а закрытия в наборе видны ещё полтора года
+    вперёд. Город перестал заполнять колонку; наряды закрываться не переставали.
+
+    **Величина, объявленная одним числом по всей популяции, не видит разреза по
+    времени.** Порог ловит средний уровень и слеп к его обрыву — а обрыв хуже
+    низкого уровня: он делает метку на своём отрезке систематически ложной.
+    Открытый наряд после истечения срока читается как «не закрыт вовремя», и
+    если закрытия перестали записывать, отрицательными становятся все.
+
+    Что отличает эту проверку от соседних. N3 видит следствие — долю
+    положительного класса, изменившуюся между окнами; N16 видит цену
+    ненаблюдаемости и её связь с ОБЪЯВЛЕННЫМ ПРИЗНАКОМ, а время решения
+    признаком не является. Причину — «событие перестали записывать» — до сих
+    пор не называл никто.
+
+    Смотрит на ВСЮ популяцию, а не на сплит. В том же кейсе обрыв оказался за
+    границами всех окон: сплит его отбросил вместе с непригодным хвостом, и
+    проверка по частям сплита не увидела бы ничего.
+
+    Незрелое отсеивается: строка, чей срок не истёк к концу наблюдения, молчит
+    законно, и складывать её с той, у которой событие перестали записывать,
+    значит смешивать созревание с порчей данных.
+    """
+
+    requirement: str = "N18"
+    premises: frozenset[Premise] = frozenset({Premise.DELAYED_OUTCOME})
+    detects: frozenset[Finding] = frozenset({Finding.OBSERVABILITY_VARIES_OVER_TIME})
+
+    floor: float = 0.25
+    """Насколько заполненность события должна просесть, чтобы это был обрыв.
+
+    В долях: месяц с заполненностью на столько ниже лучшего месяца назван
+    обрывом. Число выбрано по единственному наблюдённому случаю — падение с
+    83% до 0.0%, — и оно заведомо грубое. Оно не отделяет обрыв от плавного
+    спада и не претендует на это: спад ловится соседними проверками, а здесь
+    ловится провал, после которого метка перестаёт говорить о предмете.
+    """
+
+    def run(self, context: Context) -> list[Signal]:
+        horizon = context.observed_until
+        if horizon is None:
+            raise NotApplicable(
+                "конец наблюдения не объявлен: без него не отличить строку, чей срок "
+                "ещё не истёк, от строки, у которой событие перестали записывать"
+            )
+
+        frame = context.world.main
+        moment = context.world.schema.decision_time.name
+        event = context.outcome.event_column
+        deadline = context.outcome.deadline_column
+        if any(name not in frame.columns for name in (moment, event, deadline)):
+            raise NotApplicable("нет решения, срока или события — сравнивать нечего")
+
+        # Незрелые молчат законно.
+        mature = frame.filter(pl.col(deadline) < pl.lit(horizon))
+        if mature.height < MIN_ROWS:
+            raise NotApplicable("зрелых строк слишком мало, чтобы говорить о разрезе")
+
+        monthly = (
+            mature.with_columns(pl.col(moment).dt.truncate("1mo").alias("__month"))
+            .group_by("__month")
+            .agg(
+                pl.len().alias("rows"),
+                pl.col(event).is_not_null().mean().alias("filled"),
+            )
+            .filter(pl.col("rows") >= MIN_ROWS)
+            .sort("__month")
+        )
+        if monthly.height < 2:
+            raise NotApplicable("месяцев с достаточным числом строк меньше двух")
+
+        best = monthly.sort("filled", descending=True).row(0, named=True)
+        worst = monthly.sort("filled").row(0, named=True)
+        drop = best["filled"] - worst["filled"]
+        # Порог не может быть мягче шума: доля, посчитанная по сотне строк,
+        # колеблется сама по себе.
+        noise = SIGMA * _rate_error(best["filled"], int(worst["rows"]))
+        if drop < max(self.floor, noise):
+            return []
+
+        # Один провал может быть месяцем сбоя, полгода подряд — это конец
+        # записи. Считаются месяцы, просевшие НЕ МЕНЬШЕ чем наполовину от
+        # найденного размаха: сказать «просело столько же» о месяце с промежу-
+        # точной заполненностью значило бы приписать ему чужое число.
+        cutoff = worst["filled"] + drop / 2
+        struck = monthly.filter(pl.col("filled") <= cutoff)
+        span = struck["rows"].sum()
+
+        return [
+            Signal(
+                Finding.OBSERVABILITY_VARIES_OVER_TIME,
+                f"событие {event!r} записано у {best['filled']:.1%} решений в лучшем "
+                f"месяце ({str(best['__month'])[:7]}) и у {worst['filled']:.1%} в худшем "
+                f"({str(worst['__month'])[:7]}); месяцев с заполненностью не выше "
+                f"{cutoff:.1%} — {struck.height}, в них {span:,} строк. "
+                "Средняя заполненность по популяции этого не показывает. "
+                "Отсутствие события там означает, что его перестали записывать, а не что "
+                "оно не наступило, и метка на этом отрезке говорит не о предмете",
+                blocking=True,
+            )
+        ]
+
+
 DRIFT_CHECKS = [
     NonDegenerateOutcome(),
     UnobservedCostIsNamed(),
@@ -915,4 +1027,5 @@ DRIFT_CHECKS = [
     DeclaredDirectionHolds(),
     CompetingKindsDeclared(),
     ExpectedRateHolds(),
+    ObservabilityHoldsOverTime(),
 ]
