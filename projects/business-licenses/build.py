@@ -40,9 +40,20 @@ def build() -> pl.DataFrame:
     )
     read = frame.height
 
-    # КОНТРОЛЬ К-2: отсутствие, записанное значением, намеренно не вычищается.
+    # Контроль К-2 оказался неприменим: часовых значений среди объявленных
+    # признаков нет ни одного, проверено перебором обычных обозначений
+    # отсутствия по семи колонкам.
 
-    broken = pl.col("id").is_null() | pl.col("application_created_date").is_null()
+    # Выполнение требований раньше подачи невозможно: 4 заявки, худшая на 719
+    # суток. Проверено по сырому файлу до слепого контроля — это данные, а не
+    # подлог. Исходом своего решения такая строка быть не может.
+    broken = (
+        pl.col("id").is_null()
+        | pl.col("application_created_date").is_null()
+        | (
+            pl.col("application_requirements_complete") < pl.col("application_created_date")
+        ).fill_null(False)
+    )
     kept = frame.filter(~broken)
     print(f"  прочитано {read:,}, потеряно {read - kept.height:,}, заявок {kept.height:,}")
 

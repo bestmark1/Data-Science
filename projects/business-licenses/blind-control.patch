@@ -1,0 +1,24 @@
+diff --git a/projects/business-licenses/build.py b/projects/business-licenses/build.py
+--- a/projects/business-licenses/build.py
++++ b/projects/business-licenses/build.py
+@@ -36,6 +36,7 @@ def build() -> pl.DataFrame:
+     frame = pl.read_csv(SOURCE, infer_schema_length=0).with_columns(
+         [pl.col(name).str.to_datetime(FORMAT, strict=False) for name in MOMENTS]
+     )
++    frame = pl.concat([frame, frame.tail(1)])
+     read = frame.height
+ 
+     # КОНТРОЛЬ К-2: отсутствие, записанное значением, намеренно не вычищается.
+diff --git a/projects/business-licenses/blind-control.sealed.md b/projects/business-licenses/blind-control.sealed.md
+new file mode 100644
+--- /dev/null
++++ b/projects/business-licenses/blind-control.sealed.md
+@@ -0,0 +1,8 @@
++ОЖИДАЕМАЯ НАХОДКА: duplicate_rows
++
++Выбран пункт `duplicate_rows`: он проверяет базовую целостность единицы решения и не связан с уже описанными временными контролями К-1 и К-2.
++
++Изменено построчно:
++
++- В `projects/business-licenses/build.py` после чтения и преобразования исходного CSV добавлена строка `frame = pl.concat([frame, frame.tail(1)])`.
++- Она повторно добавляет последнюю строку источника без изменения её значений, поэтому в итоговой таблице появляются две идентичные заявки.

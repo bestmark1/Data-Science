@@ -56,9 +56,9 @@ columns:
   - {name: police_district, role: feature, availability: at_decision, source_of_claim: "полицейский район по адресу", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: applied_at}
   - {name: neighborhood, role: feature, availability: at_decision, source_of_claim: "название местности по адресу", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: applied_at}
 
-  # КОНТРОЛЬ К-1. Дата выдачи наступает ПОСЛЕ выполнения требований. Момент
-  # фиксации объявлен честно — собой. Ядру о подлоге не сообщается.
-  - {name: issued_at, role: feature, availability: at_decision, source_of_claim: "дата выдачи лицензии", window_lookback_days: 0, window_source: "выгрузка города", value_as_of: issued_at}
+  # Был контролем К-1: дата выдачи наступает ПОСЛЕ выполнения требований. Ядро
+  # возразило по 57 724 строкам из 74 751 — 77.2%.
+  - {name: issued_at, role: ignored, temporal: date}
 
   - {name: payment_date, role: ignored, temporal: date}
   - {name: expiration_date, role: ignored, temporal: date}
