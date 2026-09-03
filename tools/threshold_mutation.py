@@ -46,7 +46,19 @@ import sys
 from pathlib import Path
 from typing import NamedTuple
 
-sys.path.insert(0, "src")
+ROOT = Path(__file__).resolve().parents[1]
+"""Корень проекта, взятый от расположения программы, а не от текущего каталога.
+
+Программа правит исходники, зовёт git и запускает набор тестов. Всё это раньше
+называлось путями от рабочего каталога, и запуск откуда угодно, кроме корня,
+падал на первом же обращении к `src/dsx/checks`. Инструмент, который надо
+запускать из правильного места, — тот же необеспеченный порядок: он держится
+тем, что зовущий помнит.
+
+Тесты подменяют ROOT и MARKER, чтобы работать на временном репозитории.
+"""
+
+sys.path.insert(0, str(ROOT / "src"))
 
 from dsx.checks.domains import DOMAINS, Domain  # noqa: E402
 
@@ -60,12 +72,12 @@ class Threshold(NamedTuple):
     key: str
 
 
-TARGETS = (Path("src/dsx/checks"), Path("src/dsx/measure.py"))
+TARGETS = (ROOT / "src/dsx/checks", ROOT / "src/dsx/measure.py")
 """Модули, выносящие суждение о данных. Ввод-вывод сюда не входит."""
 
 SEED_NAMES = ("SEED", "seed")
 
-MARKER = Path(".threshold-mutation-active")
+MARKER = ROOT / ".threshold-mutation-active"
 """След на диске: какой файл сейчас мутирован.
 
 Восстановление жило только в `finally` работающего процесса, и этого хватало
@@ -86,7 +98,9 @@ _ACTIVE: Path | None = None
 def _restore(path: Path) -> None:
     """Вернуть исходник и снять след."""
     global _ACTIVE
-    subprocess.run(["git", "checkout", "--", str(path)], check=True)
+    # cwd задан явно: git определяет репозиторий по рабочему каталогу, и
+    # абсолютный путь сам по себе его не находит.
+    subprocess.run(["git", "checkout", "--", str(path)], cwd=ROOT, check=True)
     MARKER.unlink(missing_ok=True)
     _ACTIVE = None
 
@@ -105,7 +119,21 @@ def _recover() -> str | None:
     if not name:
         MARKER.unlink()
         return None
-    _restore(Path(name))
+
+    # Здесь возврат МЯГКИЙ, а в цикле строгий, и различие существенно. В цикле
+    # файл мутирован нами и обязан вернуться — отказ там означает поломку. А
+    # след мог остаться от чужого прогона, от другой ветки, от переименованного
+    # файла, и жёсткий отказ по нему запирает программу навсегда: она падает,
+    # не дойдя даже до проверки дерева. Так и случилось: след с чужим именем
+    # свалил запуск целиком.
+    done = subprocess.run(["git", "checkout", "--", name], cwd=ROOT, capture_output=True, text=True)
+    MARKER.unlink(missing_ok=True)
+    if done.returncode != 0:
+        # Молчать нельзя: след означал незавершённое восстановление, и то, что
+        # оно не удалось, — сведение о состоянии дерева, а не мелочь.
+        print(f"след указывал на {name!r}, вернуть не удалось: {done.stderr.strip()}")
+        print("след снят; проверьте дерево сами")
+        return None
     return name
 
 
@@ -231,7 +259,8 @@ def _mutate(path: Path, lineno: int, old: float | int, new: float | int) -> bool
 
 def _suite_is_green() -> bool:
     result = subprocess.run(
-        [".venv/bin/python", "-m", "pytest", "tests", "-q", "-x", "--no-header"],
+        [str(ROOT / ".venv/bin/python"), "-m", "pytest", "tests", "-q", "-x", "--no-header"],
+        cwd=ROOT,
         capture_output=True,
         text=True,
     )
@@ -248,6 +277,7 @@ def main() -> int:
 
     dirty = subprocess.run(
         ["git", "status", "--porcelain", *(str(t) for t in TARGETS)],
+        cwd=ROOT,
         capture_output=True,
         text=True,
     ).stdout.strip()

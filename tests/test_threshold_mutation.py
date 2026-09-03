@@ -34,6 +34,19 @@ def _tool():
     return module
 
 
+def _aimed_at(module, repo: Path):
+    """Настроить инструмент на временный репозиторий.
+
+    Пути инструмент берёт от СВОЕГО расположения, а не от рабочего каталога, —
+    иначе он работает только из корня проекта. Здесь ему называется другой
+    корень: тест не вправе мутировать настоящие исходники.
+    """
+    assert repo != ROOT, "тест не вправе нацеливать инструмент на настоящий проект"
+    module.ROOT = repo
+    module.MARKER = repo / ".threshold-mutation-active"
+    return module
+
+
 def _repo(tmp_path: Path) -> Path:
     """Крошечный репозиторий с одним закоммиченным порогом."""
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
@@ -50,26 +63,27 @@ def _repo(tmp_path: Path) -> Path:
 def test_a_killed_run_is_recovered_by_the_marker(tmp_path, monkeypatch) -> None:
     """След на диске переживает смерть процесса — в этом весь его смысл."""
     repo = _repo(tmp_path)
-    module = _tool()
+    module = _aimed_at(_tool(), repo)
     target = repo / "thresholds.py"
 
     # Так выглядит дерево после убитого прогона: исходник мутирован, след цел.
     target.write_text("floor = 0.9\n", encoding="utf-8")
-    (repo / module.MARKER.name).write_text("thresholds.py", encoding="utf-8")
+    module.MARKER.write_text("thresholds.py", encoding="utf-8")
 
     monkeypatch.chdir(repo)
     recovered = module._recover()
 
     assert recovered == "thresholds.py"
     assert target.read_text(encoding="utf-8") == "floor = 0.25\n"
-    assert not (repo / module.MARKER.name).exists(), "след обязан сниматься после возврата"
+    assert not module.MARKER.exists(), "след обязан сниматься после возврата"
 
 
 def test_recovery_is_silent_when_there_was_nothing_to_recover(tmp_path, monkeypatch) -> None:
     """Отсутствие следа означает, что прошлый прогон закончился сам."""
-    monkeypatch.chdir(_repo(tmp_path))
+    repo = _repo(tmp_path)
+    monkeypatch.chdir(repo)
 
-    assert _tool()._recover() is None
+    assert _aimed_at(_tool(), repo)._recover() is None
 
 
 def test_a_marker_left_before_the_edit_is_harmless(tmp_path, monkeypatch) -> None:
@@ -79,8 +93,8 @@ def test_a_marker_left_before_the_edit_is_harmless(tmp_path, monkeypatch) -> Non
     оставшаяся без следа.
     """
     repo = _repo(tmp_path)
-    module = _tool()
-    (repo / module.MARKER.name).write_text("thresholds.py", encoding="utf-8")
+    module = _aimed_at(_tool(), repo)
+    module.MARKER.write_text("thresholds.py", encoding="utf-8")
 
     monkeypatch.chdir(repo)
     module._recover()
@@ -95,12 +109,12 @@ def test_sigterm_restores_the_source_before_dying(tmp_path) -> None:
     только к следующему прогону, а закоммитить чужую мутацию можно раньше.
     """
     repo = _repo(tmp_path)
-    module = _tool()
+    module = _aimed_at(_tool(), repo)
     target = repo / "thresholds.py"
 
     script = repo / "run.py"
     script.write_text(
-        "import signal, sys, time\n"
+        "import signal, sys, time, pathlib\n"
         # Инструмент кладёт в путь относительный 'src' и потому рассчитан на
         # запуск из корня проекта. Здесь он запускается из чужого каталога, и
         # путь передаётся явно.
@@ -108,8 +122,12 @@ def test_sigterm_restores_the_source_before_dying(tmp_path) -> None:
         "import importlib.util\n"
         f"spec = importlib.util.spec_from_file_location('tm', {str(TOOL)!r})\n"
         "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+        # Тот же приём, что и в тестах выше: инструмент нацеливается на
+        # временный репозиторий, а не на настоящие исходники.
+        "m.ROOT = pathlib.Path('.').resolve()\n"
+        "m.MARKER = m.ROOT / '.threshold-mutation-active'\n"
         "signal.signal(signal.SIGTERM, m._on_signal)\n"
-        "m._mutate(__import__('pathlib').Path('thresholds.py'), 1, 0.25, 0.9)\n"
+        "m._mutate(pathlib.Path('thresholds.py'), 1, 0.25, 0.9)\n"
         "print('мутировано', flush=True)\n"
         "time.sleep(30)\n",
         encoding="utf-8",
@@ -124,7 +142,7 @@ def test_sigterm_restores_the_source_before_dying(tmp_path) -> None:
     process.wait(timeout=10)
 
     assert target.read_text(encoding="utf-8") == "floor = 0.25\n", "SIGTERM оставил мутацию"
-    assert not (repo / module.MARKER.name).exists()
+    assert not module.MARKER.exists()
 
 
 def test_sigkill_leaves_the_marker_for_the_next_run(tmp_path, monkeypatch) -> None:
@@ -134,7 +152,7 @@ def test_sigkill_leaves_the_marker_for_the_next_run(tmp_path, monkeypatch) -> No
     следующий запуск возвращает по нему исходник.
     """
     repo = _repo(tmp_path)
-    module = _tool()
+    module = _aimed_at(_tool(), repo)
     target = repo / "thresholds.py"
 
     script = repo / "run.py"
@@ -143,6 +161,10 @@ def test_sigkill_leaves_the_marker_for_the_next_run(tmp_path, monkeypatch) -> No
         f"sys.path.insert(0, {str(ROOT / 'src')!r})\n"
         f"spec = importlib.util.spec_from_file_location('tm', {str(TOOL)!r})\n"
         "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+        # Тот же приём, что и в тестах выше: инструмент нацеливается на
+        # временный репозиторий, а не на настоящие исходники.
+        "m.ROOT = pathlib.Path('.').resolve()\n"
+        "m.MARKER = m.ROOT / '.threshold-mutation-active'\n"
         "m._mutate(pathlib.Path('thresholds.py'), 1, 0.25, 0.9)\n"
         "print('мутировано', flush=True)\n"
         "time.sleep(30)\n",
@@ -158,8 +180,25 @@ def test_sigkill_leaves_the_marker_for_the_next_run(tmp_path, monkeypatch) -> No
     time.sleep(0.1)
 
     assert target.read_text(encoding="utf-8") == "floor = 0.9\n", "SIGKILL не должен ничего чинить"
-    assert (repo / module.MARKER.name).exists(), "без следа восстанавливать будет нечем"
+    assert module.MARKER.exists(), "без следа восстанавливать будет нечем"
 
     monkeypatch.chdir(repo)
     assert module._recover() == "thresholds.py"
     assert target.read_text(encoding="utf-8") == "floor = 0.25\n"
+
+
+def test_an_unusable_marker_does_not_lock_the_tool(tmp_path, monkeypatch) -> None:
+    """След на чужой файл снимается, а не запирает программу навсегда.
+
+    Случилось на деле: след с именем из временного репозитория остался в корне
+    проекта, и запуск падал на `git checkout`, не дойдя даже до проверки дерева.
+    Жёсткий отказ здесь стоит дороже мягкого — он делает инструмент незапускаемым.
+    """
+    repo = _repo(tmp_path)
+    module = _aimed_at(_tool(), repo)
+    module.MARKER.write_text("такого-файла-нет.py", encoding="utf-8")
+
+    monkeypatch.chdir(repo)
+
+    assert module._recover() is None
+    assert not module.MARKER.exists(), "негодный след обязан сниматься"
