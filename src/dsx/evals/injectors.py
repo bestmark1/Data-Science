@@ -794,7 +794,9 @@ def training_part_is_empty(world: World, ahead: int = 400) -> World:
     return world.replace_main(frame)
 
 
-def event_recording_stops(world: World, tail: float = 0.25) -> World:
+def event_recording_stops(
+    world: World, tail: float = 0.25, share: float = 1.0, seed: int = 47
+) -> World:
     """Перестать записывать событие на последней части периода.
 
     Восемнадцатый кейс: с июля 2023 город не проставил дату закрытия ни одному
@@ -812,16 +814,24 @@ def event_recording_stops(world: World, tail: float = 0.25) -> World:
 
     Статус НЕ трогается намеренно: в кейсе он остался «Closed», и именно
     расхождение статуса с пустым событием выдавало порчу тому, кто смотрел.
+
+    `share` — какую долю хвоста лишить события. Единица воспроизводит кейс 18:
+    запись прекратилась совсем. Меньшая доля даёт УМЕРЕННОЕ падение, и она
+    здесь не для полноты картины: без неё объявленная чувствительность
+    проверки ничем не обеспечена. Мутация показала, что при полном обрыве порог
+    можно поднять с 0.25 до 0.9, и ни один тест этого не заметит — падение со
+    100% до нуля ловится любым порогом.
     """
+    rng = np.random.default_rng(seed)
     frame = world.main
     moment = "decided_at"
     lo, hi = frame[moment].min(), frame[moment].max()
     cut = lo + (hi - lo) * (1.0 - tail)
+    struck = (frame[moment] >= cut).to_numpy() & (rng.random(frame.height) < share)
     return world.replace_main(
-        frame.with_columns(
-            pl.when(pl.col(moment) >= pl.lit(cut))
-            .then(None)
-            .otherwise(pl.col("event_at"))
-            .alias("event_at")
+        frame.with_columns(pl.Series("_struck", struck))
+        .with_columns(
+            pl.when(pl.col("_struck")).then(None).otherwise(pl.col("event_at")).alias("event_at")
         )
+        .drop("_struck")
     )
