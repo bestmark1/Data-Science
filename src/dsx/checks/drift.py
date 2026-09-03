@@ -630,7 +630,13 @@ class ExpectedRateHolds:
     def run(self, context: Context) -> list[Signal]:
         expected = context.outcome.expected_positive_rate
         if expected is None:
-            raise NotApplicable("ожидаемая доля класса не объявлена")
+            raise NotApplicable(
+                "ожидаемая доля класса не объявлена. Вместе с этой проверкой молчит "
+                "единственное, чем ядро видит ошибку ПОСТРОИТЕЛЯ: свёртку, фильтр и "
+                "разметку оно не читает, а их след в распределении исхода — читает. "
+                "На шестнадцатом кейсе подмена min на max в свёртке была поймана "
+                "только ею"
+            )
         tolerance = context.outcome.expected_within
         assert tolerance is not None, "контракт исхода требует допуск вместе с ожиданием"
 

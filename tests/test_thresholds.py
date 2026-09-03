@@ -14,7 +14,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from dsx.checks.base import Context
+from dsx.checks.base import Context, NotApplicable
 from dsx.checks.drift import (
     ExpectedRateHolds,
     FeatureRelationStability,
@@ -674,3 +674,20 @@ def test_the_old_ratio_instrument_would_have_stayed_silent() -> None:
 
     assert high / low < 2.0, "прежний прибор такое расхождение пропускал"
     assert abs(high - low) > 0.10, "новый прибор его называет"
+
+
+def test_a_skipped_expectation_says_what_it_costs() -> None:
+    """Пропуск, не называющий цены, читается как «проверять было нечего».
+
+    Ожидаемая доля объявлена в двух формулярах из пятнадцати, и в остальных
+    тринадцати молчит единственное, чем ядро видит ошибку построителя.
+    Сообщение обязано это называть: молчаливый пропуск неотличим от проверки,
+    которой нечего было делать.
+    """
+    context = context_for(BY_ID["clean-baseline"])
+    without = context.outcome.model_copy(
+        update={"expected_positive_rate": None, "expected_within": None}
+    )
+
+    with pytest.raises(NotApplicable, match="ПОСТРОИТЕЛЯ"):
+        ExpectedRateHolds().run(Context(context.world, without, context.task, context.split))
