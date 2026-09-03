@@ -13,6 +13,9 @@ knowledge/local/
 mlruns/
 mlartifacts/
 
+# След прерванного прогона мутации: рабочее состояние, не результат.
+.threshold-mutation-active
+
 # Окружение и кэши
 .venv/
 __pycache__/

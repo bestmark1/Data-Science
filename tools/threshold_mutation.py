@@ -40,6 +40,7 @@
 from __future__ import annotations
 
 import ast
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -63,6 +64,60 @@ TARGETS = (Path("src/dsx/checks"), Path("src/dsx/measure.py"))
 """Модули, выносящие суждение о данных. Ввод-вывод сюда не входит."""
 
 SEED_NAMES = ("SEED", "seed")
+
+MARKER = Path(".threshold-mutation-active")
+"""След на диске: какой файл сейчас мутирован.
+
+Восстановление жило только в `finally` работающего процесса, и этого хватало
+ровно до первого убийства извне. Прогон, снятый по таймауту, оставил в рабочем
+дереве мутацию `A11.min_missing` 30→15: ослабленную проверку, которую никто не
+вносил и которая молча уехала бы в следующий коммит.
+
+`finally` не исполняется ни при SIGKILL, ни при SIGTERM по умолчанию, а
+восстанавливать после смерти процесса некому — если не осталось следа. След
+пишется ДО правки исходника и снимается ПОСЛЕ восстановления, поэтому лишний
+`git checkout` по нему безвреден: файл к тому времени уже чист.
+"""
+
+_ACTIVE: Path | None = None
+"""Файл, мутированный прямо сейчас. Нужен обработчику сигнала."""
+
+
+def _restore(path: Path) -> None:
+    """Вернуть исходник и снять след."""
+    global _ACTIVE
+    subprocess.run(["git", "checkout", "--", str(path)], check=True)
+    MARKER.unlink(missing_ok=True)
+    _ACTIVE = None
+
+
+def _recover() -> str | None:
+    """Восстановить файл, оставшийся мутированным от убитого прогона.
+
+    Вызывается ПЕРЕД проверкой рабочего дерева на чистоту. Иначе программа
+    отказалась бы работать из-за собственной невосстановленной правки и
+    потребовала бы разбираться руками — ровно то, что случилось после первого
+    убийства.
+    """
+    if not MARKER.exists():
+        return None
+    name = MARKER.read_text(encoding="utf-8").strip()
+    if not name:
+        MARKER.unlink()
+        return None
+    _restore(Path(name))
+    return name
+
+
+def _on_signal(signum: int, _frame: object) -> None:
+    """Убивают — восстановить немедленно, а не при следующем запуске.
+
+    След на диске спасает и без этого, но только к следующему прогону, а
+    закоммитить чужую мутацию можно раньше.
+    """
+    if _ACTIVE is not None:
+        _restore(_ACTIVE)
+    sys.exit(128 + signum)
 
 
 def _paths() -> list[Path]:
@@ -159,12 +214,17 @@ def _variants(value: float | int, domain: Domain | None) -> list[float | int]:
 
 
 def _mutate(path: Path, lineno: int, old: float | int, new: float | int) -> bool:
+    global _ACTIVE
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     line = lines[lineno - 1]
     text = repr(old)
     if text not in line:
         return False
     lines[lineno - 1] = line.replace(text, repr(new), 1)
+    # След пишется ДО правки: убийство между этими двумя строками оставит след
+    # на нетронутый файл, и это дешевле, чем правка без следа.
+    MARKER.write_text(str(path), encoding="utf-8")
+    _ACTIVE = path
     path.write_text("".join(lines), encoding="utf-8")
     return True
 
@@ -179,6 +239,13 @@ def _suite_is_green() -> bool:
 
 
 def main() -> int:
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
+
+    recovered = _recover()
+    if recovered:
+        print(f"восстановлен {recovered}: прошлый прогон был убит, не успев вернуть исходник")
+
     dirty = subprocess.run(
         ["git", "status", "--porcelain", *(str(t) for t in TARGETS)],
         capture_output=True,
@@ -206,7 +273,7 @@ def main() -> int:
                 try:
                     survived = _suite_is_green()
                 finally:
-                    subprocess.run(["git", "checkout", "--", str(path)], check=True)
+                    _restore(path)
                 # Списки разные, а не один с проверкой вхождения: одинаковые
                 # имена полей встречаются в разных классах, и проверка
                 # вхождения печатала «выжил» там, где мутант убит.
