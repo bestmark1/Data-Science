@@ -29,7 +29,12 @@ from harness import context_for  # noqa: E402
 def report_for(bundle, task: TaskSpec = FULL):
     context = context_for(bundle)
     if task is not FULL:
-        context = Context(context.world, context.outcome, task, context.split)
+        # Горизонт наблюдения переносится вместе с остальным: без него N18
+        # отказывается работать, и подмена ЗАДАЧИ молча выключала бы проверку,
+        # не имеющую к задаче отношения.
+        context = Context(
+            context.world, context.outcome, task, context.split, context.observed_until
+        )
     return run_checks(list(ALL_CHECKS), context)
 
 
