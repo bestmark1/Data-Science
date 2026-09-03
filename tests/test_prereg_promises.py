@@ -1,9 +1,9 @@
-"""Обещания пре-регистрации о колонках исполняются формуляром.
+"""Обещания и контроли пре-регистрации исполняются формуляром.
 
-Класс 14 журнала повторов, дважды: кейс 13 обещал контролю роль, которая уже
-была занята, кейс 16 обещал направление колонке, неизвестной в момент решения.
-Оба раза пре-регистрация обещала колонку и её свойство, формуляр обещания не
-исполнял, и не замечал этого никто, кроме автора.
+Класс 14 журнала повторов, трижды: кейсы 13 и 18 обещали контролю роль, которая
+уже была занята, кейс 16 обещал направление колонке, неизвестной в момент
+решения. Каждый раз пре-регистрация обещала колонку и её свойство, формуляр
+обещания не исполнял, и не замечал этого никто, кроме автора.
 
 Механизм узок намеренно. Сверять два документа целиком нельзя: пре-регистрация
 обязана оставаться человеческим текстом — её читает человек и опечатывает до
@@ -23,6 +23,20 @@
 Свойств два — роль и направление, — потому что расходились именно они. Появится
 третий род расхождения — добавится третье свойство, не раньше.
 
+КОНТРОЛИ §5 добавлены после восемнадцатого кейса. Класс повторился ТРЕТИЙ раз
+и второй раз одинаково: кейсы 13 и 18 оба объявили контролем колонку, роль
+которой уже занята контрактом исхода. Первая версия механизма этого не видела —
+она сверяла только блок обещаний §3а, а контроли лежат в §5 и в блок не входили.
+
+Контроль объявляет колонку, роль, которую он ей даёт, и ожидаемую находку.
+Формуляр обязан роль исполнить. Объявить контроль НЕИСПОЛНИМЫМ можно, но только
+когда расхождение действительно есть: отговорка, прикрывающая исполнимый
+контроль, — то же необеспеченное объявление, и она ловится отдельно.
+
+Ожидаемая находка сверяется с каталогом ядра. Контроль, ждущий того, чего ядро
+не умеет находить, не может сработать никогда, и молчание по нему неотличимо от
+слепоты.
+
 Проверка живёт тестом, а не инструментом: инструмент, который надо не забыть
 позвать, в этом проекте ломался трижды.
 """
@@ -35,6 +49,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from dsx.evals.case import Finding
 from dsx.project import load
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,17 +58,33 @@ PREREGS = ROOT / "docs"
 BLOCK = re.compile(r"```yaml\n(project:.*?)\n```", re.DOTALL)
 
 
-def _promise_block(text: str) -> dict | None:
-    """Блок обещаний из текста пре-регистрации. None — обещаний нет."""
-    found = BLOCK.search(text)
-    return yaml.safe_load(found.group(1)) if found else None
+def _declared_block(text: str) -> dict | None:
+    """Машиночитаемые объявления пре-регистрации. None — их нет.
+
+    Блоков может быть несколько: обещания живут в §3а, контроли в §5. Брать
+    первый и молчать об остальных значило бы терять объявленное — ровно то, из-за
+    чего механизм и не увидел повтора в восемнадцатом кейсе.
+    """
+    merged: dict = {}
+    for found in BLOCK.finditer(text):
+        block = yaml.safe_load(found.group(1))
+        for key, value in block.items():
+            if key in merged and merged[key] != value:
+                if isinstance(value, list):
+                    merged[key] = merged[key] + value
+                    continue
+                raise ValueError(f"объявление {key!r} повторено с другим значением")
+            merged[key] = value
+    return merged or None
 
 
 def _unfulfilled(block: dict, form) -> list[str]:
     """Обещания, которых формуляр не исполнил."""
     declared = {column.name: column for column in form.columns}
     broken: list[str] = []
-    for promise in block["promises"]:
+    # Пре-регистрация вправе не давать обещаний о колонках и дать одни контроли:
+    # блоки живут в разных параграфах и друг друга не требуют.
+    for promise in block.get("promises", []):
         name = promise["column"]
         column = declared.get(name)
         if column is None:
@@ -73,11 +104,60 @@ def _unfulfilled(block: dict, form) -> list[str]:
     return broken
 
 
+def _broken_controls(block: dict, form) -> list[str]:
+    """Контроли §5, которых формуляр не исполнил.
+
+    Контроль без колонки не сверяется: он говорит о значениях в данных, а не об
+    объявлении, и формуляру исполнять нечего.
+    """
+    declared = {column.name: column for column in form.columns}
+    broken: list[str] = []
+    for control in block.get("controls", []):
+        name = control["name"]
+        column_name = control.get("column")
+        if column_name is None:
+            continue
+        column = declared.get(column_name)
+        wanted = control.get("role")
+        actual = column.role.value if column is not None else None
+        excuse = control.get("unfulfilled")
+        if actual == wanted:
+            if excuse:
+                # Отговорка, прикрывающая исполнимый контроль, страшнее
+                # неисполненного контроля: она объявляет невозможность, которой
+                # нет, и снимает вопрос, не ответив на него.
+                broken.append(
+                    f"{name}: объявлен неисполнимым ({excuse!r}), но {column_name!r} "
+                    f"ДЕЙСТВИТЕЛЬНО объявлена ролью {wanted!r} — отговорка не обеспечена"
+                )
+        elif not excuse:
+            # Колонки может не быть вовсе — построитель волен её переименовать, и
+            # ядро о переименовании не знает. Сказать про такую «объявлена None»
+            # значит назвать отсутствие значением.
+            found = (
+                f"а объявлена {actual!r}"
+                if column is not None
+                else "а в формуляре не объявлена вовсе"
+            )
+            broken.append(f"{name}: требует {column_name!r} ролью {wanted!r}, {found}")
+    return broken
+
+
+def _unknown_findings(block: dict) -> list[str]:
+    """Контроли, ждущие того, чего ядро находить не умеет."""
+    known = {finding.value for finding in Finding}
+    return [
+        f"{control['name']}: ждёт находки {control.get('expect')!r}, которой в каталоге ядра нет"
+        for control in block.get("controls", [])
+        if control.get("expect") not in known
+    ]
+
+
 def test_every_promise_in_a_sealed_prereg_is_kept() -> None:
     """Обещанное до данных исполняется формуляром, написанным после."""
     checked, pending = 0, []
     for path in sorted(PREREGS.glob("prereg-case-*.md")):
-        block = _promise_block(path.read_text(encoding="utf-8"))
+        block = _declared_block(path.read_text(encoding="utf-8"))
         if block is None:
             continue
         form_path = ROOT / "projects" / block["project"] / "project.yaml"
@@ -91,7 +171,7 @@ def test_every_promise_in_a_sealed_prereg_is_kept() -> None:
         if not form_path.is_file():
             pending.append(f"{path.name} -> {block['project']}")
             continue
-        broken = _unfulfilled(block, load(form_path))
+        broken = _unfulfilled(block, load(form_path)) + _broken_controls(block, load(form_path))
         assert not broken, f"{path.name}: {'; '.join(broken)}"
         checked += 1
     print(f"обещаний сверено: {checked}, ещё не наступило: {len(pending)}")
@@ -136,27 +216,27 @@ def form():
 
 
 def test_a_kept_promise_is_silent(form) -> None:
-    assert not _unfulfilled(_promise_block(FULFILLED), form)
+    assert not _unfulfilled(_declared_block(FULFILLED), form)
 
 
 def test_a_column_promised_but_never_declared_is_reported(form) -> None:
     """Случай шестнадцатого кейса: направление обещано величине, которой в
     формуляре нет — она неизвестна в момент решения."""
-    broken = _unfulfilled(_promise_block(ABSENT), form)
+    broken = _unfulfilled(_declared_block(ABSENT), form)
 
     assert broken == ["'number_of_alarms' обещана, но в формуляре не объявлена вовсе"]
 
 
 def test_a_role_that_differs_is_reported(form) -> None:
     """Случай тринадцатого кейса: обещанная роль занята другим объявлением."""
-    broken = _unfulfilled(_promise_block(WRONG_ROLE), form)
+    broken = _unfulfilled(_declared_block(WRONG_ROLE), form)
 
     assert broken == ["'available_at' обещана ролью 'feature', а объявлена 'ignored'"]
 
 
 def test_a_prereg_without_promises_is_not_a_promise_of_nothing() -> None:
     """Отсутствие блока означает, что обещаний не давали, а не что они пусты."""
-    assert _promise_block("# Пре-регистрация\n\nобычный текст без блока\n") is None
+    assert _declared_block("# Пре-регистрация\n\nобычный текст без блока\n") is None
 
 
 def test_a_promise_about_an_unbuilt_project_is_not_broken(tmp_path) -> None:
@@ -168,3 +248,118 @@ def test_a_promise_about_an_unbuilt_project_is_not_broken(tmp_path) -> None:
     нарушено — оно не наступило.
     """
     assert not (tmp_path / "project.yaml").is_file()
+
+
+# --- контроли §5 ------------------------------------------------------------
+
+CONTROL_KEPT = """
+```yaml
+project: fire-response
+controls:
+  - {name: К-1, column: available_at, role: ignored, expect: value_revised_after_decision}
+  - {name: К-2, expect: sentinel_as_value}
+```
+"""
+
+CONTROL_ROLE_TAKEN = """
+```yaml
+project: fire-response
+controls:
+  - {name: К-1, column: available_at, role: feature, expect: value_revised_after_decision}
+```
+"""
+
+CONTROL_HONESTLY_UNFULFILLED = """
+```yaml
+project: fire-response
+controls:
+  - {name: К-1, column: available_at, role: feature, expect: value_revised_after_decision,
+     unfulfilled: "роль занята другим объявлением"}
+```
+"""
+
+CONTROL_FALSE_EXCUSE = """
+```yaml
+project: fire-response
+controls:
+  - {name: К-1, column: available_at, role: ignored, expect: value_revised_after_decision,
+     unfulfilled: "роль занята другим объявлением"}
+```
+"""
+
+CONTROL_INVENTED_FINDING = """
+```yaml
+project: fire-response
+controls:
+  - {name: К-1, column: available_at, role: ignored, expect: выдуманная_находка}
+```
+"""
+
+
+def test_a_control_the_form_fulfils_is_silent(form) -> None:
+    assert not _broken_controls(_declared_block(CONTROL_KEPT), form)
+
+
+def test_a_control_demanding_a_taken_role_is_reported(form) -> None:
+    """Случай кейсов 13 и 18: контроль требует роль, которой у колонки нет."""
+    broken = _broken_controls(_declared_block(CONTROL_ROLE_TAKEN), form)
+
+    assert broken == ["К-1: требует 'available_at' ролью 'feature', а объявлена 'ignored'"]
+
+
+def test_an_honestly_unfulfilled_control_is_allowed(form) -> None:
+    """Неисполнимость записать можно — она и есть честный исход кейса 18."""
+    assert not _broken_controls(_declared_block(CONTROL_HONESTLY_UNFULFILLED), form)
+
+
+def test_an_excuse_covering_a_fulfillable_control_is_reported(form) -> None:
+    """Отговорка, прикрывающая исполнимый контроль, — необеспеченное объявление.
+
+    Без этой проверки механизм обходился бы одним словом: приписать
+    `unfulfilled` любому контролю и не исполнять ни одного.
+    """
+    broken = _broken_controls(_declared_block(CONTROL_FALSE_EXCUSE), form)
+
+    assert len(broken) == 1
+    assert "отговорка не обеспечена" in broken[0]
+
+
+def test_a_control_awaiting_an_unknown_finding_is_reported() -> None:
+    """Контроль, ждущий несуществующей находки, не сработает никогда."""
+    unknown = _unknown_findings(_declared_block(CONTROL_INVENTED_FINDING))
+
+    assert unknown == ["К-1: ждёт находки 'выдуманная_находка', которой в каталоге ядра нет"]
+
+
+def test_every_control_awaits_a_finding_the_core_knows() -> None:
+    """По всем опечатанным пре-регистрациям сразу: сверка не требует формуляра."""
+    unknown: list[str] = []
+    for path in sorted(PREREGS.glob("prereg-case-*.md")):
+        block = _declared_block(path.read_text(encoding="utf-8"))
+        if block is None:
+            continue
+        unknown += [f"{path.name}: {item}" for item in _unknown_findings(block)]
+    assert not unknown, "; ".join(unknown)
+
+
+CONTROL_ABOUT_A_MISSING_COLUMN = """
+```yaml
+project: fire-response
+controls:
+  - {name: К-1, column: number_of_alarms, role: feature, expect: value_revised_after_decision}
+```
+"""
+
+
+def test_a_control_about_a_column_the_form_lacks_is_reported(form) -> None:
+    """Случай восемнадцатого кейса: контроль назвал имя из ИСТОЧНИКА.
+
+    Построитель волен переименовать колонку, и ядро о переименовании не знает.
+    Расхождение всё равно названо, но названо тем, чем оно является, —
+    отсутствием, а не ролью `None`.
+    """
+    broken = _broken_controls(_declared_block(CONTROL_ABOUT_A_MISSING_COLUMN), form)
+
+    assert broken == [
+        "К-1: требует 'number_of_alarms' ролью 'feature', а в формуляре не объявлена вовсе"
+    ]
