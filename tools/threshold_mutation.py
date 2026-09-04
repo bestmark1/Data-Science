@@ -221,6 +221,28 @@ def _numeric_fields(path: Path) -> list[Threshold]:
     return _module_constants(tree, path.stem) + found
 
 
+def _qualified(path: Path, name: str, key: str) -> str:
+    """Имя поля, различающее ОДНОИМЁННЫЕ поля одного модуля.
+
+    Метка строилась из голого имени поля, и одноимённые поля сливались в одну
+    строку отчёта: `drift:floor` — четыре разных порога (N5, N4, N8, N18),
+    `drift:ratio` — три (N3, N4, N17), `premise_check:share` — два (S9, S10).
+
+    Цена этого не теоретическая. Выживший `drift:ratio` два полных прогона
+    подряд читался как ОДИН порог: автор прибил N3, объявил долг закрытым, а
+    выживал N17 — и обнаружилось это лишь прямой мутацией по номеру строки.
+    Утверждение было сделано по метке измерителя, а не по расчёту.
+
+    Ключ требования (`N3.ratio`) программа уже вычисляет — он нужен для поиска
+    объявленной области, — и в метку просто не попадал. Модульные константы
+    ключ несут вместе с именем модуля, и для них берётся голое имя: иначе метка
+    выходила бы вида `drift:drift.MIN_ROWS`.
+    """
+    if key and not key.startswith(f"{path.stem}."):
+        return key
+    return name
+
+
 def _variants(value: float | int, domain: Domain | None) -> list[float | int]:
     """Ослабленное и ужесточённое значение — вдвое ОТ СВОЕЙ ОПОРЫ.
 
@@ -294,7 +316,7 @@ def main() -> int:
             for new in _variants(value, domain):
                 if new == value:
                     continue
-                label = f"{path.stem}:{name}={value}→{new}"
+                label = f"{path.stem}:{_qualified(path, name, key)}={value}→{new}"
                 if domain is not None and not domain.admits(new):
                     outside.append(f"{label} ({domain.reason})")
                     continue

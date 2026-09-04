@@ -202,3 +202,54 @@ def test_an_unusable_marker_does_not_lock_the_tool(tmp_path, monkeypatch) -> Non
 
     assert module._recover() is None
     assert not module.MARKER.exists(), "негодный след обязан сниматься"
+
+
+# --- различимость меток -----------------------------------------------------
+
+
+def test_no_two_thresholds_share_a_label() -> None:
+    """Одноимённые поля одного модуля обязаны различаться в отчёте.
+
+    Метка строилась из голого имени поля, и `drift:floor` означал четыре разных
+    порога сразу — N5, N4, N8 и N18, — а `drift:ratio` три: N3, N4, N17.
+
+    Цена не теоретическая. Выживший `drift:ratio` два полных прогона подряд
+    читался как ОДИН порог: автор прибил N3, объявил числовой долг закрытым, а
+    выживал N17. Обнаружилось это только прямой мутацией по номеру строки —
+    то есть утверждение было сделано по метке измерителя, а не по расчёту.
+
+    Проверка идёт по НАСТОЯЩИМ модулям ядра, а не по выдуманным: сливаются
+    метки именно там.
+    """
+    module = _tool()
+    seen: dict[str, str] = {}
+    collisions = []
+    for path in module._paths():
+        for lineno, name, _value, key in module._numeric_fields(path):
+            label = f"{path.stem}:{module._qualified(path, name, key)}"
+            where = f"{path.name}:{lineno}"
+            if label in seen:
+                collisions.append(f"{label} — {seen[label]} и {where}")
+            seen[label] = where
+
+    assert not collisions, "метки сливаются:\n" + "\n".join(collisions)
+
+
+def test_a_module_constant_keeps_its_bare_name() -> None:
+    """Константа модуля не должна называться `drift:drift.MIN_ROWS`.
+
+    Её ключ уже несёт имя модуля, и подстановка ключа в метку удвоила бы его.
+    """
+    module = _tool()
+    drift = next(p for p in module._paths() if p.stem == "drift")
+
+    assert module._qualified(drift, "MIN_ROWS", "drift.MIN_ROWS") == "MIN_ROWS"
+
+
+def test_a_class_field_is_named_by_its_requirement() -> None:
+    """Поле проверки называется требованием, а не именем класса: так же, как
+    именуются объявленные области в `dsx.checks.domains`."""
+    module = _tool()
+    drift = next(p for p in module._paths() if p.stem == "drift")
+
+    assert module._qualified(drift, "ratio", "N17.ratio") == "N17.ratio"
