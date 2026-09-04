@@ -151,12 +151,18 @@ def duplicate_rows(world: World, share: float = 0.15, seed: int = 3) -> World:
     return world.replace_main(pl.concat([world.main, extra]))
 
 
-def missing_period(world: World, months: int = 1) -> World:
-    """Вырезать целый месяц из середины периода."""
+def missing_period(world: World, days: int = 30) -> World:
+    """Вырезать отрезок из середины периода.
+
+    Тридцать дней — воспроизведение первого трения, где месяц отсутствовал
+    целиком. Меньший отрезок нужен, чтобы поставить случай близко к объявленному
+    порогу: разрыв в месяц больше любого мутанта, и о ГРАНИЦЕ проверки такой
+    кейс не говорит ничего.
+    """
     lo = world.main["decided_at"].min()
     hi = world.main["decided_at"].max()
     start = lo + (hi - lo) / 2
-    stop = start + dt.timedelta(days=30 * months)
+    stop = start + dt.timedelta(days=days)
     return world.replace_main(
         world.main.filter((pl.col("decided_at") < start) | (pl.col("decided_at") >= stop))
     )
