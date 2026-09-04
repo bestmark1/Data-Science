@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
 import sys
 
 import numpy as np
@@ -289,3 +290,94 @@ def test_a_slight_fade_is_silent(slight_fade) -> None:
     лучшем окне была слабой, — и этот тест упал бы. Так умирает мутант вниз.
     """
     assert not _fires(slight_fade)
+
+
+# --- N3.ratio ---------------------------------------------------------------
+#
+# У N3 три ветви: резерв, тренд и кратность долей. Первые две дают ТУ ЖЕ находку
+# независимо от порога, поэтому кейс, где доля просто уезжает, о пороге
+# кратности не говорит ничего — находка в нём есть при любом его значении.
+#
+# Чтобы ветвь кратности решала исход, мир обязан молчать в двух других: доли
+# немонотонны (иначе говорит тренд) и резерв неотличим от последнего окна.
+
+RATIO_ROWS = 30_000
+"""Объём, при котором разрыв долей превосходит совместный шум.
+
+При двадцати тысячах окна несут по 1 600 строк, разрыв 3.4 процентных пункта, а
+`3 × spread` равен 3.8 — проверка молчит по шуму, а не по порогу, и мутант
+переживает прогон.
+"""
+
+
+def _dented_world(share: float = 0.25, seed: int = 19):
+    """Просадка доли класса ТОЛЬКО в среднем окне.
+
+    Сроки части решений отодвигаются на два месяца: опоздать становится труднее,
+    и доля падает — но лишь во втором окне. Первое и третье остаются как были,
+    отчего доли выходят немонотонными, а резерв — неотличимым от последнего
+    окна.
+    """
+    world = build_world(rows=RATIO_ROWS)
+    frame = world.main
+    low, high = frame["decided_at"].min(), frame["decided_at"].max()
+    span = (high - low).days
+    # Границы второго окна стенда, взятые долями периода — теми же, что в harness.
+    since = low + dt.timedelta(days=int(span * 0.63))
+    until = low + dt.timedelta(days=int(span * 0.71))
+    rng = np.random.default_rng(seed)
+    picked = (
+        (pl.col("decided_at") >= since)
+        & (pl.col("decided_at") < until)
+        & pl.Series(rng.random(frame.height) < share)
+    )
+    return world.replace_main(
+        frame.with_columns(
+            pl.when(picked)
+            .then(pl.col("deadline_on").dt.offset_by("60d"))
+            .otherwise(pl.col("deadline_on"))
+            .alias("deadline_on")
+        )
+    )
+
+
+@pytest.fixture(scope="module")
+def dented():
+    """Доли 14.7% / 10.6% / 14.7%: кратность 1.39, между мутантом и порогом."""
+    bundle = dataclasses.replace(BY_ID["clean-baseline"], build=_dented_world)
+    return context_for(bundle)
+
+
+def test_the_dent_lies_between_the_mutant_and_the_declared_ratio(dented) -> None:
+    """Проверка самой проверки: иначе тест молчал бы не по той причине.
+
+    Кратность обязана лежать МЕЖДУ 1.25 и 1.5. Ниже 1.25 мутация ничего не
+    изменит и мутант переживёт прогон; выше 1.5 замолчать не сможет и сам порог.
+    """
+    rates = [frame[LABEL].mean() for _, frame in _windows_with_labels(dented)]
+    ratio = max(rates) / min(rates)
+
+    assert 1.25 < ratio < 1.5, f"кратность {ratio:.2f} вне полосы между мутантом и порогом"
+
+
+def test_rates_are_not_monotonic(dented) -> None:
+    """Ещё одна проверка проверки: тренд обязан молчать.
+
+    При монотонных долях сигнал даёт ветвь тренда — независимо от порога
+    кратности, — и мутант снова пережил бы прогон.
+    """
+    rates = [frame[LABEL].mean() for _, frame in _windows_with_labels(dented)]
+
+    assert not (rates[0] <= rates[1] <= rates[2]), rates
+    assert not (rates[0] >= rates[1] >= rates[2]), rates
+
+
+def test_a_dent_below_the_declared_ratio_is_silent(dented) -> None:
+    """Кратность 1.39 ниже объявленных полутора: колебание, а не дрейф.
+
+    Порог, опущенный до 1.25, объявил бы находкой это колебание, — и тест упал
+    бы. Так умирает мутант вниз.
+    """
+    found = {s.finding.value for s in run_checks(list(ALL_CHECKS), dented).signals}
+
+    assert "non_stationary_target" not in found
