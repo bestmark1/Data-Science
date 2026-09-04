@@ -381,3 +381,69 @@ def test_a_dent_below_the_declared_ratio_is_silent(dented) -> None:
     found = {s.finding.value for s in run_checks(list(ALL_CHECKS), dented).signals}
 
     assert "non_stationary_target" not in found
+
+
+# --- N17.ratio --------------------------------------------------------------
+#
+# Пятый порог, и обнаружился он не сразу — по вине измерителя. В `drift.py` два
+# поля `ratio = 1.5`: у N3 и у N17. Инструмент мутации печатает обоих одинаковой
+# меткой `drift:ratio=1.5→1.25`, и выживший читался как один и тот же порог два
+# прогона подряд. Прибит был N3, выживал N17.
+#
+# Кейс стенда разводит доли поводов в 2.70 раза — вдвое дальше любого мутанта,
+# и о границе он не говорит ничего.
+
+REASON_ROWS = 20_000
+"""Объём, при котором доли поводов расходятся заметнее совместного шума.
+
+При четырёх тысячах сдвиг в двое суток даёт отношение 1.06, при двенадцати —
+1.10: обе величины ниже мутанта, и мутация не меняла бы исхода.
+"""
+
+
+def _reason_context(shift_days: int = 2):
+    """Повод назначается жребием, одной его половине срок удлиняется на двое суток.
+
+    Пять суток, как в кейсе стенда, дают отношение 2.70 — далеко за порогом.
+    Двое дают 1.41: между мутантом 1.25 и объявленными 1.5.
+    """
+    bundle = dataclasses.replace(
+        BY_ID["outcome-depends-on-the-reason"],
+        build=lambda: inj.outcome_depends_on_the_reason(
+            build_world(rows=REASON_ROWS), shift_days=shift_days
+        ),
+    )
+    return context_for(bundle)
+
+
+@pytest.fixture(scope="module")
+def mild_reason_gap():
+    return _reason_context()
+
+
+def _reason_rates(context) -> list[float]:
+    """Доли по поводам — тем же счётом, каким их берёт сама проверка."""
+    parts = [frame for _, frame in _windows_with_labels(context)]
+    joined = pl.concat(parts, how="vertical_relaxed")
+    grouped = joined.group_by("reason").agg(pl.col(LABEL).mean().alias("rate"))
+    return sorted(grouped["rate"].to_list())
+
+
+def test_the_reason_gap_lies_between_the_mutant_and_the_declared_ratio(
+    mild_reason_gap,
+) -> None:
+    """Проверка самой проверки: иначе тест молчал бы не по той причине."""
+    low, high = _reason_rates(mild_reason_gap)
+
+    assert 1.25 < high / low < 1.5, f"отношение {high / low:.2f} вне полосы"
+
+
+def test_a_mild_reason_gap_is_silent(mild_reason_gap) -> None:
+    """Доли поводов расходятся в 1.41 раза — меньше объявленных полутора.
+
+    Порог, опущенный до 1.25, объявил бы находкой это расхождение, — и тест упал
+    бы. Так умирает мутант вниз, переживший два полных прогона подряд.
+    """
+    found = {s.finding.value for s in run_checks(list(ALL_CHECKS), mild_reason_gap).signals}
+
+    assert "observation_reason_matters" not in found
