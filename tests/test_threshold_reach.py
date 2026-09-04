@@ -1,6 +1,6 @@
 """Пороги, до которых стенд не достаёт по устройству.
 
-`N4.floor` сравнивается не с константой, а с шумом выборки: `max(floor, шум)`.
+`N4.floor` и `N8.floor` сравниваются не с константой, а с шумом выборки: `max(floor, шум)`.
 Шум равен `3 × 0.29 / sqrt(smaller)`, где `smaller` — меньшая из двух групп в
 окне. При объявленных 0.05 порог начинает участвовать только когда `smaller`
 превышает три сотни; миры стенда несут по три сотни СТРОК в окне и шум 0.145 —
@@ -31,11 +31,13 @@ import pytest
 
 sys.path.insert(0, "tests")
 
+import dsx.evals.injectors as inj
 from dsx.checks import ALL_CHECKS
 from dsx.checks.base import run_checks
 from dsx.checks.drift import SIGMA, _association_error, _windows_with_labels
 from dsx.evals.registry import BY_ID, build_world
 from dsx.label import LABEL
+from dsx.roles import Direction
 from harness import context_for
 
 ROWS = 120_000
@@ -123,3 +125,87 @@ def test_a_moderate_flip_speaks(moderate) -> None:
     бы. Так умирает мутант вверх.
     """
     assert _fires(moderate)
+
+
+# --- N8.floor ---------------------------------------------------------------
+#
+# Тот же порог 0.05 и то же устройство `max(floor, шум)`, но связь считается по
+# ОБЪЕДИНЁННОМУ кадру всех окон: строк втрое больше, шум ниже, и мир нужен вдвое
+# меньше — шестьдесят тысяч вместо ста двадцати.
+#
+# Знак связи здесь постоянный, в отличие от N4: проверяется не смена знака между
+# окнами, а противоречие данных ОБЪЯВЛЕННОМУ доменному направлению.
+
+N8_ROWS = 60_000
+"""Объём, при котором шум по объединённому кадру равен 0.019 — ниже обеих
+сторон мутации. При сорока тысячах он равен 0.024 и вплотную подходит к
+половинному порогу, отчего тест перестал бы различать 0.05 и 0.025."""
+
+
+def _contradicting_world(delta: float, seed: int = 11):
+    """Признак растёт с исходом, а объявлен убывающим.
+
+    Величина связи задаётся сдвигом распределения у опоздавших: она нужна малой
+    и точной, чтобы лечь между двумя мутантами порога.
+    """
+    world = build_world(rows=N8_ROWS)
+    rng = np.random.default_rng(seed)
+    frame = world.main
+    late = (
+        (frame["event_at"].dt.date() > frame["deadline_on"].dt.date()).fill_null(False).to_numpy()
+    )
+    values = rng.normal(0, 1, frame.height) + late * delta
+    world = world.replace_main(frame.with_columns(pl.Series("size", values)))
+    return inj.declared_direction(world, "size", Direction.DECREASES)
+
+
+def _context_n8(delta: float):
+    bundle = dataclasses.replace(BY_ID["clean-baseline"], build=lambda: _contradicting_world(delta))
+    return context_for(bundle)
+
+
+@pytest.fixture(scope="module")
+def faint_contradiction():
+    """Связь около 0.04: ниже объявленного порога, выше половинного."""
+    return _context_n8(0.10)
+
+
+@pytest.fixture(scope="module")
+def plain_contradiction():
+    """Связь около 0.07: выше объявленного порога, ниже удвоенного."""
+    return _context_n8(0.22)
+
+
+def _contradicts(context) -> bool:
+    """Как и выше, проверка идёт со СВОИМ объявленным порогом."""
+    found = {s.finding.value for s in run_checks(list(ALL_CHECKS), context).signals}
+    return "direction_contradicts_domain" in found
+
+
+def test_the_joined_frame_is_large_enough_for_the_floor_to_matter(
+    faint_contradiction,
+) -> None:
+    """Проверка самой проверки: шум обязан быть ниже обеих сторон мутации."""
+    windows = _windows_with_labels(faint_contradiction)
+    joined = pl.concat([frame for _, frame in windows], how="vertical_relaxed")
+    noise = SIGMA * _association_error(joined[LABEL])
+
+    assert noise < 0.025, f"шум {noise:.3f} перекрывает порог: тест мерил бы не то"
+
+
+def test_a_faint_contradiction_is_silent(faint_contradiction) -> None:
+    """Связь около 0.04 слабее порога: спорить с доменным знанием нечем.
+
+    Порог, опущенный вдвое, объявил бы находкой то, что объявлено шумом, — и
+    этот тест упал бы. Так умирает мутант вниз.
+    """
+    assert not _contradicts(faint_contradiction)
+
+
+def test_a_plain_contradiction_speaks(plain_contradiction) -> None:
+    """Связь около 0.07 сильнее порога и противоречит объявленному направлению.
+
+    Порог, поднятый вдвое, потерял бы настоящее противоречие, — и этот тест упал
+    бы. Так умирает мутант вверх.
+    """
+    assert _contradicts(plain_contradiction)
