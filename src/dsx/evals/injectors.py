@@ -203,19 +203,41 @@ def status_timestamp_conflict(world: World, count: int = 40, seed: int = 9) -> W
     return world.replace_main(frame)
 
 
-def post_treatment_missingness(world: World, seed: int = 13) -> World:
+def post_treatment_missingness(
+    world: World, seed: int = 13, share: float = 0.7, noise: float = 0.0
+) -> World:
     """Сделать пропуск признака следствием исхода.
 
     Пропуск объясняется статусом, а не свойством объекта: импутация нулём
     превращает его в признак из будущего.
+
+    Два рычага, и оба нужны, чтобы подойти к объявленным границам близко.
+
+    `share` — доля опоздавших строк, у которых признак пропал; она задаёт ЧИСЛО
+    пропусков, с которым сверяется `min_missing`.
+
+    `noise` — доля прочих строк, у которых признак пропал БЕЗ смены статуса; она
+    размывает концентрацию. Без неё все пропуски приходятся на один статус,
+    концентрация равна единице, и порог в четыре пятых можно двигать вдвое
+    незаметно.
     """
     rng = np.random.default_rng(seed)
-    late = pl.col("event_at").dt.date() > pl.col("deadline_on").dt.date()
-    drop = pl.Series(rng.random(world.main.height) < 0.7)
-    frame = world.main.with_columns(
-        pl.when(late & drop).then(None).otherwise(pl.col("size")).alias("size"),
-        pl.when(late & drop).then(pl.lit("aborted")).otherwise(pl.col("status")).alias("status"),
+    # fill_null здесь обязателен: выражение ОТРИЦАЕТСЯ ниже, а отрицание
+    # пустого значения снова пусто — строка без даты события выпала бы из обеих
+    # ветвей молча. Класс 2 журнала повторов; поймала его та самая проверка,
+    # которая после него и введена.
+    late = (pl.col("event_at").dt.date() > pl.col("deadline_on").dt.date()).fill_null(False)
+    drop = pl.Series(rng.random(world.main.height) < share)
+    smeared = pl.Series(rng.random(world.main.height) < noise)
+    struck = late & drop
+    frame = world.main.with_columns(pl.Series("_smeared", smeared)).with_columns(
+        pl.when(struck | (pl.col("_smeared") & ~late))
+        .then(None)
+        .otherwise(pl.col("size"))
+        .alias("size"),
+        pl.when(struck).then(pl.lit("aborted")).otherwise(pl.col("status")).alias("status"),
     )
+    frame = frame.drop("_smeared")
     return world.replace_main(frame)
 
 
