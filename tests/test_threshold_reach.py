@@ -209,3 +209,83 @@ def test_a_plain_contradiction_speaks(plain_contradiction) -> None:
     бы. Так умирает мутант вверх.
     """
     assert _contradicts(plain_contradiction)
+
+
+# --- N4.strong --------------------------------------------------------------
+#
+# Порог живёт в ветви ОСЛАБЛЕНИЯ связи, и до неё не доходит ни один кейс стенда:
+# все они срабатывают через смену ЗНАКА, а знак проверяется раньше и уводит
+# выполнение в сторону. Поэтому ветвь не была задействована ни разу, и оба
+# мутанта переживали прогон.
+#
+# Условий здесь три сразу, и мир обязан удовлетворить все: сильнейшая связь выше
+# `max(strong, шум)`, кратность сильнейшей к слабейшей не ниже трёх, а разрыв
+# между ними выше совместного шума. Первая попытка дала кратность 2.5 и молчала
+# при любом пороге — переход силы пришёлся на середину среднего окна и размыл
+# его. Граница сдвинута на стык окон.
+
+FADE_AT = 0.71
+"""Доля периода, на которой связь слабеет. Совпадает с границей между вторым и
+третьим окном стенда: иначе переход попадает ВНУТРЬ окна, связь в нём
+усредняется, и кратность не дотягивает до требуемой."""
+
+
+def _fading_world(strong_delta: float, weak_delta: float, rows: int, seed: int = 13):
+    """Связь одного знака, слабеющая к последнему окну.
+
+    Знак намеренно один: разные знаки увели бы проверку в ветвь смены знака, и
+    порог ослабления снова остался бы непроверенным.
+    """
+    world = build_world(rows=rows)
+    rng = np.random.default_rng(seed)
+    frame = world.main
+    late = (
+        (frame["event_at"].dt.date() > frame["deadline_on"].dt.date()).fill_null(False).to_numpy()
+    )
+    edge = np.datetime64(frame["decided_at"].quantile(FADE_AT))
+    delta = np.where(frame["decided_at"].to_numpy() >= edge, weak_delta, strong_delta)
+    values = rng.normal(0, 1, frame.height) + late * delta
+    return world.replace_main(frame.with_columns(pl.Series("size", values)))
+
+
+def _context_fade(strong_delta: float, weak_delta: float, rows: int):
+    bundle = dataclasses.replace(
+        BY_ID["clean-baseline"],
+        build=lambda: _fading_world(strong_delta, weak_delta, rows),
+    )
+    return context_for(bundle)
+
+
+@pytest.fixture(scope="module")
+def marked_fade():
+    """Связь падает с 0.19 до 0.05: сильнейшая выше объявленного порога."""
+    return _context_fade(0.70, 0.05, 30_000)
+
+
+@pytest.fixture(scope="module")
+def slight_fade():
+    """Связь падает с 0.10 до 0.01: сильнейшая ниже объявленного порога.
+
+    Мир вдвое больше: разрыв здесь 0.09, и шум обязан быть заметно меньше него,
+    иначе условие «разрыв выше совместного шума» не выполнится ни при каком
+    пороге и тест перестанет различать мутантов.
+    """
+    return _context_fade(0.35, 0.03, 60_000)
+
+
+def test_a_marked_fade_speaks(marked_fade) -> None:
+    """Связь 0.19 сильнее объявленных 0.15, и её падение вчетверо — находка.
+
+    Порог, поднятый вдвое, объявил бы саму связь слабой и до падения не дошёл, —
+    и этот тест упал бы. Так умирает мутант вверх.
+    """
+    assert _fires(marked_fade)
+
+
+def test_a_slight_fade_is_silent(slight_fade) -> None:
+    """Связь 0.10 слабее объявленных 0.15: ослабление шума — не находка.
+
+    Порог, опущенный вдвое, объявил бы находкой падение связи, которая и в
+    лучшем окне была слабой, — и этот тест упал бы. Так умирает мутант вниз.
+    """
+    assert not _fires(slight_fade)
