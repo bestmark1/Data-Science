@@ -1,0 +1,9 @@
+source: 'Техас: жалобы потребителей на страховые компании (TDI)'
+license: открытые данные штата Техас (объявлено источником)
+url: https://data.texas.gov/d/ubdr-4uff
+retrieved_at: '2026-09-07'
+files:
+- name: tdi_complaints_2023_2025.csv
+  sha256: af9000340e0d49655015ca88b763617ce24691729748c58205399e8e8e19e7c7
+  bytes: 27907827
+derived: []
