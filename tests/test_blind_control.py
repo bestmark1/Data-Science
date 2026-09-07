@@ -187,3 +187,175 @@ def test_apply_refuses_a_patch_that_fits_nothing(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 
     assert _tool()._apply(patch) is False
+
+
+# --- Ограничение выбора второй стороны ----------------------------------
+#
+# Два кейса подряд она выбрала `duplicate_rows`. Третий такой выбор сделал бы
+# слепое испытание неотличимым от авторского контроля на том же дефекте.
+
+
+CATALOGUE = """
+class Finding(StrEnum):
+    DUPLICATE_ROWS = "duplicate_rows"
+    MISSING_PERIOD = "missing_period"
+    SENTINEL_AS_VALUE = "sentinel_as_value"
+
+
+class Verdict(StrEnum):
+    PASS = "pass"
+    MISSED = "missed"
+"""
+
+
+def _repo(tmp_path: Path) -> Path:
+    catalogue = tmp_path / "src" / "dsx" / "evals"
+    catalogue.mkdir(parents=True)
+    (catalogue / "case.py").write_text(CATALOGUE, encoding="utf-8")
+    (tmp_path / "projects").mkdir()
+    return tmp_path
+
+
+def _case(root: Path, name: str, expected: str) -> Path:
+    project = root / "projects" / name
+    project.mkdir()
+    (project / "blind-control.sealed.md").write_text(
+        f"ОЖИДАЕМАЯ НАХОДКА: {expected}\n\nпояснение второй стороны\n", encoding="utf-8"
+    )
+    return project
+
+
+def test_tried_items_are_collected_from_the_sealed_files(tmp_path, monkeypatch) -> None:
+    """Список испытанного берётся из ответов, а не из ведомости.
+
+    Ведомость, заполняемая руками, в этом проекте уже дважды оказывалась
+    объявленной действующей и незаполненной: учёт ошибок автора и учёт правила
+    остановки. Третьего раза механизм не переживёт.
+    """
+    module = _tool()
+    root = _repo(tmp_path)
+    _case(root, "прошлый", "duplicate_rows")
+    _case(root, "позапрошлый", "`sentinel_as_value` — подложено значением-заглушкой")
+    monkeypatch.setattr(module, "ROOT", root)
+
+    tried, complaints = module._already_tried(
+        root / "projects" / "новый", module._finding_names(module._findings_catalogue())
+    )
+
+    assert tried == ["duplicate_rows", "sentinel_as_value"]
+    assert complaints == []
+
+
+def test_an_empty_control_does_not_spend_a_catalogue_item(tmp_path, monkeypatch) -> None:
+    """Пустой контроль ничего не испытал — и не сужает выбор.
+
+    Иначе пятнадцатый кейс, где подкладывать было нечего, отнял бы у следующих
+    пункт каталога, который никто не проверял.
+    """
+    module = _tool()
+    root = _repo(tmp_path)
+    _case(root, "пустой", "нет, это пустой контроль.")
+    monkeypatch.setattr(module, "ROOT", root)
+
+    tried, complaints = module._already_tried(
+        root / "projects" / "новый", module._finding_names(module._findings_catalogue())
+    )
+
+    assert tried == []
+    assert complaints == []
+
+
+def test_the_current_case_does_not_exclude_itself(tmp_path, monkeypatch) -> None:
+    """Свой собственный запечатанный файл в список не идёт."""
+    module = _tool()
+    root = _repo(tmp_path)
+    свой = _case(root, "текущий", "duplicate_rows")
+    monkeypatch.setattr(module, "ROOT", root)
+
+    tried, _ = module._already_tried(свой, module._finding_names(module._findings_catalogue()))
+
+    assert tried == []
+
+
+def test_an_unreadable_expectation_is_said_aloud(tmp_path, monkeypatch) -> None:
+    """Умолчание, совпадающее с честным ответом, запрещено.
+
+    Строка ожидаемой находки, из которой имя не разобралось, неотличима от
+    отсутствия испытаний — и молча выглядела бы как «исключать нечего».
+    """
+    module = _tool()
+    root = _repo(tmp_path)
+    _case(root, "невнятный", "строка про какой-то дефект без имени каталога")
+    monkeypatch.setattr(module, "ROOT", root)
+
+    tried, complaints = module._already_tried(
+        root / "projects" / "новый", module._finding_names(module._findings_catalogue())
+    )
+
+    assert tried == []
+    assert len(complaints) == 1
+    assert "невнятный" in complaints[0]
+
+
+def test_verdict_names_are_not_catalogue_items(tmp_path) -> None:
+    """Отрицательный контроль на разбор каталога.
+
+    Рядом с перечнем находок лежит перечень вердиктов. Прихватив его, программа
+    исключила бы из выбора `pass` и `missed` — пункты, которых в каталоге нет.
+    """
+    module = _tool()
+    root = _repo(tmp_path)
+
+    names = module._finding_names(root / "src" / "dsx" / "evals" / "case.py")
+
+    assert names == {"duplicate_rows", "missing_period", "sentinel_as_value"}
+
+
+def _intercept(module, monkeypatch) -> list[str]:
+    """Перехватить задание, которое ушло бы второй стороне."""
+    sent: list[str] = []
+
+    class _Done:
+        returncode = 1
+        stdout = ""
+
+    def _run(argv, **kwargs):
+        sent.append(argv[-1])
+        return _Done()
+
+    monkeypatch.setattr(module.subprocess, "run", _run)
+    return sent
+
+
+def test_the_exclusion_reaches_the_task(tmp_path, monkeypatch) -> None:
+    """Проверка достижимости: список обязан дойти до второй стороны.
+
+    Функция, собирающая исключения правильно и не попадающая в задание, — это
+    механизм, построенный и не проверенный на достижимости. Шесть случаев этого
+    класса уже записаны в журнале повторов.
+    """
+    module = _tool()
+    root = _repo(tmp_path)
+    _case(root, "прошлый", "duplicate_rows")
+    monkeypatch.setattr(module, "ROOT", root)
+    monkeypatch.setattr(module.secrets, "randbelow", lambda _: 1)  # непустой контроль
+    sent = _intercept(module, monkeypatch)
+
+    module._plant(root / "projects" / "новый")
+
+    assert len(sent) == 1
+    assert "- duplicate_rows" in sent[0]
+    assert "выбирать их НЕЛЬЗЯ" in sent[0]
+
+
+def test_nothing_is_excluded_when_nothing_was_tried(tmp_path, monkeypatch) -> None:
+    """Отрицательный контроль: без прежних кейсов задание не несёт запретов."""
+    module = _tool()
+    root = _repo(tmp_path)
+    monkeypatch.setattr(module, "ROOT", root)
+    monkeypatch.setattr(module.secrets, "randbelow", lambda _: 1)
+    sent = _intercept(module, monkeypatch)
+
+    module._plant(root / "projects" / "новый")
+
+    assert "выбирать их НЕЛЬЗЯ" not in sent[0]

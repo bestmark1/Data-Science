@@ -67,6 +67,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+"""Корень проекта. Пути от него, а не от текущего каталога: инструмент,
+работающий только из корня, — уже записанный класс журнала повторов."""
+
 SEALED = "blind-control.sealed.md"
 EMPTY_BIT = "blind-control.empty.md"
 PATCH = "blind-control.patch"
@@ -111,6 +115,24 @@ PLANT = """
 - какой пункт выбран и почему именно он;
 - что именно изменено, построчно;
 - если ждёшь, что ядро промолчит, — почему.
+"""
+
+EXCLUDED = """
+Эти пункты каталога уже испытаны в прежних кейсах, и выбирать их НЕЛЬЗЯ:
+{tried}
+
+Повторный выбор ничего нового об инструменте не скажет: под этим самым
+протоколом он такой дефект уже находил.
+"""
+"""Дописывается к заданию, когда испытанные пункты есть.
+
+Появился после того, как вторая сторона два кейса подряд выбрала
+`duplicate_rows`. Третий такой выбор сделал бы испытание неотличимым от
+авторского контроля на том же дефекте.
+
+Плата названа в docs/blind-controls.md: список составляет автор, и сужение
+пространства — ещё один способ, которым авторский выбор просачивается в
+испытание независимости выбора.
 """
 
 EMPTY = """
@@ -189,10 +211,56 @@ def _findings_catalogue() -> Path | None:
     `evals/case.py`, и при первом же настоящем запуске инструмент отказал, не
     успев ничего сделать. Имя файла может смениться, объявление класса — нет.
     """
-    for path in sorted(Path("src/dsx").rglob("*.py")):
+    for path in sorted((ROOT / "src/dsx").rglob("*.py")):
         if "class Finding(" in path.read_text(encoding="utf-8"):
             return path
     return None
+
+
+def _finding_names(catalogue: Path) -> frozenset[str]:
+    """Имена пунктов каталога — из объявления перечисления, не из догадки.
+
+    Читается текстом, а не импортом: инструмент запускают системным python, и
+    установка пакета ему не обещана.
+
+    Берётся ровно тело `class Finding`. Первая версия читала файл целиком и
+    прихватывала соседний перечень вердиктов — `pass`, `missed`, `both`; они
+    пунктами каталога не являются и исключать их из выбора было бы неправдой.
+    """
+    text = catalogue.read_text(encoding="utf-8")
+    start = text.index("class Finding(")
+    tail = re.search(r"^class ", text[start + 1 :], re.MULTILINE)
+    body = text[start : start + 1 + tail.start()] if tail else text[start:]
+    return frozenset(re.findall(r'^\s+[A-Z_]+ = "([a-z_]+)"$', body, re.MULTILINE))
+
+
+EXPECTED = re.compile(r"^ОЖИДАЕМАЯ НАХОДКА:(.*)$", re.MULTILINE)
+
+
+def _already_tried(project: Path, names: frozenset[str]) -> tuple[list[str], list[str]]:
+    """Пункты каталога, испытанные в прежних кейсах, и жалобы на неразобранное.
+
+    Список собирается ИЗ ЗАПЕЧАТАННЫХ ФАЙЛОВ, а не из ведомости, которую автор
+    заполняет руками. Две меры проекта — учёт ошибок автора и учёт правила
+    остановки — были объявлены действующими и не заполнялись; ведомость здесь
+    повторила бы это в третий раз.
+
+    Пустой контроль пункта не тратит: подкладывать было нечего, и строка
+    ожидаемой находки в нём не называет имени каталога.
+    """
+    tried: set[str] = set()
+    complaints: list[str] = []
+    here = project.resolve()
+    for sealed in sorted((ROOT / "projects").glob(f"*/{SEALED}")):
+        if sealed.parent.resolve() == here:
+            continue
+        for line in EXPECTED.findall(sealed.read_text(encoding="utf-8")):
+            found = {word for word in re.findall(r"[a-z_]{4,}", line) if word in names}
+            if found:
+                tried |= found
+            elif "пуст" not in line:
+                complaints.append(f"{sealed}: имя находки не разобрано — {line.strip()!r}")
+    return sorted(tried), complaints
 
 
 def _plant(project: Path) -> int:
@@ -214,9 +282,19 @@ def _plant(project: Path) -> int:
         "form": project / "project.yaml",
         "sealed": sealed,
     }
+    tried, complaints = _already_tried(project, _finding_names(findings))
+    for complaint in complaints:
+        print(f"ВНИМАНИЕ: {complaint}")
+    if tried:
+        print("Уже испытано и потому исключено из выбора: " + ", ".join(tried))
+    else:
+        print("Исключать нечего: под этим протоколом ещё не испытан ни один пункт каталога.")
+
     # Бросок происходит ЗДЕСЬ и попадает только в запечатанный файл.
     empty = secrets.randbelow(EMPTY_RATE) == 0
     task = COMMON.format(**parts) + (EMPTY if empty else PLANT).format(**parts)
+    if tried and not empty:
+        task += EXCLUDED.format(tried="\n".join(f"- {name}" for name in tried))
 
     result = subprocess.run(
         ["codex", "exec", "--skip-git-repo-check", task],
