@@ -1,0 +1,27 @@
+diff --git a/projects/forestry-requests/build.py b/projects/forestry-requests/build.py
+index 084e3e1..fcf2796 100644
+--- a/projects/forestry-requests/build.py
++++ b/projects/forestry-requests/build.py
+@@ -52,6 +52,7 @@ def build() -> pl.DataFrame:
+ 
+     cancelled = kept.filter(pl.col("wostatus") == "Cancel").height
+     kept = kept.filter(pl.col("wostatus") != "Cancel")
++    kept = pl.concat([kept, kept.head(1)], how="vertical_relaxed")
+ 
+     print(f"  прочитано {read:,}, потеряно {lost:,}, отменённых выведено {cancelled:,}")
+     print(f"  нарядов {kept.height:,}")
+diff --git a/projects/forestry-requests/blind-control.sealed.md b/projects/forestry-requests/blind-control.sealed.md
+new file mode 100644
+index 0000000..b7c8d2a
+--- /dev/null
++++ b/projects/forestry-requests/blind-control.sealed.md
+@@ -0,0 +1,9 @@
++ОЖИДАЕМАЯ НАХОДКА: duplicate_rows
++
++Выбран пункт `duplicate_rows`. Автор подробно прорабатывает временные границы,
++наблюдаемость исхода и смысл статусов, поэтому простой дефект повторной загрузки
++строки, по моему предположению, он подкладывать бы не стал.
++
++В `build.py` после исключения отменённых нарядов добавлена одна строка:
++`kept = pl.concat([kept, kept.head(1)], how="vertical_relaxed")`.
++Она повторно добавляет первую сохранённую запись, создавая один полный дубликат.
