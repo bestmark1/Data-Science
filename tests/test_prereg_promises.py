@@ -143,6 +143,53 @@ def _broken_controls(block: dict, form) -> list[str]:
     return broken
 
 
+GROUNDS_FROM_CASE = 19
+"""Кейс, с которого контроль обязан объявлять основание применимости.
+
+Задним числом правило не применяется: пре-регистрации 13–18 опечатаны без него,
+и переписывать опечатанное — тот самый подбор под результат.
+"""
+
+CASE_NUMBER = re.compile(r"prereg-case-(\d+)\.md$")
+COUNTED = re.compile(r"^counted:.*\d")
+
+
+def _groundless_controls(block: dict) -> list[str]:
+    """Контроли, о применимости которых ничего не объявлено.
+
+    Счёт по кейсам 8–18, где контроли объявлялись: хотя бы один оказался
+    НЕПРИМЕНИМ в шести кейсах из одиннадцати — 10, 11, 12, 15, 17, 18. Каждый
+    раз это был контроль, опиравшийся на свойство данных, —
+    «отсутствие, записанное значением», «строки с исходом раньше приёма», — то
+    есть надежда, а не действие. Автор объявлял его до данных и узнавал после
+    сбора, что подкладывать было нечего.
+
+    Механизм сверки §5 такого не видел: он проверяет ИСПОЛНИМОСТЬ — свободна ли
+    роль, — и молчит о ПРИМЕНИМОСТИ, которая живёт в значениях.
+
+    Отсюда два законных основания, и третьего нет:
+
+    * `plant` — контроль вносится действием автора и применим по построению;
+    * `counted: ...` — контроль опирается на свойство данных, и это свойство
+      сосчитано ДО опечатывания. Счёт без числа счётом не является.
+
+    Контроль, для которого ни то ни другое невозможно, не объявляется вовсе:
+    объявленный, он тратит место в §5 и создаёт видимость испытания.
+    """
+    groundless: list[str] = []
+    for control in block.get("controls", []):
+        basis = str(control.get("basis", "")).strip()
+        if basis == "plant":
+            continue
+        if COUNTED.match(basis):
+            continue
+        groundless.append(
+            f"{control['name']}: основание применимости не объявлено ({basis!r}); "
+            "нужно 'plant' либо 'counted: <счёт с числом, сделанный до опечатывания>'"
+        )
+    return groundless
+
+
 def _unknown_findings(block: dict) -> list[str]:
     """Контроли, ждущие того, чего ядро находить не умеет."""
     known = {finding.value for finding in Finding}
@@ -363,3 +410,80 @@ def test_a_control_about_a_column_the_form_lacks_is_reported(form) -> None:
     assert broken == [
         "К-1: требует 'number_of_alarms' ролью 'feature', а в формуляре не объявлена вовсе"
     ]
+
+
+# --- Основание применимости контроля ----------------------------------------
+
+CONTROL_PLANTED = """
+```yaml
+project: fire-response
+controls:
+  - {name: К-1, column: at_night, role: feature, expect: value_revised_after_decision,
+     basis: plant}
+```
+"""
+
+CONTROL_COUNTED = """
+```yaml
+project: fire-response
+controls:
+  - {name: К-2, expect: sentinel_as_value,
+     basis: "counted: 'None' в районах — 121 строка, счёт до опечатывания"}
+```
+"""
+
+CONTROL_HOPEFUL = """
+```yaml
+project: fire-response
+controls:
+  - {name: К-2, expect: sentinel_as_value}
+```
+"""
+
+CONTROL_COUNT_WITHOUT_A_NUMBER = """
+```yaml
+project: fire-response
+controls:
+  - {name: К-2, expect: sentinel_as_value, basis: "counted: такие значения в данных есть"}
+```
+"""
+
+
+def test_a_planted_control_needs_no_count() -> None:
+    """Контроль, вносимый действием, применим по построению."""
+    assert not _groundless_controls(_declared_block(CONTROL_PLANTED))
+
+
+def test_a_counted_control_is_grounded_by_its_number() -> None:
+    """Контроль о свойстве данных законен, когда свойство сосчитано заранее."""
+    assert not _groundless_controls(_declared_block(CONTROL_COUNTED))
+
+
+def test_a_hopeful_control_is_reported() -> None:
+    """Контроль без основания — надежда, и в шести кейсах из одиннадцати она не сбылась."""
+    groundless = _groundless_controls(_declared_block(CONTROL_HOPEFUL))
+
+    assert len(groundless) == 1
+    assert "основание применимости не объявлено" in groundless[0]
+
+
+def test_a_count_without_a_number_is_not_a_count() -> None:
+    """Утверждение требует показанного расчёта: «такие значения есть» им не является."""
+    assert len(_groundless_controls(_declared_block(CONTROL_COUNT_WITHOUT_A_NUMBER))) == 1
+
+
+def test_every_control_since_case_19_declares_its_grounds() -> None:
+    """Рабочий путь: пре-регистрации с девятнадцатого кейса обязаны нести основание.
+
+    Прежние опечатаны без этого правила и задним числом не переписываются.
+    """
+    groundless: list[str] = []
+    for path in sorted(PREREGS.glob("prereg-case-*.md")):
+        number = CASE_NUMBER.search(path.name)
+        if number is None or int(number.group(1)) < GROUNDS_FROM_CASE:
+            continue
+        block = _declared_block(path.read_text(encoding="utf-8"))
+        if block is None:
+            continue
+        groundless += [f"{path.name}: {item}" for item in _groundless_controls(block)]
+    assert not groundless, "; ".join(groundless)
