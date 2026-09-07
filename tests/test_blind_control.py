@@ -317,7 +317,7 @@ def _intercept(module, monkeypatch) -> list[str]:
 
     class _Done:
         returncode = 1
-        stdout = ""
+        stdout = stderr = ""
 
     def _run(argv, **kwargs):
         sent.append(argv[-1])
@@ -359,3 +359,60 @@ def test_nothing_is_excluded_when_nothing_was_tried(tmp_path, monkeypatch) -> No
     module._plant(root / "projects" / "новый")
 
     assert "выбирать их НЕЛЬЗЯ" not in sent[0]
+
+
+# --- Отказ второй стороны, названный вслух -----------------------------------
+#
+# Девятнадцатый кейс: исчерпанный лимит и процесс, повисший на чтении stdin,
+# выглядели одинаково — «ОТКАЗ: код 1». Час ушёл на то, чтобы их различить.
+
+
+def test_a_technical_refusal_is_named() -> None:
+    """Причина, которую можно назвать, называется заранее написанной фразой."""
+    module = _tool()
+
+    assert "лимит" in module._technical_cause("ERROR: You've hit your usage limit.")
+    assert "ввода" in module._technical_cause("Reading additional input from stdin...")
+    assert "авторизована" in module._technical_cause("not authenticated")
+
+
+def test_an_unknown_refusal_does_not_leak_the_stream() -> None:
+    """Отрицательный контроль: чужой текст наружу не выходит.
+
+    В потоке мог быть патч. Печатается фраза о нераспознанной причине, а не то,
+    что вторая сторона написала.
+    """
+    module = _tool()
+    said = module._technical_cause("diff --git a/build.py b/build.py\n+подлог")
+
+    assert "diff" not in said
+    assert "подлог" not in said
+    assert "не распознана" in said
+
+
+def test_the_second_party_is_called_with_a_closed_stdin(tmp_path, monkeypatch) -> None:
+    """Codex CLI при живом stdin ждёт ввода и висит, пока его не убьют.
+
+    Задание передаётся аргументом, читать ему нечего. Проверка достижимости:
+    без закрытого ввода слепой контроль не состоится ни разу.
+    """
+    import subprocess
+
+    module = _tool()
+    root = _repo(tmp_path)
+    monkeypatch.setattr(module, "ROOT", root)
+    monkeypatch.setattr(module.secrets, "randbelow", lambda _: 1)
+    seen: list[object] = []
+
+    class _Done:
+        returncode = 1
+        stdout = stderr = ""
+
+    def _run(argv, **kwargs):
+        seen.append(kwargs.get("stdin"))
+        return _Done()
+
+    monkeypatch.setattr(module.subprocess, "run", _run)
+    module._plant(root / "projects" / "новый")
+
+    assert seen == [subprocess.DEVNULL]

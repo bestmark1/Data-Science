@@ -263,6 +263,35 @@ def _already_tried(project: Path, names: frozenset[str]) -> tuple[list[str], lis
     return sorted(tried), complaints
 
 
+TECHNICAL = (
+    ("usage limit", "лимит второй стороны исчерпан — контроль не состоялся"),
+    ("stdin", "вторая сторона ждала ввода: запуск с открытым stdin"),
+    ("not found", "второй стороны нет на рабочем пути"),
+    ("authenticat", "вторая сторона не авторизована"),
+    ("rate limit", "вторая сторона ограничила частоту запросов"),
+)
+"""Технические причины отказа, которые можно назвать вслух.
+
+Причина отказа НЕ печаталась вовсе: в жалобах инструмента мог оказаться текст
+патча, а прочитав его, автор перестал бы быть слепым. Плата за молчание
+обнаружилась в девятнадцатом кейсе — исчерпанный лимит и повисший на вводе
+процесс выглядели одинаково, и час ушёл на то, чтобы их различить.
+
+Список узкий намеренно: печатается ЗАРАНЕЕ НАПИСАННАЯ фраза, а не строка из
+вывода второй стороны. Совпадение ищется по слову, которое не может быть частью
+патча к построителю кейса.
+"""
+
+
+def _technical_cause(*streams: str) -> str:
+    """Назвать техническую причину отказа, не показывая вывода."""
+    haystack = " ".join(streams).lower()
+    for token, said in TECHNICAL:
+        if token in haystack:
+            return f"  причина: {said}"
+    return "  причина не распознана; читать поток нельзя — в нём мог быть патч"
+
+
 def _plant(project: Path) -> int:
     sealed = project / SEALED
     if sealed.exists():
@@ -300,9 +329,15 @@ def _plant(project: Path) -> int:
         ["codex", "exec", "--skip-git-repo-check", task],
         capture_output=True,
         text=True,
+        # Закрытый ввод обязателен. Codex CLI 0.153 при живом stdin печатает
+        # «Reading additional input from stdin...» и ждёт — в фоне это висит,
+        # пока кто-нибудь не убьёт процесс. Задание передано аргументом, читать
+        # ему нечего, и молчаливое ожидание выглядело отказом инструмента.
+        stdin=subprocess.DEVNULL,
     )
     if result.returncode != 0:
         print(f"ОТКАЗ: вторая сторона завершилась с кодом {result.returncode}")
+        print(_technical_cause(result.stderr, result.stdout))
         return 1
 
     patch = _extract_patch(result.stdout)
