@@ -183,3 +183,36 @@ def test_recurrence_ledger_does_not_overpromise() -> None:
 
     assert "не все" in ledger.lower(), "журнал не оговаривает своей неполноты"
     assert "Три слоя защиты" in ledger, "не сказано, чем защищено то, чего в журнале нет"
+
+
+def test_every_case_makes_the_core_answer_as_the_case_says() -> None:
+    """Стенд прогоняется ЯДРОМ, а не сверкой объявлений с объявлениями.
+
+    Прежде набор проверял `caught_by` — пометку автора кейса о том, какое
+    требование его ловит, — и ни разу не запускал по миру кейса сами проверки.
+    Пометка есть объявление, и объявление, которое можно проверить, обязано
+    проверяться: иначе кейс, переставший заставлять проверку сработать,
+    остаётся в наборе зелёным.
+
+    Девятнадцатый кейс показал цену. Проверка N14 не находила групповой уровень
+    крупнее десяти объектов на группу; кейс `undeclared-group` в наборе был, был
+    помечен `caught_by={"N14"}` — и слепота дожила до настоящих данных, где
+    съела положительный контроль.
+
+    Здесь каждый мир строится, проходит через ВСЕ проверки, и вердикт выносится
+    механически: заложенное сравнивается с найденным.
+    """
+    from harness import report_for
+
+    failures = []
+    for bundle in ALL:
+        found = frozenset(signal.finding for signal in report_for(bundle).signals)
+        outcome = judge(bundle.case, found)
+        if not outcome.ok:
+            failures.append(
+                f"{bundle.id}: {outcome.verdict.value}"
+                f", не найдено {sorted(f.value for f in outcome.missed)}"
+                f", лишнее {sorted(f.value for f in outcome.unexpected)}"
+            )
+
+    assert not failures, "; ".join(failures)
