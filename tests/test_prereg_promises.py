@@ -78,9 +78,33 @@ def _declared_block(text: str) -> dict | None:
     return merged or None
 
 
+def _lost_bets(block: dict) -> dict[str, str]:
+    """Обещания, объявленные ПРОИГРАВШИМИ, и причина каждого.
+
+    Обещание §3а — ставка, и пре-регистрация называет её ставкой прямо. Ставка,
+    которая не может проиграть, ставкой не является: механизм, требующий, чтобы
+    все обещания исполнились, запрещает их давать о том, чего автор не знает, —
+    а именно о таком их и дают.
+
+    Двадцатый кейс: `location_type` обещан признаком, а оказался следствием
+    исхода — значение «Well (Construction Report)» означает, что запись создана
+    по отчёту о строительстве. Ядро нашло связь силой 0.50 при типичной 0.03.
+    Исполнить обещание значило бы оставить утечку в выборке.
+
+    Запись о проигрыше вносится ПОСЛЕ кейса отдельным блоком и опечатанного
+    объявления не трогает. Обеспеченность проверяется так же, как у отговорки
+    контроля: объявить ставку проигравшей можно, только когда формуляр
+    действительно разошёлся с ней.
+    """
+    return {
+        item["column"]: str(item.get("reason", "")).strip() for item in block.get("lost_bets", [])
+    }
+
+
 def _unfulfilled(block: dict, form) -> list[str]:
     """Обещания, которых формуляр не исполнил."""
     declared = {column.name: column for column in form.columns}
+    lost = _lost_bets(block)
     broken: list[str] = []
     # Пре-регистрация вправе не давать обещаний о колонках и дать одни контроли:
     # блоки живут в разных параграфах и друг друга не требуют.
@@ -91,9 +115,16 @@ def _unfulfilled(block: dict, form) -> list[str]:
             broken.append(f"{name!r} обещана, но в формуляре не объявлена вовсе")
             continue
         if "role" in promise and column.role.value != promise["role"]:
+            if name in lost and lost[name]:
+                continue  # ставка объявлена проигравшей, и причина записана
             broken.append(
                 f"{name!r} обещана ролью {promise['role']!r}, а объявлена {column.role.value!r}"
             )
+        elif name in lost:
+            # Проигрыш объявлен там, где расхождения нет. Отговорка, прикрывающая
+            # исполненное обещание, — то же необеспеченное объявление, что и у
+            # контролей: она снимает вопрос, не ответив на него.
+            broken.append(f"{name!r} объявлена проигравшей ставкой, но формуляр обещание ИСПОЛНИЛ")
         if "direction" in promise:
             actual = column.direction.value if column.direction else None
             if actual != promise["direction"]:
@@ -104,6 +135,27 @@ def _unfulfilled(block: dict, form) -> list[str]:
     return broken
 
 
+def _spent_controls(block: dict) -> dict[str, str]:
+    """Контроли, отработавшие и снятые с колонки, и исход каждого.
+
+    Контроль живёт ОДИН прогон: он вносится в формуляр, ядро о нём возражает,
+    после чего роль возвращается на место и делается чистый прогон. Объявление
+    же остаётся в пре-регистрации навсегда, и сверка, не знающая о снятии,
+    краснеет вечно — начиная со следующего дня после кейса.
+
+    До двадцатого кейса этого не замечали: контроли кейса 19 колонок не
+    называли, а кейсы 13 и 18 объявили свои неисполнимыми. Здесь К-2 назвал
+    колонку, отработал и был снят — и сверка потребовала вернуть его обратно.
+
+    Обеспеченность та же, что у отговорки: объявить контроль отработавшим
+    можно, только если формуляр действительно с ним разошёлся.
+    """
+    return {
+        item["name"]: str(item.get("outcome", "")).strip()
+        for item in block.get("spent_controls", [])
+    }
+
+
 def _broken_controls(block: dict, form) -> list[str]:
     """Контроли §5, которых формуляр не исполнил.
 
@@ -111,6 +163,7 @@ def _broken_controls(block: dict, form) -> list[str]:
     объявлении, и формуляру исполнять нечего.
     """
     declared = {column.name: column for column in form.columns}
+    spent = _spent_controls(block)
     broken: list[str] = []
     for control in block.get("controls", []):
         name = control["name"]
@@ -122,6 +175,11 @@ def _broken_controls(block: dict, form) -> list[str]:
         actual = column.role.value if column is not None else None
         excuse = control.get("unfulfilled")
         if actual == wanted:
+            if spent.get(name):
+                broken.append(
+                    f"{name}: объявлен отработавшим и снятым, но {column_name!r} "
+                    f"ВСЁ ЕЩЁ объявлена ролью {wanted!r} — снятие не обеспечено"
+                )
             if excuse:
                 # Отговорка, прикрывающая исполнимый контроль, страшнее
                 # неисполненного контроля: она объявляет невозможность, которой
@@ -130,6 +188,8 @@ def _broken_controls(block: dict, form) -> list[str]:
                     f"{name}: объявлен неисполнимым ({excuse!r}), но {column_name!r} "
                     f"ДЕЙСТВИТЕЛЬНО объявлена ролью {wanted!r} — отговорка не обеспечена"
                 )
+        elif spent.get(name):
+            continue  # контроль отработал и снят с колонки, исход записан
         elif not excuse:
             # Колонки может не быть вовсе — построитель волен её переименовать, и
             # ядро о переименовании не знает. Сказать про такую «объявлена None»
@@ -487,3 +547,104 @@ def test_every_control_since_case_19_declares_its_grounds() -> None:
             continue
         groundless += [f"{path.name}: {item}" for item in _groundless_controls(block)]
     assert not groundless, "; ".join(groundless)
+
+
+# --- Проигравшая ставка и отработавший контроль ------------------------------
+#
+# Двадцатый кейс: обещание §3а названо ставкой, а механизм требовал, чтобы все
+# ставки выигрывали. Контроль живёт один прогон, а объявление о нём — вечно.
+
+LOST_BET = """
+```yaml
+project: fire-response
+promises:
+  - {column: at_night, role: observation_reason}
+lost_bets:
+  - {column: at_night, reason: "проиграна: колонка оказалась следствием исхода"}
+```
+"""
+
+LOST_BET_WITHOUT_REASON = """
+```yaml
+project: fire-response
+promises:
+  - {column: at_night, role: observation_reason}
+lost_bets:
+  - {column: at_night}
+```
+"""
+
+BET_DECLARED_LOST_BUT_KEPT = """
+```yaml
+project: fire-response
+promises:
+  - {column: at_night, role: feature}
+lost_bets:
+  - {column: at_night, reason: "проиграна"}
+```
+"""
+
+
+def test_a_lost_bet_with_a_reason_is_silent(form) -> None:
+    """Ставка вправе проиграть: иначе её нельзя делать о неизвестном."""
+    assert not _unfulfilled(_declared_block(LOST_BET), form)
+
+
+def test_a_lost_bet_without_a_reason_is_reported(form) -> None:
+    """Проигрыш без причины — объявление, которое ничего не объясняет."""
+    broken = _unfulfilled(_declared_block(LOST_BET_WITHOUT_REASON), form)
+
+    assert len(broken) == 1
+    assert "обещана ролью" in broken[0]
+
+
+def test_a_bet_declared_lost_while_kept_is_reported(form) -> None:
+    """Отрицательный контроль: проигрыш объявлен там, где расхождения нет.
+
+    Такая запись снимает вопрос, не ответив на него, — то же необеспеченное
+    объявление, что и отговорка у исполнимого контроля.
+    """
+    broken = _unfulfilled(_declared_block(BET_DECLARED_LOST_BUT_KEPT), form)
+
+    assert len(broken) == 1
+    assert "формуляр обещание ИСПОЛНИЛ" in broken[0]
+
+
+SPENT_CONTROL = """
+```yaml
+project: fire-response
+controls:
+  - {name: К-1, column: at_night, role: observation_reason,
+     expect: value_revised_after_decision, basis: plant}
+spent_controls:
+  - {name: К-1, outcome: "сработал и снят: колонка возвращена в feature"}
+```
+"""
+
+SPENT_CONTROL_STILL_IN_PLACE = """
+```yaml
+project: fire-response
+controls:
+  - {name: К-1, column: at_night, role: feature,
+     expect: value_revised_after_decision, basis: plant}
+spent_controls:
+  - {name: К-1, outcome: "сработал и снят"}
+```
+"""
+
+
+def test_a_spent_control_is_silent(form) -> None:
+    """Контроль отработал, роль возвращена — сверке возражать не о чем."""
+    assert not _broken_controls(_declared_block(SPENT_CONTROL), form)
+
+
+def test_a_control_declared_spent_while_still_in_place_is_reported(form) -> None:
+    """Отрицательный контроль: снятие объявлено, а контроль стоит.
+
+    Тогда прогон идёт с внесённым дефектом, а отчёт называет его снятым — и
+    измеренное описывает испорченную выборку.
+    """
+    broken = _broken_controls(_declared_block(SPENT_CONTROL_STILL_IN_PLACE), form)
+
+    assert len(broken) == 1
+    assert "снятие не обеспечено" in broken[0]
