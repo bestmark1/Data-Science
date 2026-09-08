@@ -381,11 +381,15 @@ def test_declared_group_overlap_is_measured() -> None:
 
 def test_category_is_not_mistaken_for_a_group() -> None:
     """Тип заведения — два десятка значений на тысячи объектов, это категория."""
+    from dsx.checks.split_checks import GroupDependence
     from dsx.split import group_candidates
 
     world = BY_ID["clean-baseline"].build()
+    check = GroupDependence()
 
-    assert "region" not in group_candidates(world), "мало значений на много объектов"
+    found = group_candidates(world, check.min_groups, check.min_share)
+
+    assert "region" not in found, "мало значений на много объектов"
 
 
 def test_no_group_level_is_reported_as_not_applicable() -> None:
