@@ -16,7 +16,10 @@ import ast
 import sys
 from pathlib import Path
 
-ROOT = Path("/Users/bestmark1/Data Science")
+ROOT = Path(__file__).resolve().parents[1]
+"""Корень проекта. Здесь стоял АБСОЛЮТНЫЙ путь к домашнему каталогу автора, и
+инструмент молча мерил не тот проект, стоило каталог перенести. Найдено при
+переносе проекта в другую папку — первый класс журнала повторов в чистом виде."""
 WATCHED = ("src/dsx", "tools")
 
 called: set[tuple[str, int]] = set()
