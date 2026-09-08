@@ -106,32 +106,47 @@ def _unfulfilled(block: dict, form) -> list[str]:
     declared = {column.name: column for column in form.columns}
     lost = _lost_bets(block)
     broken: list[str] = []
-    # Пре-регистрация вправе не давать обещаний о колонках и дать одни контроли:
-    # блоки живут в разных параграфах и друг друга не требуют.
+    promised = {promise["column"] for promise in block.get("promises", [])}
+
+    # Проигрыш, объявленный об обещании, которого не было. Проверку он не
+    # отключает, но остаётся записью, за которой ничего не стоит, — а такие
+    # записи проект запрещает наравне с ложными отговорками.
+    for name in lost:
+        if name not in promised:
+            broken.append(f"{name!r} объявлена проигравшей ставкой, но обещания о ней не было")
+
     for promise in block.get("promises", []):
         name = promise["column"]
         column = declared.get(name)
         if column is None:
             broken.append(f"{name!r} обещана, но в формуляре не объявлена вовсе")
             continue
+
+        # Расхождения считаются ПО ВСЕМ свойствам сразу, и лишь потом решается,
+        # прикрыто ли расхождение объявленным проигрышем. Прежняя версия
+        # смотрела только на роль: обещание, разошедшееся НАПРАВЛЕНИЕМ при
+        # верной роли, она объявляла исполненным — то есть выдавала ложную
+        # тревогу о самом проигрыше и молчала о настоящем расхождении.
+        differences: list[str] = []
         if "role" in promise and column.role.value != promise["role"]:
-            if name in lost and lost[name]:
-                continue  # ставка объявлена проигравшей, и причина записана
-            broken.append(
+            differences.append(
                 f"{name!r} обещана ролью {promise['role']!r}, а объявлена {column.role.value!r}"
             )
-        elif name in lost:
-            # Проигрыш объявлен там, где расхождения нет. Отговорка, прикрывающая
-            # исполненное обещание, — то же необеспеченное объявление, что и у
-            # контролей: она снимает вопрос, не ответив на него.
-            broken.append(f"{name!r} объявлена проигравшей ставкой, но формуляр обещание ИСПОЛНИЛ")
         if "direction" in promise:
             actual = column.direction.value if column.direction else None
             if actual != promise["direction"]:
-                broken.append(
+                differences.append(
                     f"{name!r} обещана направлением {promise['direction']!r}, "
                     f"а объявлена {actual!r}"
                 )
+
+        if lost.get(name):
+            if not differences:
+                broken.append(
+                    f"{name!r} объявлена проигравшей ставкой, но формуляр обещание ИСПОЛНИЛ"
+                )
+            continue  # ставка объявлена проигравшей, и причина записана
+        broken += differences
     return broken
 
 
@@ -154,6 +169,27 @@ def _spent_controls(block: dict) -> dict[str, str]:
         item["name"]: str(item.get("outcome", "")).strip()
         for item in block.get("spent_controls", [])
     }
+
+
+def _controls_without_verdict(block: dict) -> list[str]:
+    """Снятые контроли, чей исход записан только прозой.
+
+    `outcome` — человеческий текст, и «сработал» с «промолчал» для машины в нём
+    одинаковы. Контроль К-2 двадцатого кейса промолчал; проза это говорит,
+    учёту правила остановки — нечем прочитать.
+
+    Отсюда обязательное `fired: true|false` рядом с прозой. Оно не заменяет
+    объяснения и не проверяет его правдивость — оно делает исход СЧИТЫВАЕМЫМ,
+    чтобы «контроль снят» перестало быть неотличимо от «контроль сработал».
+    """
+    missing: list[str] = []
+    for item in block.get("spent_controls", []):
+        if not isinstance(item.get("fired"), bool):
+            missing.append(
+                f"{item['name']}: снятие объявлено, но не сказано, СРАБОТАЛ ли контроль — "
+                "нужно поле fired: true|false рядом с outcome"
+            )
+    return missing
 
 
 def _broken_controls(block: dict, form) -> list[str]:
@@ -648,3 +684,97 @@ def test_a_control_declared_spent_while_still_in_place_is_reported(form) -> None
 
     assert len(broken) == 1
     assert "снятие не обеспечено" in broken[0]
+
+
+# --- Обходы, найденные проверкой механизма после кейса 20 --------------------
+#
+# Оба состояния ниже механизм пропускал: первое молча, второе — с ложным
+# сигналом о том, что обещание исполнено.
+
+LOST_BET_WITHOUT_A_PROMISE = """
+```yaml
+project: fire-response
+promises:
+  - {column: at_night, role: feature}
+lost_bets:
+  - {column: чего-не-обещали, reason: "проиграна"}
+```
+"""
+
+LOST_BET_ON_DIRECTION = """
+```yaml
+project: fire-response
+promises:
+  - {column: at_night, role: feature, direction: decreases}
+lost_bets:
+  - {column: at_night, reason: "проиграна: связь оказалась обратной"}
+```
+"""
+
+
+def test_a_lost_bet_about_a_promise_never_made_is_reported(form) -> None:
+    """Запись о проигрыше там, где ставки не делали, ничего не прикрывает.
+
+    Проверку она не отключает, но остаётся объявлением, за которым не стоит
+    ничего, — и такие записи проект запрещает наравне с ложными отговорками.
+    """
+    broken = _unfulfilled(_declared_block(LOST_BET_WITHOUT_A_PROMISE), form)
+
+    assert len(broken) == 1
+    assert "обещания о ней не было" in broken[0]
+
+
+def test_a_bet_lost_by_direction_is_silent(form) -> None:
+    """Ставка проигрывается любым свойством, не только ролью.
+
+    Прежняя версия смотрела на роль: при верной роли и разошедшемся направлении
+    она объявляла обещание ИСПОЛНЕННЫМ — то есть выдавала ложную тревогу о
+    проигрыше и молчала о настоящем расхождении.
+    """
+    assert not _unfulfilled(_declared_block(LOST_BET_ON_DIRECTION), form)
+
+
+SPENT_WITHOUT_FIRED = """
+```yaml
+project: fire-response
+spent_controls:
+  - {name: К-1, outcome: "снят после прогона"}
+```
+"""
+
+SPENT_WITH_FIRED = """
+```yaml
+project: fire-response
+spent_controls:
+  - {name: К-1, outcome: "промолчал: находка недостижима при этом объявлении", fired: false}
+```
+"""
+
+
+def test_a_spent_control_must_say_whether_it_fired() -> None:
+    """«Снят» не должно быть неотличимо от «сработал».
+
+    Контроль К-2 двадцатого кейса промолчал, и это сказано прозой. Учёту
+    правила остановки прозу не прочитать, а условие 2 держится именно на том,
+    сработали ли контроли.
+    """
+    missing = _controls_without_verdict(_declared_block(SPENT_WITHOUT_FIRED))
+
+    assert len(missing) == 1
+    assert "СРАБОТАЛ ли контроль" in missing[0]
+
+
+def test_a_spent_control_with_a_verdict_is_silent() -> None:
+    """Промолчавший контроль записывается промолчавшим, и это законно."""
+    assert not _controls_without_verdict(_declared_block(SPENT_WITH_FIRED))
+
+
+def test_every_spent_control_in_the_docs_says_whether_it_fired() -> None:
+    """Рабочий путь: все записи о снятии в пре-регистрациях несут исход."""
+    missing: list[str] = []
+    for path in sorted(PREREGS.glob("prereg-case-*.md")):
+        block = _declared_block(path.read_text(encoding="utf-8"))
+        if block is None:
+            continue
+        missing += [f"{path.name}: {item}" for item in _controls_without_verdict(block)]
+    assert not missing, "; ".join(missing)
