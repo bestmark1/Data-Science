@@ -55,7 +55,23 @@ def build() -> pl.DataFrame:
     lost = read - kept.height
     duplicated = kept.height - kept.unique().height
 
+    # Отсутствие, записанное значением. Ядро нашло четыре колонки: 'NA' в
+    # `current_status` (124 строки — это был контроль К-1) и пустые строки в
+    # `associated_uses`, `associated_aquifers`, `wdid`. Пустое поле CSV читается
+    # пустой строкой, и дальше она идёт значением наравне с прочими.
+    sentinels = {"current_status": "NA", "associated_uses": "", "associated_aquifers": "", "wdid": ""}
+    cleaned = {
+        name: kept.filter(pl.col(name) == value).height for name, value in sentinels.items()
+    }
+    kept = kept.with_columns(
+        [
+            pl.when(pl.col(name) == value).then(None).otherwise(pl.col(name)).alias(name)
+            for name, value in sentinels.items()
+        ]
+    )
+
     print(f"  прочитано {read:,}, потеряно {lost:,}")
+    print(f"  заглушек вычищено: {cleaned}")
     print(f"  полных дубликатов в наборе: {duplicated:,} — НЕ убраны, это дефект источника")
     print(f"  разрешений: {kept.height:,}")
 

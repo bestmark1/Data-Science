@@ -14,8 +14,14 @@
 
 title: "Колорадо: будет ли скважина построена до истечения разрешения"
 
-observed_until: 2025-06-01T00:00:00
-observed_until_source: "популяция кончается 2022-12-31; срок разрешения — два года по нормативу DWR, то есть последнее истечение приходится на конец 2024 года. Полгода запаса на то, чтобы отчёт о строительстве успел попасть в выгрузку от 2026-09-08"
+# ИСПРАВЛЕНО ПО СИГНАЛУ ЯДРА. Объявлялось 2025-06-01 — «два года от последнего
+# разрешения плюс полгода запаса». Ядро возразило `label_immaturity`: у 2.1%
+# объектов окна w2 и 4.8% резерва исход к этому моменту не наблюдаем. Причина
+# в том, что у части разрешений срок продлён и уходит за два года, а выгрузка
+# сделана 2026-09-08 и знает об исходах до самого этого дня. Прежнее число
+# отбрасывало сведения, которые в данных есть.
+observed_until: 2026-06-01T00:00:00
+observed_until_source: "выгрузка сделана 2026-09-08 и содержит отчёты о строительстве вплоть до этой даты; три месяца отняты на запаздывание отчёта. Прежнее объявление 2025-06-01 исходило из норматива в два года и не учитывало продлённых разрешений — ядро назвало это `label_immaturity`"
 
 # --- ДОПУЩЕНИЯ ---------------------------------------------------------------
 
@@ -61,7 +67,11 @@ columns:
 
   # Признаки, известные в момент выдачи разрешения.
   - {name: county, role: feature, availability: at_decision, source_of_claim: "округ участка", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
-  - {name: location_type, role: feature, availability: at_decision, source_of_claim: "вид записи о местоположении", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
+  # ОБЕЩАНИЕ §3а НАРУШЕНО, и это работа механизма, а не его отказ. Колонка
+  # обещана признаком; ядро нашло связь с исходом силой 0.50 при типичной 0.03
+  # среди остальных. Значение «Well (Construction Report)» означает, что запись
+  # создана ПО ОТЧЁТУ О СТРОИТЕЛЬСТВЕ, то есть после исхода. Ставка проиграна.
+  - {name: location_type, role: ignored}
   - {name: div, role: feature, availability: at_decision, source_of_claim: "водный округ штата", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
   - {name: wd, role: feature, availability: at_decision, source_of_claim: "водный район", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
   - {name: denver_basin_aquifer, role: feature, availability: at_decision, source_of_claim: "относится ли водоносный горизонт к Денверскому бассейну", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
@@ -70,9 +80,13 @@ columns:
   - {name: associated_uses, role: feature, availability: at_decision, source_of_claim: "разрешённое назначение воды", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
   - {name: elev, role: feature, availability: at_decision, source_of_claim: "высота участка", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
 
-  # КОНТРОЛЬ К-2: установка насоса происходит ПОСЛЕ бурения, то есть заведомо
-  # позже выдачи разрешения. Объявлена признаком момента выдачи.
-  - {name: pump_installed, role: feature, availability: at_decision, temporal: instant, source_of_claim: "дата установки насоса", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
+  # Был контролем К-2, и он НЕ СРАБОТАЛ — по вине объявления, а не ядра.
+  # Проверка S10 сравнивает объявленный момент фиксации с моментом решения и
+  # пропускает случай, когда они совпадают: «значение зафиксировано в момент
+  # решения: пересмотра нет». Контроль требовал `value_revised_after_decision`
+  # от объявления `value_as_of: permit_issued`, при котором проверка молчит по
+  # построению. Предел назван в её же докстринге. Разбор — в вердикте.
+  - {name: pump_installed, role: ignored, temporal: instant}
 
   # Известны только после бурения либо не относятся к задаче.
   - {name: well_plugged, role: ignored, temporal: instant}
@@ -113,6 +127,21 @@ outcome:
        assumption: "заброшенной называют и построенную скважину, выведенную из работы, и участок, где бурение бросили. Различить по выгрузке нечем — вопрос владельцу данных"}
     - {name: "срок разрешения продлён", meaning: not_occurred, status_value: "Permit Extended",
        assumption: "продление означает, что к исходному сроку не построили. Оговорка: продлённый срок мог заместить исходный прямо в колонке `permit_expires`, и тогда объявленный срок известен НЕ в момент выдачи — это проверит ядро"}
+    # Пять статусов ниже добавлены ПОСЛЕ отказа ядра: оно назвало их поимённо и
+    # отказалось считать метку, пока смысл каждого не объявлен. Ошибка автора в
+    # формуляре, найденная ядром, — P-7 в действии. Все пять редки (15 строк на
+    # 33 852), и это не делает пропуск простительным: ядро не знает, редкая
+    # причина или частая, оно знает лишь, что она НЕ ОБЪЯВЛЕНА.
+    - {name: "разрешение выдано, работы не начаты", meaning: not_occurred, status_value: "Permit Issued",
+       assumption: "7 строк: разрешение действует, отчёта о строительстве нет. К сроку не построено"}
+    - {name: "построена, но момент постройки не записан", meaning: unobserved, status_value: "Well Constructed",
+       assumption: "1 строка: статус говорит о постройке, а даты нет. Считать её построенной к сроку значило бы выдумать время, а непостроенной — назвать сделанную работу несделанной. Тот же случай, что 43 657 нарядов восемнадцатого кейса"}
+    - {name: "насос установлен, отчёта о строительстве нет", meaning: unobserved, status_value: "Pump Installed, No Construction Info Received",
+       assumption: "1 строка: насос ставят на готовую скважину, значит бурение было, но момента его взять неоткуда"}
+    - {name: "запрошена проверка после строительства", meaning: unobserved, status_value: "Post Construction Review Requested",
+       assumption: "1 строка: проверку после строительства запрашивают по построенной скважине, а даты постройки в записи нет"}
+    - {name: "сведения в связанных квитанциях", meaning: excluded, status_value: "See Associated Receipts",
+       assumption: "5 строк: запись отсылает к другим квитанциям и собственных сведений о постройке не несёт. Считать её исходом значило бы считать один объект дважды"}
     - {name: "состояние не записано", meaning: unobserved, status_value: "NA",
        assumption: "КОНТРОЛЬ К-1: отсутствие записано строкой 'NA' у 124 строк и построителем не вычищается"}
 
