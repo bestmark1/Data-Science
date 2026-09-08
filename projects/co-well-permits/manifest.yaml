@@ -1,0 +1,9 @@
+source: 'Колорадо: разрешения на бурение скважин (DWR)'
+license: открытые данные штата Колорадо (объявлено источником)
+url: https://data.colorado.gov/d/wumm-7awb
+retrieved_at: '2026-09-08'
+files:
+- name: well_permits_2018_2022.csv
+  sha256: fa5042cca370ada790ea549fcf92c68456370c4fe6b1f4f620aa24636e443ef0
+  bytes: 10155827
+derived: []

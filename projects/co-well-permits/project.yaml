@@ -1,0 +1,140 @@
+# ФОРМА ДВАДЦАТОГО КЕЙСА
+#
+# Предсказывается: будет ли скважина построена до истечения разрешения.
+#
+# ГЛАВНОЕ ОТЛИЧИЕ ОТ ВСЕХ ПРЕЖНИХ КЕЙСОВ: срок не вычисляется построителем.
+# `permit_expires` — колонка источника, и роль `deadline` впервые достаётся ей,
+# а не выражению «момент решения плюс N суток».
+#
+# В ПЕРВОМ ПРОГОНЕ присутствуют оба контроля §5 пре-регистрации:
+#   К-1: заглушка 'NA' в `current_status` (124 строки) не вычищается.
+#        Ожидается `sentinel_as_value`. Применимость сосчитана до опечатывания.
+#   К-2: `pump_installed` объявлен признаком момента выдачи.
+#        Ожидается `value_revised_after_decision`: насос ставят после бурения.
+
+title: "Колорадо: будет ли скважина построена до истечения разрешения"
+
+observed_until: 2025-06-01T00:00:00
+observed_until_source: "популяция кончается 2022-12-31; срок разрешения — два года по нормативу DWR, то есть последнее истечение приходится на конец 2024 года. Полгода запаса на то, чтобы отчёт о строительстве успел попасть в выгрузку от 2026-09-08"
+
+# --- ДОПУЩЕНИЯ ---------------------------------------------------------------
+
+assumptions:
+  - statement: "моментом решения является выдача разрешения"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "если владелец подаёт заявку задолго до выдачи, часть ожидания выпадает из счёта: набор хранит `receipt` (номер квитанции), но даты подачи в нём нет"
+
+  - statement: "срок берётся из колонки источника, а не назначается автором"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "`permit_expires` заполнена у 70% разрешений периода, и популяция сужена до них. Цена сужения сосчитана до опечатывания: среди разрешений со сроком построено 68.3%, без срока 72.6% — отбор смещает на четыре пункта в сторону непостроенных"
+
+  - statement: "полные дубликаты строк построителем НЕ убираются"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "7 451 строка из 33 852 (22.0%) полностью совпадает с другой — все двадцать восемь колонок, включая номер квитанции. Это дефект выгрузки, и ядро обязано назвать его само; убрать их построителем значило бы спрятать дефект от проверки, ради которой она заведена"
+
+  - statement: "срок в два года оказался щедрым, и задача близка к «построят ли вообще»"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "среди построенных скважин 99.8% уложились в срок. Значит различие между «построено» и «построено в срок» почти нулевое, и метрика меряет факт постройки, а не соблюдение срока. Это свойство ДАННЫХ, а не ошибка объявления: срок взят из источника и не подбирался"
+
+  - statement: "признаки, известные только после бурения, объявлены ignored"
+    basis: domain_knowledge
+    author: "автор"
+    consequence: "`well_depth`, `yield`, `static_water_level` и перфорация обсадной колонны заполнены лишь у построенных скважин и по построению предсказывают исход. Объявить их признаками значило бы внести утечку; они выведены из выборки"
+
+# --- СХЕМА -------------------------------------------------------------------
+
+columns:
+  - {name: receipt, role: entity_id}
+  - {name: permit, role: natural_key}
+  - {name: permit_issued, role: decision_time, temporal: instant}
+  - {name: well_constructed, role: event_time, temporal: instant}
+  - {name: permit_expires, role: deadline, temporal: instant, value_as_of: permit_issued}
+  - {name: current_status, role: status}
+
+  # Обещано пре-регистрацией §3а: вид разрешения определяет и порядок
+  # рассмотрения, и то, как скоро владелец берётся за бурение.
+  - {name: permit_category, role: observation_reason}
+
+  # Признаки, известные в момент выдачи разрешения.
+  - {name: county, role: feature, availability: at_decision, source_of_claim: "округ участка", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
+  - {name: location_type, role: feature, availability: at_decision, source_of_claim: "вид записи о местоположении", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
+  - {name: div, role: feature, availability: at_decision, source_of_claim: "водный округ штата", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
+  - {name: wd, role: feature, availability: at_decision, source_of_claim: "водный район", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
+  - {name: denver_basin_aquifer, role: feature, availability: at_decision, source_of_claim: "относится ли водоносный горизонт к Денверскому бассейну", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
+  - {name: designated_basin, role: feature, availability: at_decision, source_of_claim: "назначенный бассейн подземных вод", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
+  - {name: management_district, role: feature, availability: at_decision, source_of_claim: "район управления подземными водами", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
+  - {name: associated_uses, role: feature, availability: at_decision, source_of_claim: "разрешённое назначение воды", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
+  - {name: elev, role: feature, availability: at_decision, source_of_claim: "высота участка", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
+
+  # КОНТРОЛЬ К-2: установка насоса происходит ПОСЛЕ бурения, то есть заведомо
+  # позже выдачи разрешения. Объявлена признаком момента выдачи.
+  - {name: pump_installed, role: feature, availability: at_decision, temporal: instant, source_of_claim: "дата установки насоса", window_lookback_days: 0, window_source: "выгрузка DWR", value_as_of: permit_issued}
+
+  # Известны только после бурения либо не относятся к задаче.
+  - {name: well_plugged, role: ignored, temporal: instant}
+  - {name: _1st_beneficial_use, role: ignored, temporal: instant}
+  - {name: static_water_level_date, role: ignored, temporal: instant}
+  - {name: modified, role: ignored, temporal: instant}
+  - {name: well_depth, role: ignored}
+  - {name: top_perforated_casing, role: ignored}
+  - {name: bottom_perforated_casing, role: ignored}
+  - {name: yield, role: ignored}
+  - {name: static_water_level, role: ignored}
+  - {name: associated_aquifers, role: ignored}
+  - {name: wdid, role: ignored}
+
+# --- КОНТРАКТ ИСХОДА ---------------------------------------------------------
+
+outcome:
+  event_column: well_constructed
+  deadline_column: permit_expires
+  comparison: direct
+  positive_class: event_within_deadline
+  event_name: "постройка скважины"
+  deadline_name: "истечение разрешения"
+  degenerate_beyond: 0.05
+
+  # ОЖИДАНИЕ И ДОПУСК (N13), объявлены ДО данных.
+  expected_positive_rate: 0.60
+  expected_within: 0.25
+
+  missing_causes:
+    - {name: "разрешение истекло", meaning: not_occurred, status_value: "Permit Expired",
+       assumption: "срок вышел, отчёт о строительстве не подан — скважина к сроку не построена, а не потеряна из записи"}
+    - {name: "разрешение истекло, насос установлен", meaning: unobserved, status_value: "Permit Expired (Pump Installed)",
+       assumption: "насос ставят на построенную скважину, значит бурение было; отчёта о строительстве при этом нет, и момента постройки взять неоткуда"}
+    - {name: "разрешение отменено", meaning: excluded, status_value: "Permit Canceled",
+       assumption: "владелец отказался от разрешения; спрашивать о сроке постройки того, что решили не строить, бессмысленно"}
+    - {name: "скважина заброшена", meaning: unobserved, status_value: "Well Abandoned",
+       assumption: "заброшенной называют и построенную скважину, выведенную из работы, и участок, где бурение бросили. Различить по выгрузке нечем — вопрос владельцу данных"}
+    - {name: "срок разрешения продлён", meaning: not_occurred, status_value: "Permit Extended",
+       assumption: "продление означает, что к исходному сроку не построили. Оговорка: продлённый срок мог заместить исходный прямо в колонке `permit_expires`, и тогда объявленный срок известен НЕ в момент выдачи — это проверит ядро"}
+    - {name: "состояние не записано", meaning: unobserved, status_value: "NA",
+       assumption: "КОНТРОЛЬ К-1: отсутствие записано строкой 'NA' у 124 строк и построителем не вычищается"}
+
+# --- ТИП ЗАДАЧИ --------------------------------------------------------------
+
+task:
+  target_kind: binary
+  outcome_timing: delayed
+  has_process: true
+  is_stream: true
+  object_lifetime: recurring
+
+# --- СПЛИТ -------------------------------------------------------------------
+# Отсчёт от 2018-01-01. Период — 1 826 дней (пять лет).
+#
+# Первое окно сдвинуто на полгода: обучающая часть окна есть всё, что стало
+# известно ДО его начала, и в день 0 прошлого нет.
+
+split:
+  windows:
+    - {name: w0, start_day: 180, stop_day: 730}      # 2018-06-30 .. 2020-01-01
+    - {name: w1, start_day: 730, stop_day: 1190}     # 2020-01-01 .. 2021-04-05
+    - {name: w2, start_day: 1190, stop_day: 1560}    # 2021-04-05 .. 2022-04-10
+  reserve_from_day: 1560                             # 2022-04-10
+  reserve_until_day: 1826                            # 2022-12-31
