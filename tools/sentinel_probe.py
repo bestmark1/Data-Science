@@ -67,10 +67,23 @@ def _get(url: str):
     raise RuntimeError("недостижимо")
 
 
-def columns(host: str, dataset: str) -> list[str]:
-    """Все колонки набора — по объявлению источника, а не по выбору автора."""
+def columns(host: str, dataset: str) -> tuple[list[str], list[str]]:
+    """Все колонки набора — по объявлению источника, а не по выбору автора.
+
+    Кроме служебных. Socrata подмешивает собственные поля вида
+    `:@computed_region_nku6_53ud` и `:id`: они вычисляются платформой, данными
+    набора не являются и заглушек нести не могут.
+
+    Первое настоящее применение пробы на этом и споткнулось: имя со скобкой и
+    двоеточием не проходило проверку, и программа завершалась, не сосчитав
+    ничего. Отсеиваются они ЯВНО и называются вслух — молчаливый пропуск
+    колонки неотличим от пропуска по недосмотру, а именно из-за недосмотра в
+    списке колонок проба и понадобилась.
+    """
     meta = _get(f"https://{host}/api/views/{dataset}.json")
-    return [column["fieldName"] for column in meta["columns"]]
+    names = [column["fieldName"] for column in meta["columns"]]
+    own = [name for name in names if not name.startswith(":")]
+    return own, [name for name in names if name.startswith(":")]
 
 
 def counts(host: str, dataset: str, where: str, names: list[str]) -> dict[str, int]:
@@ -105,8 +118,10 @@ def main() -> int:
     decided = _valid(args.decided)
     where = f"{decided} >= '{args.since}' and {decided} < '{args.until}'"
 
-    names = columns(args.host, args.dataset)
+    names, service = columns(args.host, args.dataset)
     print(f"колонок в наборе: {len(names)}")
+    if service:
+        print(f"служебных колонок источника пропущено: {len(service)} ({', '.join(service)})")
     print(f"значений в списке заглушек ядра: {len(SENTINELS)}")
 
     found = counts(args.host, args.dataset, where, names)

@@ -47,3 +47,36 @@ def test_a_column_name_that_could_break_the_query_is_refused() -> None:
     for bad in ("name'; drop", "name)", "name value", ""):
         with pytest.raises(SystemExit):
             module._valid(bad)
+
+
+def test_service_columns_are_skipped_and_said_aloud(monkeypatch) -> None:
+    """Socrata подмешивает свои поля, и на них проба падала.
+
+    `:@computed_region_nku6_53ud` в наборе двадцатого кейса завершал программу
+    до первого счёта: имя со скобкой и двоеточием не проходит проверку, а
+    проверка завершает работу. Проба была испытана накануне на наборе из
+    семнадцати обычных колонок, где служебных полей не было, — шестой случай
+    класса «механизм не проверен на достижимость».
+
+    Служебные поля отсеиваются явно и называются вслух: молчаливый пропуск
+    колонки неотличим от недосмотра, а проба заведена именно против недосмотра
+    в списке колонок.
+    """
+    module = _tool()
+    monkeypatch.setattr(
+        module,
+        "_get",
+        lambda url: {
+            "columns": [
+                {"fieldName": "permit"},
+                {"fieldName": ":@computed_region_nku6_53ud"},
+                {"fieldName": "county"},
+                {"fieldName": ":id"},
+            ]
+        },
+    )
+
+    own, service = module.columns("data.colorado.gov", "wumm-7awb")
+
+    assert own == ["permit", "county"]
+    assert service == [":@computed_region_nku6_53ud", ":id"]
