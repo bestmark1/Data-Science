@@ -58,3 +58,49 @@ def test_sensitive_paths_are_ignored(path: str) -> None:
 )
 def test_tracked_paths_are_not_ignored(path: str) -> None:
     assert not _is_ignored(path), f"{path} игнорируется, хотя должен попадать в git"
+
+
+# --- Команда проверок не смеет запускать исследование ------------------------
+
+CHECK = REPO_ROOT / "tools" / "check.py"
+
+FORBIDDEN = (
+    "acquire",  # сбор данных: сеть и объём
+    "model.py",  # обучение: долго и не про контракт репозитория
+    "blind_control",  # слепой контроль: тратит лимит второй стороны
+    "threshold_mutation",  # мутация: ПРАВИТ файлы ядра
+    "codex",  # внешняя модель
+    "urllib",  # сеть в любом виде
+    "requests",
+)
+
+
+def test_the_check_command_runs_no_research() -> None:
+    """Команда проверок читает репозиторий и ничего не исследует.
+
+    Соблазн дописать в неё мутационный прогон или запуск кейса велик: всё это
+    «тоже проверки». Но мутация ПРАВИТ файлы ядра, слепой контроль тратит
+    внешний лимит, а сбор данных лезет в сеть — и тогда команда, которую
+    запускают перед коммитом, начнёт менять то, что проверяет.
+    """
+    text = CHECK.read_text(encoding="utf-8")
+    code = "\n".join(line for line in text.splitlines() if not line.strip().startswith("#")).split(
+        '"""'
+    )[-1]
+
+    found = [word for word in FORBIDDEN if word in code]
+
+    assert not found, f"команда проверок обзавелась исследовательскими вызовами: {found}"
+
+
+def test_the_check_command_reports_pending_separately() -> None:
+    """`pending` не должен теряться среди `passed`.
+
+    Обещание, чей формуляр ещё не написан, не нарушено и не исполнено. Слить его
+    с успехом значило бы сказать, что проверять нечего, — а проверять просто
+    ещё нечего.
+    """
+    text = CHECK.read_text(encoding="utf-8")
+
+    assert "pending" in text
+    assert "НЕ успех" in text, "команда обязана сказать, что pending успехом не является"
