@@ -97,3 +97,64 @@ def test_every_recent_case_is_in_the_author_error_ledger() -> None:
 
     missing = sorted(with_verdict - counted)
     assert not missing, f"кейс проведён, а в учёте ошибок автора его нет: {missing}"
+
+
+# --- Handoff для другой модели ----------------------------------------------
+#
+# Файл читает модель, которая не была в переписке. Устарев, он не просто
+# бесполезен — он врёт тому, кто не может его проверить.
+
+HANDOFF = DOCS / "handoff.md"
+
+CASES_DONE = re.compile(r"Кейсов проведено: (\d+)")
+BENCH = re.compile(r"(\d+) кейса, (\d+) требований из (\d+) покрыто, (\d+) отрицательных контролей")
+
+
+def test_handoff_names_the_last_case() -> None:
+    """Номер последнего кейса сверяется с вердиктами, а не с памятью автора."""
+    text = HANDOFF.read_text(encoding="utf-8")
+    declared = CASES_DONE.search(text)
+    assert declared, "в handoff не найдено число проведённых кейсов"
+
+    latest = max(int(m.group(1)) for path in DOCS.iterdir() if (m := VERDICT.match(path.name)))
+
+    assert int(declared.group(1)) == latest, (
+        f"handoff говорит о {declared.group(1)} кейсах, а последний вердикт — {latest}-й"
+    )
+
+
+def test_handoff_bench_numbers_match_a_direct_count() -> None:
+    """Счёт стенда в шапке — тот же, что у реестра.
+
+    Эти три числа меняются от каждой правки ядра, и именно они первыми
+    устаревают в документе, который пишут руками.
+    """
+    from dsx.checks import ALL_CHECKS
+    from dsx.evals.registry import ALL, NEGATIVE_CONTROLS
+
+    required = {check.requirement for check in ALL_CHECKS}
+    covered = {name for bundle in ALL for name in bundle.case.expectation.caught_by}
+
+    declared = BENCH.search(HANDOFF.read_text(encoding="utf-8"))
+    assert declared, "в handoff не найден счёт стенда или он записан иначе"
+    got = tuple(int(number) for number in declared.groups())
+
+    assert got == (len(ALL), len(required & covered), len(required), len(NEGATIVE_CONTROLS)), (
+        "числа стенда в handoff разошлись с прямым счётом"
+    )
+
+
+def test_handoff_keeps_what_was_rejected() -> None:
+    """Раздел отвергнутого — то, ради чего файл заведён.
+
+    Возражение владельца при проектировании: без него другой агент предложит
+    решение, которое уже разбирали и закрыли, и потратит на это токены. Пустой
+    раздел неотличим от отсутствующего.
+    """
+    text = HANDOFF.read_text(encoding="utf-8")
+
+    assert "## Отвергнутое" in text, "в handoff нет раздела отвергнутых решений"
+    body = text.split("## Отвергнутое", 1)[1].split("\n## ", 1)[0]
+    rows = [line for line in body.splitlines() if line.startswith("| ") and "---" not in line]
+
+    assert len(rows) > 1, "раздел отвергнутого пуст: одна шапка таблицы без строк"
