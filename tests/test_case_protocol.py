@@ -20,14 +20,15 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from protocol import OutOfOrder, preflight, save_control_run  # noqa: E402
+from protocol import OutOfOrder, guarded, preflight, save_control_run  # noqa: E402
 from protocol.preflight import (  # noqa: E402
     CONTROL_RUN,
     EMPTY_BIT,
     FROM_CASE,
     SEALED,
-    _control_columns,
+    _control_roles,
     _form_identity,
+    control_states,
     declared,
     fired_against_the_control_run,
     fired_against_the_ledger,
@@ -763,12 +764,19 @@ def test_conflicting_project_declarations_are_refused(tmp_path) -> None:
     assert "повторено с другим значением" in str(отказ.value)
 
 
-def test_the_check_command_keeps_the_cause_of_a_long_collection_error(monkeypatch, capsys) -> None:
+def test_the_check_command_keeps_the_cause_of_a_long_collection_error(
+    monkeypatch, capsys, tmp_path
+) -> None:
     """Регрессия, которую прошлый раз ЗАБЫЛИ перенести, вопреки отчёту.
 
     Причина ошибки сборки стоит в начале вывода, а хвост занимают
     предупреждения. Прежняя версия печатала последние 4000 знаков и теряла имя
     отсутствующего модуля — то самое, ради чего диагностику и чинили.
+
+    Корень подменён на временный. Прежде тест писал лог в КОРЕНЬ РЕПОЗИТОРИЯ и
+    затем удалял его: настоящий `.check-collection-error.log`, оставшийся от
+    неудачного прогона, уничтожался запуском набора. Замечено третьим ревью как
+    побочный эффект. Проверка не смеет трогать рабочее дерево.
     """
     import importlib.util
 
@@ -783,12 +791,14 @@ def test_the_check_command_keeps_the_cause_of_a_long_collection_error(monkeypatc
     )
     answers = iter([(2, вывод), (0, "All checks passed!")])
     monkeypatch.setattr(check, "_run", lambda argv: next(answers))
+    monkeypatch.setattr(check, "ROOT", tmp_path)
 
     assert check.main() == 1
     напечатано = capsys.readouterr().out
 
     assert "missing_fixture_module" in напечатано, "первопричина потеряна в хвосте"
-    (ROOT / ".check-collection-error.log").unlink(missing_ok=True)
+    assert (tmp_path / ".check-collection-error.log").is_file(), "полный вывод не сохранён"
+    assert not (ROOT / ".check-collection-error.log").exists(), "проверка написала в рабочее дерево"
 
 
 def test_a_prereg_without_a_declared_project_is_refused(tmp_path) -> None:
@@ -842,7 +852,7 @@ def test_a_lawful_removal_does_not_change_the_form_fingerprint(tmp_path) -> None
     обязан ловить. Устойчивость хеша без неё означала бы просто слепой хеш.
     """
     project, prereg = _with_form(tmp_path, RICH_FORM)
-    columns = _control_columns(prereg)
+    columns = _control_roles(prereg)
     до = _form_identity(project / "project.yaml", columns)
 
     (project / "project.yaml").write_text(REMOVED, encoding="utf-8")
@@ -887,7 +897,7 @@ def test_any_other_change_to_the_form_is_caught(tmp_path, что: str, форм�
     (project / "project.yaml").write_text(форма, encoding="utf-8")
     prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True))
 
-    assert _form_identity(project / "project.yaml", _control_columns(prereg)) != read_control_run(
+    assert _form_identity(project / "project.yaml", _control_roles(prereg)) != read_control_run(
         project
     )["form"], f"отпечаток не заметил, что {что}"
 
@@ -914,13 +924,16 @@ def test_unreadable_evidence_stops_before_the_builder_and_names_the_cause(tmp_pa
 
     вызовов = 0
 
-    def build() -> None:
+    def build() -> str:
         nonlocal вызовов
         вызовов += 1
+        return "данные собраны"
 
+    # Через `guarded`, а не «preflight, а следующей строкой build». Вторая
+    # запись не проверяла ничего: исключение прерывает блок само, и счётчик
+    # остался бы нулевым при любой реализации preflight, включая пустую.
     with pytest.raises(OutOfOrder) as отказ:
-        preflight(project, prereg)
-        build()
+        guarded(project, prereg, build)
 
     assert вызовов == 0, "построитель вызван при нечитаемом доказательстве"
     assert "не текст в UTF-8" in str(отказ.value)
@@ -1011,7 +1024,7 @@ def test_the_evidence_lives_through_the_real_path(tmp_path) -> None:
         evidence["manifest"]
         == hashlib.sha256((project / "manifest.yaml").read_bytes()).hexdigest()[:12]
     )
-    assert evidence["form"] == _form_identity(project / "project.yaml", _control_columns(prereg))
+    assert evidence["form"] == _form_identity(project / "project.yaml", _control_roles(prereg))
 
     было = saved.read_bytes()
     assert save_control_run(project, prereg, []) is None, "первый прогон перезаписан вторым"
@@ -1024,3 +1037,114 @@ def test_the_evidence_lives_through_the_real_path(tmp_path) -> None:
 
     ложь = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(False))
     assert fired_against_the_control_run(project, ложь), "ложное «промолчал» не замечено"
+
+
+# --- Регрессии по ТРЕТЬЕМУ ревью 9 сентября ----------------------------------
+
+
+def test_the_builder_runs_when_the_order_is_kept(tmp_path) -> None:
+    """Положительный контроль к `guarded`: на подготовленном кейсе построитель ЗОВЁТСЯ.
+
+    Без него проверка «построитель не вызван» проходила бы и для обёртки,
+    которая не зовёт его никогда. Отрицательная половина без положительной
+    неотличима от сломанного механизма.
+    """
+    project, prereg = _with_form(tmp_path, RICH_FORM)
+    вызовов = 0
+
+    def build() -> str:
+        nonlocal вызовов
+        вызовов += 1
+        return "данные собраны"
+
+    assert guarded(project, prereg, build) == "данные собраны"
+    assert вызовов == 1
+
+
+def test_the_builder_is_not_reached_when_the_order_is_broken(tmp_path) -> None:
+    """И обратное на том же пути: слепого контроля нет — построитель не зовётся."""
+    project = _project(tmp_path, sealed=False, empty=False)
+    prereg = _prereg(tmp_path, "```yaml\nproject: проба\n```\n\n## 5а. Слепой контроль\n")
+    вызовов = 0
+
+    def build() -> None:
+        nonlocal вызовов
+        вызовов += 1
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, build)
+
+    assert вызовов == 0
+
+
+@pytest.mark.parametrize("роль", ["outcome", "decision_time", "weight"])
+def test_a_control_column_moved_to_another_role_is_not_a_removal(tmp_path, роль: str) -> None:
+    """Подмена роли контрольной колонки — не снятие, и отпечаток её обязан видеть.
+
+    Блокирующая находка третьего ревью: `_form_identity` опускала роль
+    контрольной колонки БЕЗУСЛОВНО, а `preflight` считал снятием всякое
+    несовпадение роли. Перевод `feature → outcome` проходил чистым прогоном, не
+    меняя отпечатка, — при том что смысл колонки менялся полностью.
+    """
+    project, prereg = _with_form(tmp_path, RICH_FORM)
+    save_control_run(project, prereg, ["sentinel_as_value"])
+
+    (project / "project.yaml").write_text(
+        RICH_FORM.replace("{name: at_night, role: feature}", f"{{name: at_night, role: {роль}}}"),
+        encoding="utf-8",
+    )
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True))
+
+    assert control_states(prereg, project / "project.yaml") == {"К-1": "изменён"}
+    assert _form_identity(project / "project.yaml", _control_roles(prereg)) != read_control_run(
+        project
+    )["form"], "отпечаток не заметил подмены роли"
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "не снятие контроля" in str(отказ.value)
+
+
+def test_a_control_removed_to_ignored_is_a_removal(tmp_path) -> None:
+    """Отрицательный контроль к предыдущему: `ignored` по-прежнему снятие."""
+    project, prereg = _with_form(tmp_path, RICH_FORM)
+    save_control_run(project, prereg, ["sentinel_as_value"])
+    (project / "project.yaml").write_text(REMOVED, encoding="utf-8")
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True))
+
+    assert control_states(prereg, project / "project.yaml") == {"К-1": "снят"}
+    preflight(project, prereg)
+
+
+def test_the_audit_checks_the_fingerprints_of_the_evidence(tmp_path) -> None:
+    """Обход обязан ловить доказательство с выдуманными отпечатками.
+
+    Прежде `audit_case_artifacts` их не читал вовсе: документ с `form: x` и
+    `manifest: y` проходил обход молча. `preflight` такое ловит, но зелёный
+    обход сам по себе о привязке доказательства к форме и данным не говорил.
+    """
+    from protocol.preflight import audit_case_artifacts
+
+    docs = tmp_path / "docs"
+    projects = tmp_path / "projects"
+    docs.mkdir()
+    project = projects / "проба"
+    (project / "report").mkdir(parents=True)
+    (project / "project.yaml").write_text(REMOVED, encoding="utf-8")
+    (project / "manifest.yaml").write_text("source: проба\n", encoding="utf-8")
+    (project / "report" / CONTROL_RUN).write_text(
+        "case: 21\nfindings: [sentinel_as_value]\nform: x\nmanifest: y\n", encoding="utf-8"
+    )
+    (docs / f"prereg-case-{FROM_CASE}.md").write_text(
+        "```yaml\nproject: проба\ncontrols:\n"
+        "  - {name: К-1, column: at_night, role: feature,\n"
+        "     expect: sentinel_as_value, basis: plant}\n"
+        "spent_controls:\n  - {name: К-1, fired: true, outcome: 'снят'}\n```\n",
+        encoding="utf-8",
+    )
+
+    problems = audit_case_artifacts(docs, projects)
+
+    assert any("отпечаток манифеста не совпадает" in item for item in problems), problems
+    assert any("получено на другой форме" in item for item in problems), problems

@@ -5,6 +5,6 @@
 всякого, кто возьмёт инструмент, вести исследование тем же способом.
 """
 
-from protocol.preflight import OutOfOrder, preflight, save_control_run
+from protocol.preflight import OutOfOrder, guarded, preflight, save_control_run
 
-__all__ = ["OutOfOrder", "preflight", "save_control_run"]
+__all__ = ["OutOfOrder", "guarded", "preflight", "save_control_run"]

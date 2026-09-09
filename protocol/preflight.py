@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import yaml
@@ -102,6 +102,41 @@ def declared(prereg: Path) -> dict:
     return merged
 
 
+REMOVED_ROLE = "ignored"
+"""Единственная роль, в которую контрольную колонку разрешено снять.
+
+Третье ревью показало, чем было «снятие — это всякое несовпадение роли»:
+перевод контрольной колонки `feature → outcome` считался снятием, отпечатка
+формы не менял и разрешал чистый прогон. Смысл колонки при этом менялся
+полностью. Разрешён ровно один переход, и он назван здесь.
+"""
+
+STANDING, REMOVED, CHANGED = "стоит", "снят", "изменён"
+
+
+def control_states(prereg: Path, form_path: Path) -> dict[str, str]:
+    """Состояние каждого объявленного контроля: стоит, снят или изменён.
+
+    Три состояния, а не два. Прежде их было два — «роль совпала» и «не
+    совпала», — и второе накрывало собой и законное снятие, и подмену роли на
+    любую другую. Подмена теперь называется своим именем и отвергается.
+    """
+    form = yaml.safe_load(form_path.read_text(encoding="utf-8")) or {}
+    roles = {column["name"]: column.get("role") for column in form.get("columns", [])}
+    states: dict[str, str] = {}
+    for control in declared(prereg).get("controls", []):
+        if not control.get("column"):
+            continue
+        роль = roles.get(control["column"])
+        if роль == control.get("role"):
+            states[control["name"]] = STANDING
+        elif роль == REMOVED_ROLE:
+            states[control["name"]] = REMOVED
+        else:
+            states[control["name"]] = CHANGED
+    return states
+
+
 def _controls_are_standing(prereg: Path, form_path: Path) -> bool:
     """Стоят ли контроли §5 в формуляре прямо сейчас.
 
@@ -109,28 +144,23 @@ def _controls_are_standing(prereg: Path, form_path: Path) -> bool:
     отдельно: `report.md` перезаписывается следующим же прогоном, и к моменту
     записи вердикта от контрольного прогона не остаётся ничего, кроме прозы.
     """
-    block = declared(prereg)
-    form = yaml.safe_load(form_path.read_text(encoding="utf-8"))
-    roles = {column["name"]: column.get("role") for column in form.get("columns", [])}
-    named = [c for c in block.get("controls", []) if c.get("column")]
-    if not named:
+    states = control_states(prereg, form_path)
+    if not states:
         return False
     # ВСЕ, а не любой. Прежняя версия брала `any`, и один поставленный контроль
     # выдавал за поставленные все: прогон с половиной контролей считался
     # контрольным, а вторая половина не испытывалась вовсе.
-    return all(roles.get(c["column"]) == c.get("role") for c in named)
+    return all(state == STANDING for state in states.values())
 
 
 def controls_partly_standing(prereg: Path, form_path: Path) -> list[str]:
-    """Контроли, объявленные с колонкой, но НЕ поставленные в формуляр."""
-    block = declared(prereg)
-    form = yaml.safe_load(form_path.read_text(encoding="utf-8"))
-    roles = {column["name"]: column.get("role") for column in form.get("columns", [])}
-    return [
-        c["name"]
-        for c in block.get("controls", [])
-        if c.get("column") and roles.get(c["column"]) != c.get("role")
-    ]
+    """Контроли, объявленные с колонкой, но НЕ стоящие в формуляре."""
+    return [name for name, state in control_states(prereg, form_path).items() if state != STANDING]
+
+
+def controls_changed_beyond_removal(prereg: Path, form_path: Path) -> list[str]:
+    """Контроли, чья колонка получила роль, не равную ни объявленной, ни `ignored`."""
+    return [name for name, state in control_states(prereg, form_path).items() if state == CHANGED]
 
 
 CONTRADICTIONS = {
@@ -182,6 +212,43 @@ def unreachable_controls(prereg: Path, form_path: Path) -> list[str]:
                 f"но {field}={decision!r} — {why}"
             )
     return broken
+
+
+def evidence_against_artifacts(project: Path, prereg: Path) -> list[str]:
+    """Отпечатки доказательства против НАСТОЯЩИХ файлов кейса.
+
+    Отдельной функцией, потому что читателей двое: `preflight` перед прогоном и
+    `audit_case_artifacts` при общей проверке. Третье ревью показало, зачем это
+    нужно: обход принимал доказательство с `form: x` и `manifest: y` и возвращал
+    пустой список. Зелёный обход при таком доказательстве не говорил о привязке
+    к форме и данным ничего.
+
+    Годность самого документа здесь НЕ проверяется — это забота вызывающего:
+    негодное доказательство и доказательство от другой формы суть разные отказы
+    и должны называться по-разному.
+    """
+    evidence = read_control_run(project)
+    if evidence is None:
+        return []
+    problems: list[str] = []
+    if evidence.get("case") != _case_number(prereg):
+        problems.append(
+            f"доказательство контрольного прогона относится к кейсу "
+            f"{evidence.get('case')!r}, а прогоняется {_case_number(prereg)!r} — "
+            "отчёт другого кейса снятия не разрешает"
+        )
+    if evidence.get("manifest") != _fingerprint(project / "manifest.yaml"):
+        problems.append(
+            "доказательство получено на других данных — отпечаток манифеста не совпадает; "
+            "контрольный прогон и чистый обязаны идти по одной выгрузке"
+        )
+    if evidence.get("form") != _form_identity(project / "project.yaml", _control_roles(prereg)):
+        problems.append(
+            "форма изменилась не только снятием контролей — доказательство получено на "
+            "другой форме; отпечаток слеп лишь к роли контрольной колонки, пока та равна "
+            f"объявленной либо {REMOVED_ROLE!r}"
+        )
+    return problems
 
 
 def fired_against_the_control_run(project: Path, prereg: Path) -> list[str]:
@@ -330,6 +397,19 @@ def preflight(project: Path, prereg: Path) -> None:
     evidence = read_control_run(project)
     named = [c["name"] for c in block.get("controls", []) if c.get("column")]
 
+    # ПОДМЕНА РОЛИ — не снятие. Проверяется до всех ветвей: она недопустима и на
+    # первом прогоне, и на чистом. Прежде «снятием» считалось всякое
+    # несовпадение роли, и `feature → outcome` проходил как снятие, не меняя
+    # отпечатка формы.
+    подменены = controls_changed_beyond_removal(prereg, project / "project.yaml")
+    if подменены:
+        raise OutOfOrder(
+            f"ОТКАЗ: контрольным колонкам {подменены} назначена роль, не равная ни "
+            f"объявленной в §5, ни {REMOVED_ROLE!r}. Это не снятие контроля, а смена "
+            "смысла колонки: прогон пойдёт по другой форме, чем объявлено. "
+            "Построитель не вызывался."
+        )
+
     # ПЕРЕХОДЫ. Проверяется не наличие файлов, а допустимость самого перехода.
     # Повторное ревью показало четыре состояния, которые прежняя версия
     # пропускала: половина контролей, чистый прогон без объявленного снятия,
@@ -348,27 +428,9 @@ def preflight(project: Path, prereg: Path) -> None:
                 "Снятие без прогона означает, что контроль пропущен. "
                 "Построитель не вызывался."
             )
-        if evidence.get("case") != number:
-            raise OutOfOrder(
-                f"ОТКАЗ: доказательство контрольного прогона относится к кейсу "
-                f"{evidence.get('case')!r}, а прогоняется {number}. Отчёт другого кейса "
-                "снятия не разрешает. Построитель не вызывался."
-            )
-        if evidence.get("manifest") != _fingerprint(project / "manifest.yaml"):
-            raise OutOfOrder(
-                "ОТКАЗ: доказательство получено на других данных — отпечаток манифеста "
-                "не совпадает. Контрольный прогон и чистый обязаны идти по одной "
-                "выгрузке. Построитель не вызывался."
-            )
-        if evidence.get("form") != _form_identity(
-            project / "project.yaml", _control_columns(prereg)
-        ):
-            raise OutOfOrder(
-                "ОТКАЗ: форма изменилась не только снятием контролей — доказательство "
-                "получено на другой форме. Отпечаток считается БЕЗ ролей контрольных "
-                "колонок, поэтому законное снятие его не меняет, а всякая иная правка "
-                "меняет. Построитель не вызывался."
-            )
+        расхождения = evidence_against_artifacts(project, prereg)
+        if расхождения:
+            raise OutOfOrder("ОТКАЗ: " + "; ".join(расхождения) + ". Построитель не вызывался.")
         if not missing:
             raise OutOfOrder(
                 "ОТКАЗ: объявлено снятие контролей, а в формуляре они всё ещё стоят. "
@@ -399,38 +461,60 @@ def preflight(project: Path, prereg: Path) -> None:
         )
 
 
+def guarded(project: Path, prereg: Path, build: Callable[[], object]) -> object:
+    """Штатный путь кейса: порядок проверяется, и лишь потом зовётся построитель.
+
+    ЗАЧЕМ ОТДЕЛЬНАЯ ФУНКЦИЯ. «Построитель не вызывается» до сих пор держалось на
+    дисциплине автора: он обязан был позвать `preflight` сам и раньше сборки.
+    Тест со счётчиком, ставивший вызов построителя строкой НИЖЕ `preflight`
+    внутри `pytest.raises`, не проверял ничего: исключение прерывает блок само,
+    и счётчик остался бы нулевым при любой реализации, включая пустую. Найдено
+    третьим ревью.
+
+    Здесь порядок задан кодом: `build` недостижим иначе как через `preflight`, и
+    это можно проверить обоими исходами — отказом и разрешением.
+
+    НАЗВАННЫЙ ПРЕДЕЛ. Ни один кейс этой функцией пока не пользуется: кейсы 2–20
+    старше механизма, двадцать первый не начат. И обход остаётся возможен —
+    построитель зовётся напрямую тем, у кого есть доступ к коду.
+    """
+    preflight(project, prereg)
+    return build()
+
+
 PROTOCOL_KEYS = ("controls", "promises", "spent_controls", "lost_bets", "predictions")
 
 
-def _form_identity(form_path: Path, control_columns: set[str]) -> str:
-    """Отпечаток формы БЕЗ ролей контрольных колонок.
+def _form_identity(form_path: Path, control_roles: dict[str, str]) -> str:
+    """Отпечаток формы, слепой РОВНО к одному разрешённому переходу.
 
     Законное снятие контроля меняет форму — и сравнивать её отпечаток целиком
     нельзя: чистый прогон обязан отличаться от контрольного. Но отличаться он
     обязан ТОЛЬКО этим.
 
-    Поэтому роли контрольных колонок из отпечатка исключаются. Он одинаков до и
-    после снятия и расходится при любой другой правке: добавленной колонке,
-    смене срока, другом сплите. Так доказательство привязано к форме, а переход
-    «контрольный → чистый» остаётся разрешённым.
+    Поэтому роль контрольной колонки опускается, но лишь пока она равна
+    объявленной либо `ignored`. Всякая другая роль в отпечаток входит и его
+    меняет. Прежняя версия опускала роль контрольной колонки БЕЗУСЛОВНО, и
+    перевод `feature → outcome` проходил как снятие — блокирующая находка
+    третьего ревью.
     """
     form = yaml.safe_load(form_path.read_text(encoding="utf-8")) or {}
-    columns = [
-        {
-            k: v
-            for k, v in column.items()
-            if not (column.get("name") in control_columns and k == "role")
-        }
-        for column in form.get("columns", [])
-    ]
+    columns = []
+    for column in form.get("columns", []):
+        объявленная = control_roles.get(column.get("name"))
+        снимаемая = объявленная is not None and column.get("role") in (объявленная, REMOVED_ROLE)
+        columns.append({k: v for k, v in column.items() if not (снимаемая and k == "role")})
     skeleton = {**{k: v for k, v in form.items() if k != "columns"}, "columns": columns}
     return hashlib.sha256(
         yaml.safe_dump(skeleton, allow_unicode=True, sort_keys=True).encode("utf-8")
     ).hexdigest()[:12]
 
 
-def _control_columns(prereg: Path) -> set[str]:
-    return {c["column"] for c in declared(prereg).get("controls", []) if c.get("column")}
+def _control_roles(prereg: Path) -> dict[str, str]:
+    """Колонка контроля → роль, которую §5 ей объявил."""
+    return {
+        c["column"]: c.get("role") for c in declared(prereg).get("controls", []) if c.get("column")
+    }
 
 
 def _fingerprint(path: Path) -> str:
@@ -471,7 +555,7 @@ def save_control_run(project: Path, prereg: Path, findings: Iterable[object]) ->
         yaml.safe_dump(
             {
                 "case": number,
-                "form": _form_identity(project / "project.yaml", _control_columns(prereg)),
+                "form": _form_identity(project / "project.yaml", _control_roles(prereg)),
                 "manifest": _fingerprint(project / "manifest.yaml"),
                 "findings": sorted(str(getattr(f, "value", f)) for f in findings),
             },
@@ -641,6 +725,9 @@ def audit_case_artifacts(docs: Path, projects: Path) -> list[str]:
         if not project.is_dir():
             continue  # формуляр ещё не написан: обещание не наступило
 
+        problems += [
+            f"{prereg.name}: {item}" for item in evidence_against_artifacts(project, prereg)
+        ]
         problems += [
             f"{prereg.name}: {item}" for item in fired_against_the_control_run(project, prereg)
         ]
