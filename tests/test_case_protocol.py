@@ -34,6 +34,7 @@ from protocol.preflight import (  # noqa: E402
     fired_against_the_ledger,
     lost_bets_against_verdict,
     read_control_run,
+    unreachable_controls,
 )
 
 FORM = """
@@ -46,7 +47,8 @@ CONTROLS = """
 ```yaml
 project: проба
 controls:
-  - {name: К-1, column: at_night, role: feature, expect: sentinel_as_value, basis: plant}
+  - {name: К-1, column: at_night, role: feature, clean_role: ignored,
+     expect: sentinel_as_value, basis: plant}
 ```
 """
 
@@ -254,7 +256,7 @@ CONTRADICTORY = """
 ```yaml
 project: проба
 controls:
-  - {name: К-2, column: pump_installed, role: feature,
+  - {name: К-2, column: pump_installed, role: feature, clean_role: ignored,
      expect: value_revised_after_decision, basis: plant}
 ```
 """
@@ -606,7 +608,7 @@ def test_the_audit_catches_a_contradiction_in_temporary_artifacts(tmp_path) -> N
     (project / "project.yaml").write_text(FORM, encoding="utf-8")
     (docs / f"prereg-case-{FROM_CASE}.md").write_text(
         "```yaml\nproject: проба\ncontrols:\n"
-        "  - {name: К-1, column: at_night, role: feature,\n"
+        "  - {name: К-1, column: at_night, role: feature, clean_role: ignored,\n"
         "     expect: sentinel_as_value, basis: plant}\n"
         "spent_controls:\n  - {name: К-1, fired: true, outcome: 'снят'}\n```\n",
         encoding="utf-8",
@@ -672,9 +674,10 @@ def test_only_part_of_the_controls_standing_is_refused(tmp_path) -> None:
     prereg = _prereg(
         tmp_path,
         _digests(project) + "\n```yaml\nproject: проба\ncontrols:\n"
-        "  - {name: К-1, column: at_night, role: feature,\n"
+        "  - {name: К-1, column: at_night, role: feature, clean_role: ignored,\n"
         "     expect: sentinel_as_value, basis: plant}\n"
-        "  - {name: К-2, column: chain, role: group_id, expect: undeclared_group, basis: plant}\n"
+        "  - {name: К-2, column: chain, role: group_id, clean_role: ignored,\n"
+        "     expect: undeclared_group, basis: plant}\n"
         "```\n",
     )
 
@@ -741,7 +744,7 @@ def test_a_protocol_block_without_project_is_refused(tmp_path) -> None:
         _digests(project)
         + "\n```yaml\nproject: проба\n```\n"
         + "\n```yaml\ncontrols:\n  - {name: К-1, column: at_night, role: feature,\n"
-        "     expect: sentinel_as_value, basis: plant}\n```\n",
+        "     clean_role: ignored, expect: sentinel_as_value, basis: plant}\n```\n",
     )
 
     with pytest.raises(OutOfOrder) as отказ:
@@ -798,7 +801,6 @@ def test_the_check_command_keeps_the_cause_of_a_long_collection_error(
 
     assert "missing_fixture_module" in напечатано, "первопричина потеряна в хвосте"
     assert (tmp_path / ".check-collection-error.log").is_file(), "полный вывод не сохранён"
-    assert not (ROOT / ".check-collection-error.log").exists(), "проверка написала в рабочее дерево"
 
 
 def test_a_prereg_without_a_declared_project_is_refused(tmp_path) -> None:
@@ -1138,7 +1140,7 @@ def test_the_audit_checks_the_fingerprints_of_the_evidence(tmp_path) -> None:
     )
     (docs / f"prereg-case-{FROM_CASE}.md").write_text(
         "```yaml\nproject: проба\ncontrols:\n"
-        "  - {name: К-1, column: at_night, role: feature,\n"
+        "  - {name: К-1, column: at_night, role: feature, clean_role: ignored,\n"
         "     expect: sentinel_as_value, basis: plant}\n"
         "spent_controls:\n  - {name: К-1, fired: true, outcome: 'снят'}\n```\n",
         encoding="utf-8",
@@ -1148,3 +1150,160 @@ def test_the_audit_checks_the_fingerprints_of_the_evidence(tmp_path) -> None:
 
     assert any("отпечаток манифеста не совпадает" in item for item in problems), problems
     assert any("получено на другой форме" in item for item in problems), problems
+
+
+# --- Регрессии по ЧЕТВЁРТОМУ ревью 9 сентября --------------------------------
+
+IGNORED_CONTROL = """
+```yaml
+project: проба
+controls:
+  - {name: К-1, column: at_night, role: ignored, clean_role: feature,
+     expect: sentinel_as_value, basis: plant}
+```
+"""
+
+HIDDEN = RICH_FORM.replace("{name: at_night, role: feature}", "{name: at_night, role: ignored}")
+
+
+def test_a_control_planted_as_ignored_has_a_lawful_way_back(tmp_path) -> None:
+    """`ignored` — законная РОЛЬ КОНТРОЛЯ, а не только маркер его снятия.
+
+    Спрятать колонку, которая должна быть признаком, — подложенный дефект: так
+    объявлен К-1 в `test_prereg_promises`. Прежняя версия зашивала снятие в
+    константу `ignored`, и такому контролю пути к состоянию «снят» не
+    оставалось вовсе: возврат колонки в `feature` отвергался как подмена роли.
+    Найдено четвёртым ревью.
+    """
+    project = _project(tmp_path)
+    (project / "project.yaml").write_text(HIDDEN, encoding="utf-8")
+    prereg = _prereg(tmp_path, _digests(project) + IGNORED_CONTROL)
+
+    assert control_states(prereg, project / "project.yaml") == {"К-1": "стоит"}
+    save_control_run(project, prereg, ["sentinel_as_value"])
+
+    # Снятие: колонка возвращается к честной роли — и это НЕ `ignored`.
+    (project / "project.yaml").write_text(RICH_FORM, encoding="utf-8")
+    prereg = _prereg(tmp_path, _digests(project) + IGNORED_CONTROL + _spent(True))
+
+    assert control_states(prereg, project / "project.yaml") == {"К-1": "снят"}
+    preflight(project, prereg)
+
+
+def test_a_control_without_a_clean_role_is_refused(tmp_path) -> None:
+    """Умолчание запрещено: без исходной роли снятие неотличимо от подмены.
+
+    Угадать честную роль колонки ядру нечем. `ignored` в качестве умолчания
+    совпадал бы с честным ответом в части случаев и молча врал бы в остальных —
+    ровно то, что правило «умолчание, совпадающее с честным ответом, запрещено»
+    и запрещает.
+    """
+    project = _project(tmp_path)
+    prereg = _prereg(
+        tmp_path,
+        _digests(project) + "\n```yaml\nproject: проба\ncontrols:\n"
+        "  - {name: К-1, column: at_night, role: feature,\n"
+        "     expect: sentinel_as_value, basis: plant}\n```\n",
+    )
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "без исходной роли" in str(отказ.value)
+    assert "К-1: нет `clean_role`" in str(отказ.value)
+
+
+def test_a_clean_role_equal_to_the_control_role_is_refused(tmp_path) -> None:
+    """Совпадение двух ролей делает стоящий контроль неотличимым от снятого."""
+    project = _project(tmp_path)
+    prereg = _prereg(
+        tmp_path,
+        _digests(project) + "\n```yaml\nproject: проба\ncontrols:\n"
+        "  - {name: К-1, column: at_night, role: feature, clean_role: feature,\n"
+        "     expect: sentinel_as_value, basis: plant}\n```\n",
+    )
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "совпадает с ролью контроля" in str(отказ.value)
+
+
+def test_a_role_swap_is_named_even_when_the_finding_is_also_unreachable(tmp_path) -> None:
+    """Подмена роли отвергается ДО проверки достижимости, как обещает спецификация.
+
+    Прежде `unreachable_controls` стоял первым, и подмена, совпавшая с
+    недостижимой находкой, получала отказ «недостижима». Отказ приходил —
+    но не тот, и вёл разбирающегося не туда.
+    """
+    project = _project(tmp_path)
+    (project / "project.yaml").write_text(
+        "columns:\n  - {name: received_at, role: decision_time}\n"
+        "  - {name: pump_installed, role: outcome, value_as_of: received_at}\n",
+        encoding="utf-8",
+    )
+    prereg = _prereg(tmp_path, _digests(project) + CONTRADICTORY)
+
+    состояния = control_states(prereg, project / "project.yaml")
+    assert состояния == {"К-2": "изменён"}
+    assert unreachable_controls(prereg, project / "project.yaml"), "случай перестал быть двойным"
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "не снятие контроля" in str(отказ.value)
+    assert "недостижим" not in str(отказ.value)
+
+
+def test_a_boolean_case_is_not_an_integer(tmp_path) -> None:
+    """`case: true` — не номер кейса, хотя `bool` в Python подкласс `int`.
+
+    Документ признавался годным, и отказ приходил позже и о другом: «относится
+    к кейсу True». Ветвь схемы обещала «case не целое» и обещания не исполняла.
+    """
+    project, prereg = _with_form(tmp_path, RICH_FORM)
+    save_control_run(project, prereg, ["sentinel_as_value"])
+    (project / "project.yaml").write_text(REMOVED, encoding="utf-8")
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True))
+    (project / "report" / CONTROL_RUN).write_text(
+        "case: true\nfindings: []\nform: a\nmanifest: b\n", encoding="utf-8"
+    )
+
+    assert read_control_run(project) is None
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "числового `case`" in str(отказ.value)
+
+
+def test_the_diagnostic_test_does_not_disturb_an_existing_log(monkeypatch, capsys, tmp_path):
+    """Законно лежащий лог неудачного прогона переживает запуск набора.
+
+    `.gitignore` хранит `.check-collection-error.log` между прогонами намеренно:
+    это диагностика последнего отказа. Прежняя проверка требовала его
+    ОТСУТСТВИЯ и падала, когда он законно есть, — то есть ровно тогда, когда
+    он нужнее всего. Найдено четвёртым ревью.
+    """
+    import importlib.util
+
+    лог = ROOT / ".check-collection-error.log"
+    было = лог.read_bytes() if лог.is_file() else None
+    подложено = "вывод прошлого неудачного прогона".encode()
+    лог.write_bytes(подложено)
+    try:
+        spec = importlib.util.spec_from_file_location("check", ROOT / "tools" / "check.py")
+        check = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(check)
+        monkeypatch.setattr(check, "_run", lambda argv: (2, "ImportError: нет модуля"))
+        monkeypatch.setattr(check, "ROOT", tmp_path)
+
+        assert check.main() == 1
+        capsys.readouterr()
+
+        assert лог.read_bytes() == подложено, "лог тронут проверкой"
+    finally:
+        if было is None:
+            лог.unlink(missing_ok=True)
+        else:
+            лог.write_bytes(было)
