@@ -21,7 +21,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 import yaml
@@ -149,15 +151,24 @@ def fired_against_the_control_run(project: Path, prereg: Path) -> list[str]:
         return []
     report = project / "report" / CONTROL_RUN
     if not report.is_file():
-        return [f"объявлено снятие контролей, а отчёта контрольного прогона нет: {report}"]
+        return [f"объявлено снятие контролей, а доказательства прогона нет: {report}"]
 
-    text = report.read_text(encoding="utf-8")
+    evidence = read_control_run(project)
+    if evidence is None:
+        return [f"доказательство контрольного прогона нечитаемо или пусто: {report}"]
+    if evidence.get("case") != _case_number(prereg):
+        return [
+            f"доказательство относится к кейсу {evidence.get('case')!r}, "
+            f"а сверяется кейс {_case_number(prereg)!r}"
+        ]
+
+    found = set(evidence.get("findings") or [])
     problems: list[str] = []
     for control in block.get("controls", []):
         record = spent.get(control["name"])
         if record is None or not isinstance(record.get("fired"), bool):
             continue
-        seen = str(control.get("expect", "")) in text
+        seen = str(control.get("expect", "")) in found
         if record["fired"] and not seen:
             problems.append(
                 f"{control['name']}: объявлен сработавшим, но находки "
@@ -173,9 +184,38 @@ def fired_against_the_control_run(project: Path, prereg: Path) -> list[str]:
 
 def preflight(project: Path, prereg: Path) -> None:
     """Проверить порядок. Возбуждает OutOfOrder, называя недостающий шаг."""
+    if not prereg.is_file():
+        raise OutOfOrder(
+            f"ОТКАЗ: пре-регистрации нет по пути {prereg}. Ошибка имени или пути молча "
+            "отключала бы весь механизм — это не совместимость, а дыра. "
+            "Построитель не вызывался."
+        )
+
     number = _case_number(prereg)
-    if number is None or number < FROM_CASE:
-        return  # исторический кейс: доказательств нет, и достраивать их нельзя
+    if number is None:
+        raise OutOfOrder(
+            f"ОТКАЗ: {prereg.name!r} не опознан как пре-регистрация кейса — ожидается "
+            "имя вида `prereg-case-N.md`. Историческое исключение применяется только к "
+            "ПОДТВЕРЖДЁННОМУ номеру, а не к нераспознанному документу. "
+            "Построитель не вызывался."
+        )
+
+    if number < FROM_CASE:
+        # Исторический кейс: доказательств у него нет, достраивать их нельзя.
+        # Это НЕ обычный успех проверки, и говорится об этом вслух.
+        print(
+            f"  протокол: кейс {number} старше {FROM_CASE} — порядок НЕ ПРОВЕРЕН, "
+            "доказательств у него не существует"
+        )
+        return
+
+    declared_project = declared(prereg).get("project")
+    if declared_project and declared_project != project.name:
+        raise OutOfOrder(
+            f"ОТКАЗ: пре-регистрация объявляет проект {declared_project!r}, а прогоняется "
+            f"{project.name!r}. Сверять кейс с чужой пре-регистрацией нельзя. "
+            "Построитель не вызывался."
+        )
 
     if not (project / "manifest.yaml").is_file():
         raise OutOfOrder(
@@ -198,7 +238,6 @@ def preflight(project: Path, prereg: Path) -> None:
             "Построитель не вызывался."
         )
 
-    import hashlib
 
     actual = {
         "бита пустоты": hashlib.sha256((project / EMPTY_BIT).read_bytes()).hexdigest()[:12]
@@ -222,27 +261,63 @@ def preflight(project: Path, prereg: Path) -> None:
             + ". Построитель не вызывался."
         )
 
-    # Снятие контроля объявлено — значит контрольный прогон должен был
-    # состояться. До него `control-run.md` не существует, и запись `spent_controls`,
-    # сделанная заранее, обязана быть отвергнута: иначе она разрешает пропустить
-    # сам контроль.
-    if declared(prereg).get("spent_controls") and not (project / "report" / CONTROL_RUN).is_file():
+    block = declared(prereg)
+    evidence = read_control_run(project)
+    standing = _controls_are_standing(prereg, project / "project.yaml")
+    named = [c["name"] for c in block.get("controls", []) if c.get("column")]
+
+    # СНЯТИЕ объявлено — значит прогон ЧИСТЫЙ, и контроли стоять уже не должны.
+    # Проверяется доказательство: оно обязано существовать, читаться и относиться
+    # к этому кейсу. Пустой или чужой файл появляется копированием, без всякой
+    # правки кода.
+    if block.get("spent_controls"):
+        if evidence is None:
+            raise OutOfOrder(
+                f"ОТКАЗ: объявлено снятие контролей, а доказательства контрольного "
+                f"прогона нет либо оно нечитаемо ({project / 'report' / CONTROL_RUN}). "
+                "Снятие без прогона означает, что контроль пропущен. "
+                "Построитель не вызывался."
+            )
+        if evidence.get("case") != number:
+            raise OutOfOrder(
+                f"ОТКАЗ: доказательство контрольного прогона относится к кейсу "
+                f"{evidence.get('case')!r}, а прогоняется {number}. Отчёт другого кейса "
+                "снятия не разрешает. Построитель не вызывался."
+            )
+    # ПЕРВЫЙ ПРОГОН. Снятие не объявлено, доказательства нет — значит контроли
+    # обязаны СТОЯТЬ в формуляре. Иначе первый прогон пройдёт без них, и
+    # контрольного прогона не случится вовсе: ни один сигнал не будет отнесён к
+    # подложенному дефекту.
+    elif named and evidence is None and not standing:
         raise OutOfOrder(
-            f"ОТКАЗ: объявлено снятие контролей, а отчёта контрольного прогона нет "
-            f"({project / 'report' / CONTROL_RUN}). Снятие без прогона означает, что "
-            "контроль пропущен. Построитель не вызывался."
+            f"ОТКАЗ: контроли {named} объявлены в §5, доказательства контрольного "
+            "прогона нет, а в формуляре они не стоят. Первый прогон обязан идти С "
+            "контролями. Построитель не вызывался."
         )
 
 
-def save_control_run(project: Path, prereg: Path) -> Path | None:
-    """Сохранить отчёт контрольного прогона, если контроли стоят в формуляре.
+def _fingerprint(path: Path) -> str:
+    """Отпечаток файла — двенадцать знаков, как у слепого контроля."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:12] if path.is_file() else ""
 
-    Вызывается ПОСЛЕ прогона. `report.md` перезаписывается каждым следующим
-    прогоном; на кейсе 20 это проверено прямо: в git лежит версия после снятия
-    контролей, и находки К-1 в ней нет ни одной, хотя контроль сработал.
 
-    Пишется один раз. Повторный контрольный прогон отчёта не затирает: первый
-    и есть тот, о котором говорит `spent_controls`.
+def save_control_run(project: Path, prereg: Path, findings: Iterable[object]) -> Path | None:
+    """Записать доказательство контрольного прогона — списком находок, не прозой.
+
+    ПОЧЕМУ НЕ КОПИЯ ОТЧЁТА. Первая версия копировала `report.md` и искала в нём
+    имя находки. Отчёт печатает `signal.detail` — человеческую фразу, — а не
+    `finding.value`: в настоящем отчёте двадцатого кейса строк `sentinel_as_value`
+    и `non_stationary_target` ноль вхождений. Сверка не работала вовсе, и unit-тесты
+    этого не показывали, потому что фикстуры писались в том же формате, в каком
+    сверка искала. Класс 1 журнала повторов, седьмой случай.
+
+    Здесь берутся `Finding` прямо из результата прогона — устойчивые
+    идентификаторы, порождённые ядром.
+
+    ПРИВЯЗКА. Доказательство хранит номер кейса, отпечатки формы и манифеста.
+    Отчёт другого кейса или прогон по другой форме опознаётся и не принимается:
+    пустой либо чужой файл может появиться копированием, без всякой
+    злонамеренной правки кода.
     """
     number = _case_number(prereg)
     if number is None or number < FROM_CASE:
@@ -250,12 +325,37 @@ def save_control_run(project: Path, prereg: Path) -> Path | None:
     if not _controls_are_standing(prereg, project / "project.yaml"):
         return None
 
-    report = project / "report" / "report.md"
     target = project / "report" / CONTROL_RUN
-    if target.is_file() or not report.is_file():
-        return None
-    target.write_text(report.read_text(encoding="utf-8"), encoding="utf-8")
+    if target.is_file():
+        return None  # первый контрольный прогон и есть тот, о котором говорит §5
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        yaml.safe_dump(
+            {
+                "case": number,
+                "form": _fingerprint(project / "project.yaml"),
+                "manifest": _fingerprint(project / "manifest.yaml"),
+                "findings": sorted(str(getattr(f, "value", f)) for f in findings),
+            },
+            allow_unicode=True,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
     return target
+
+
+def read_control_run(project: Path) -> dict | None:
+    """Прочитать доказательство. None — его нет или оно нечитаемо."""
+    path = project / "report" / CONTROL_RUN
+    if not path.is_file():
+        return None
+    try:
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError:
+        return None
+    return loaded if isinstance(loaded, dict) and "findings" in loaded else None
 
 
 VERDICT_ROW = re.compile(r"^\|\s*(P-\d+)\s*\|[^|]*\|\s*([^|]+?)\s*\|", re.MULTILINE)
@@ -328,3 +428,45 @@ def fired_against_the_ledger(prereg: Path, ledger: Path) -> list[str]:
             f"о молчании не говорит: {controls.strip()!r}"
         ]
     return [f"контроли {silent} промолчали, а строки кейса {number} в учёте нет вовсе"]
+
+
+def audit_case_artifacts(docs: Path, projects: Path) -> list[str]:
+    """Обход НАСТОЯЩИХ материалов кейсов: связи проверяются здесь, а не в тестах.
+
+    До этого обхода сверки `fired`, `lost_bets` и учёта существовали только как
+    функции, вызываемые из синтетических unit-тестов. Противоречие в живой
+    пре-регистрации не сделало бы общую команду красной: помощник был написан, а
+    защита — нет. Разница между «функция существует» и «правило действует» ровно
+    в этом обходе.
+
+    Кейсы старше `FROM_CASE` пропускаются: доказательств у них не существует, и
+    достраивать их задним числом нельзя.
+    """
+    problems: list[str] = []
+    ledger = docs / "stopping-rule.md"
+    for prereg in sorted(docs.glob("prereg-case-*.md")):
+        number = _case_number(prereg)
+        if number is None or number < FROM_CASE:
+            continue
+        block = declared(prereg)
+        name = block.get("project")
+        if not name:
+            problems.append(f"{prereg.name}: не объявлен project — сверить кейс не с чем")
+            continue
+        project = projects / name
+        if not project.is_dir():
+            continue  # формуляр ещё не написан: обещание не наступило
+
+        problems += [
+            f"{prereg.name}: {item}" for item in fired_against_the_control_run(project, prereg)
+        ]
+        problems += [f"{prereg.name}: {item}" for item in fired_against_the_ledger(prereg, ledger)]
+        problems += [
+            f"{prereg.name}: {item}"
+            for item in lost_bets_against_verdict(prereg, docs / f"case{number}-verdict.md")
+        ]
+        problems += [
+            f"{prereg.name}: {item}"
+            for item in unreachable_controls(prereg, project / "project.yaml")
+        ]
+    return problems

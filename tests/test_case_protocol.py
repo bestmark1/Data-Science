@@ -53,7 +53,7 @@ def _prereg(tmp_path: Path, body: str, number: int = FROM_CASE) -> Path:
 
 
 def _project(tmp_path: Path, *, manifest=True, sealed=True, empty=True) -> Path:
-    project = tmp_path / "проект"
+    project = tmp_path / "проба"
     (project / "report").mkdir(parents=True)
     (project / "project.yaml").write_text(FORM, encoding="utf-8")
     if manifest:
@@ -162,7 +162,7 @@ def test_spent_control_before_the_control_run_is_refused(tmp_path) -> None:
     with pytest.raises(OutOfOrder) as отказ:
         preflight(project, prereg)
 
-    assert "отчёта контрольного прогона нет" in str(отказ.value)
+    assert "доказательства контрольного прогона нет" in str(отказ.value)
 
 
 def test_a_prepared_case_passes(tmp_path) -> None:
@@ -202,12 +202,11 @@ def test_the_control_run_report_is_saved_while_controls_stand(tmp_path) -> None:
     """
     project = _project(tmp_path)
     prereg = _prereg(tmp_path, _digests(project) + CONTROLS)
-    (project / "report" / "report.md").write_text("сигнал: sentinel_as_value\n", encoding="utf-8")
-
-    saved = save_control_run(project, prereg)
+    saved = save_control_run(project, prereg, ["sentinel_as_value"])
 
     assert saved == project / "report" / CONTROL_RUN
     assert "sentinel_as_value" in saved.read_text(encoding="utf-8")
+    assert "case: 21" in saved.read_text(encoding="utf-8"), "доказательство обязано назвать кейс"
 
 
 def test_the_control_run_report_is_not_overwritten(tmp_path) -> None:
@@ -215,9 +214,8 @@ def test_the_control_run_report_is_not_overwritten(tmp_path) -> None:
     project = _project(tmp_path)
     prereg = _prereg(tmp_path, _digests(project) + CONTROLS)
     (project / "report" / CONTROL_RUN).write_text("первый\n", encoding="utf-8")
-    (project / "report" / "report.md").write_text("второй\n", encoding="utf-8")
 
-    assert save_control_run(project, prereg) is None
+    assert save_control_run(project, prereg, ["duplicate_rows"]) is None
     assert (project / "report" / CONTROL_RUN).read_text(encoding="utf-8") == "первый\n"
 
 
@@ -232,9 +230,8 @@ def test_nothing_is_saved_when_controls_are_already_removed(tmp_path) -> None:
         "columns:\n  - {name: at_night, role: ignored}\n", encoding="utf-8"
     )
     prereg = _prereg(tmp_path, _digests(project) + CONTROLS)
-    (project / "report" / "report.md").write_text("чисто\n", encoding="utf-8")
 
-    assert save_control_run(project, prereg) is None
+    assert save_control_run(project, prereg, ["sentinel_as_value"]) is None
     assert not (project / "report" / CONTROL_RUN).is_file()
 
 
@@ -313,7 +310,7 @@ def test_fired_true_without_the_finding_is_reported(tmp_path) -> None:
     """
     project = _project(tmp_path)
     prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True))
-    (project / "report" / CONTROL_RUN).write_text("никаких находок\n", encoding="utf-8")
+    save_control_run(project, prereg, ["duplicate_rows"])
 
     problems = fired_against_the_control_run(project, prereg)
 
@@ -325,7 +322,7 @@ def test_fired_false_with_the_finding_is_reported(tmp_path) -> None:
     """Обратное: объявлено «промолчал», а ядро находку назвало."""
     project = _project(tmp_path)
     prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(False))
-    (project / "report" / CONTROL_RUN).write_text("sentinel_as_value: 124\n", encoding="utf-8")
+    save_control_run(project, prereg, ["sentinel_as_value"])
 
     problems = fired_against_the_control_run(project, prereg)
 
@@ -337,7 +334,7 @@ def test_fired_matching_the_report_is_silent(tmp_path) -> None:
     """Положительный контроль: запись автора совпала с выводом ядра."""
     project = _project(tmp_path)
     prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True))
-    (project / "report" / CONTROL_RUN).write_text("sentinel_as_value: 124\n", encoding="utf-8")
+    save_control_run(project, prereg, ["sentinel_as_value"])
 
     assert not fired_against_the_control_run(project, prereg)
 
@@ -434,3 +431,169 @@ def test_a_ledger_that_admits_the_silence_is_accepted(tmp_path) -> None:
     prereg = _prereg(tmp_path, CONTROLS + _spent(False))
 
     assert not fired_against_the_ledger(prereg, _ledger(tmp_path, "К-1 промолчал"))
+
+
+# --- Регрессии по независимому ревью 9 сентября ------------------------------
+#
+# Шесть воспроизведений, показавших, что новый протокол не делал заявленного.
+# Перенесены в проект: воспроизведение, живущее вне репозитория, защищает ровно
+# до тех пор, пока о нём помнят.
+
+
+def test_an_unrecognized_prereg_name_does_not_disable_the_guard(tmp_path) -> None:
+    """Ошибка имени молча отключала ВЕСЬ механизм.
+
+    `prereg-case-21-draft.md` не совпадал с образцом номера, номер выходил None,
+    и это обрабатывалось как подтверждённый исторический кейс: preflight
+    возвращал успех, не прочитав ни манифеста, ни файлов контроля.
+    """
+    project = _project(tmp_path, manifest=False, sealed=False, empty=False)
+    draft = tmp_path / "prereg-case-21-draft.md"
+    draft.write_text("черновик", encoding="utf-8")
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, draft)
+
+    assert "не опознан как пре-регистрация" in str(отказ.value)
+
+
+def test_a_missing_prereg_file_is_refused(tmp_path) -> None:
+    """Пре-регистрации нет по пути — это дыра, а не совместимость."""
+    project = _project(tmp_path)
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, tmp_path / "нет-такого.md")
+
+    assert "пре-регистрации нет по пути" in str(отказ.value)
+
+
+def test_a_prereg_of_another_project_is_refused(tmp_path) -> None:
+    """Кейс не сверяется с чужой пре-регистрацией."""
+    project = _project(tmp_path)
+    prereg = _prereg(tmp_path, _digests(project) + "\n```yaml\nproject: чужой\n```\n")
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "объявляет проект" in str(отказ.value)
+
+
+def test_declared_controls_must_stand_before_the_first_run(tmp_path) -> None:
+    """Контроли объявлены, доказательства нет, а в формуляре их не стоит.
+
+    Preflight пропускал такой запуск: первый прогон шёл БЕЗ контролей, и
+    контрольного прогона не случалось вовсе — ни один сигнал не был бы отнесён к
+    подложенному дефекту.
+    """
+    project = _project(tmp_path)
+    (project / "project.yaml").write_text(
+        "columns:\n  - {name: at_night, role: ignored}\n"
+        "  - {name: received_at, role: decision_time}\n",
+        encoding="utf-8",
+    )
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS)
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "обязан идти С контролями" in str(отказ.value)
+
+
+def test_an_empty_or_foreign_control_run_does_not_authorize_removal(tmp_path) -> None:
+    """Пустое или чужое доказательство снятия не разрешает.
+
+    Проверялось лишь существование файла. Пустой появляется копированием или из
+    шаблона — злого умысла для этого не нужно.
+    """
+    project = _project(tmp_path)
+    (project / "project.yaml").write_text(
+        "columns:\n  - {name: at_night, role: ignored}\n"
+        "  - {name: received_at, role: decision_time}\n",
+        encoding="utf-8",
+    )
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True))
+    (project / "report" / CONTROL_RUN).write_text("", encoding="utf-8")
+
+    with pytest.raises(OutOfOrder) as пусто:
+        preflight(project, prereg)
+    assert "нет либо оно нечитаемо" in str(пусто.value)
+
+    (project / "report" / CONTROL_RUN).write_text(
+        "case: 999\nfindings: [sentinel_as_value]\n", encoding="utf-8"
+    )
+    with pytest.raises(OutOfOrder) as чужое:
+        preflight(project, prereg)
+    assert "относится к кейсу 999" in str(чужое.value)
+
+
+def test_fired_is_checked_against_findings_the_core_produced(tmp_path) -> None:
+    """Сверка работает с НАСТОЯЩИМ источником находок, а не с рукописным текстом.
+
+    Прежняя версия искала имя находки в `report.md`, а тот печатает
+    `signal.detail` — человеческую фразу. В отчёте двадцатого кейса строк
+    `sentinel_as_value` ноль вхождений, и сверка не работала вовсе; unit-тесты
+    этого не показывали, потому что фикстуры писались в том же формате, в каком
+    сверка искала.
+
+    Здесь доказательство порождается `save_control_run` из находок, которые
+    вернуло ЯДРО на синтетическом мире стенда.
+    """
+    from dsx.evals.case import Finding
+    from dsx.evals.registry import BY_ID
+    from harness import report_for
+
+    checks = report_for(BY_ID["sentinel-as-value"])
+    assert Finding.SENTINEL_AS_VALUE in checks.findings, "мир стенда перестал давать находку"
+
+    project = _project(tmp_path)
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True))
+    save_control_run(project, prereg, checks.findings)
+
+    assert not fired_against_the_control_run(project, prereg)
+
+    # И обратное: то же доказательство при объявленном молчании — расхождение.
+    prereg_false = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(False), number=FROM_CASE)
+    problems = fired_against_the_control_run(project, prereg_false)
+    assert problems and "объявлен промолчавшим" in problems[0]
+
+
+def test_the_audit_walks_real_project_artifacts() -> None:
+    """Связи проверяются обходом НАСТОЯЩИХ материалов, а не только в unit-тестах.
+
+    Пока сверки вызывались лишь из синтетических тестов, противоречие в живой
+    пре-регистрации не сделало бы общую команду красной: помощник был написан, а
+    защита — нет.
+    """
+    from protocol.preflight import audit_case_artifacts
+
+    problems = audit_case_artifacts(ROOT / "docs", ROOT / "projects")
+
+    assert not problems, "; ".join(problems)
+
+
+def test_the_audit_catches_a_contradiction_in_temporary_artifacts(tmp_path) -> None:
+    """Тот же обход на подставленных материалах обязан краснеть.
+
+    Проверка обхода, который всегда молчит, неотличима от отсутствующей: сейчас
+    кейсов новее FROM_CASE нет, и на настоящих материалах он законно пуст.
+    """
+    from protocol.preflight import audit_case_artifacts
+
+    docs = tmp_path / "docs"
+    projects = tmp_path / "projects"
+    docs.mkdir()
+    project = projects / "проба"
+    (project / "report").mkdir(parents=True)
+    (project / "project.yaml").write_text(FORM, encoding="utf-8")
+    (docs / f"prereg-case-{FROM_CASE}.md").write_text(
+        "```yaml\nproject: проба\ncontrols:\n"
+        "  - {name: К-1, column: at_night, role: feature,\n"
+        "     expect: sentinel_as_value, basis: plant}\n"
+        "spent_controls:\n  - {name: К-1, fired: true, outcome: 'снят'}\n```\n",
+        encoding="utf-8",
+    )
+
+    problems = audit_case_artifacts(docs, projects)
+
+    assert problems, "обход не заметил снятия без доказательства прогона"
+    assert "доказательства прогона нет" in problems[0]

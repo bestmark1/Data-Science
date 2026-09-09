@@ -57,6 +57,17 @@ def main() -> int:
         for line in out.splitlines():
             if line.startswith("FAILED"):
                 print(f"  {line}")
+    elif code != 0:
+        # Ненулевой код без единого `failed` — это отказ ДО тестов: ошибка сборки
+        # (ImportError, синтаксис, отсутствующий модуль). Прежняя версия печатала
+        # «passed 0, failed 0» и «ЕСТЬ ПРОВАЛЫ», уничтожая первопричину: имя
+        # отсутствующего модуля в вывод не попадало вовсе.
+        print(
+            f"\n--- pytest завершился с кодом {code}, не дав статистики ---\n"
+            "Похоже на ошибку сборки тестов, а не на провал проверки.\n"
+            "Вывод целиком:"
+        )
+        print(out.strip()[-4000:] or "(пусто)")
 
     style, styled = _run([str(PYTHON), "-m", "ruff", "check", "src", "tests", "tools", "protocol"])
     print(f"стиль:   {'чисто' if style == 0 else 'есть замечания'}")
