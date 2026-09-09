@@ -201,7 +201,9 @@ def fired_against_the_control_run(project: Path, prereg: Path) -> list[str]:
 
     evidence = read_control_run(project)
     if evidence is None:
-        return [f"доказательство контрольного прогона нечитаемо или пусто: {report}"]
+        return [
+            f"доказательство контрольного прогона негодно — {control_run_defect(project)}: {report}"
+        ]
     if evidence.get("case") != _case_number(prereg):
         return [
             f"доказательство относится к кейсу {evidence.get('case')!r}, "
@@ -340,8 +342,9 @@ def preflight(project: Path, prereg: Path) -> None:
         # контрольной, иначе контроли на самом деле не сняты.
         if evidence is None:
             raise OutOfOrder(
-                f"ОТКАЗ: объявлено снятие контролей, а доказательства контрольного "
-                f"прогона нет либо оно не по схеме ({project / 'report' / CONTROL_RUN}). "
+                f"ОТКАЗ: объявлено снятие контролей, а доказательство контрольного прогона "
+                f"негодно — {control_run_defect(project)} "
+                f"({project / 'report' / CONTROL_RUN}). "
                 "Снятие без прогона означает, что контроль пропущен. "
                 "Построитель не вызывался."
             )
@@ -495,27 +498,48 @@ def read_control_run(project: Path) -> dict | None:
     Пустой список — законное доказательство промолчавшего контроля. Отсутствие
     списка, `null` и отображение — не список, и это разные вещи.
     """
-    path = project / "report" / CONTROL_RUN
+    return _control_run(project / "report" / CONTROL_RUN)[0]
+
+
+def control_run_defect(project: Path) -> str:
+    """Почему доказательство не годится — одной фразой для текста отказа.
+
+    Отказ, называющий «нет либо не по схеме», не различает отсутствующий файл,
+    испорченные байты и годный YAML без отпечатков. Прекратить прогон мало:
+    причина должна быть названа, иначе отказ читается как поломка инструмента.
+    """
+    return _control_run(project / "report" / CONTROL_RUN)[1]
+
+
+def _control_run(path: Path) -> tuple[dict | None, str]:
+    """Доказательство и причина непригодности. Пустая причина — документ годен."""
     if not path.is_file():
-        return None
+        return None, "файла доказательства нет"
     try:
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (yaml.YAMLError, UnicodeDecodeError):
-        return None
+        raw = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return None, "файл есть, но он не текст в UTF-8 — читать доказательство нечем"
+    try:
+        loaded = yaml.safe_load(raw)
+    except yaml.YAMLError:
+        return None, "файл есть, но он не разбирается как YAML"
     if not isinstance(loaded, dict):
-        return None
+        return None, "верхний уровень доказательства — не отображение"
     if not isinstance(loaded.get("case"), int):
-        return None
+        return None, "в доказательстве нет числового `case` — с каким кейсом его сверять, неясно"
     findings = loaded.get("findings")
     if not isinstance(findings, list) or not all(
         isinstance(item, str) and IDENTIFIER.match(item) for item in findings
     ):
-        return None
+        return None, (
+            "`findings` — не список имён находок; `null` и отображение списком не являются "
+            "и обращались бы в пустое множество, то есть в положительное доказательство"
+        )
     if not all(
         isinstance(loaded.get(field), str) and loaded.get(field) for field in ("form", "manifest")
     ):
-        return None
-    return loaded
+        return None, "в доказательстве нет непустых отпечатков `form` и `manifest`"
+    return loaded, ""
 
 
 VERDICT_ROW = re.compile(r"^\|\s*(P-\d+)\s*\|[^|]*\|\s*([^|]+?)\s*\|", re.MULTILINE)

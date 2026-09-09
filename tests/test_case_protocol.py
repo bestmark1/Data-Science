@@ -26,9 +26,13 @@ from protocol.preflight import (  # noqa: E402
     EMPTY_BIT,
     FROM_CASE,
     SEALED,
+    _control_columns,
+    _form_identity,
+    declared,
     fired_against_the_control_run,
     fired_against_the_ledger,
     lost_bets_against_verdict,
+    read_control_run,
 )
 
 FORM = """
@@ -166,7 +170,9 @@ def test_spent_control_before_the_control_run_is_refused(tmp_path) -> None:
     with pytest.raises(OutOfOrder) as отказ:
         preflight(project, prereg)
 
-    assert "доказательства контрольного прогона нет" in str(отказ.value)
+    # Формулировка уточнена вслед за отказом: он теперь называет ПРИЧИНУ
+    # непригодности, а не общее «нет либо не по схеме». Намерение прежнее.
+    assert "файла доказательства нет" in str(отказ.value)
 
 
 def test_a_prepared_case_passes(tmp_path) -> None:
@@ -527,7 +533,7 @@ def test_an_empty_or_foreign_control_run_does_not_authorize_removal(tmp_path) ->
 
     with pytest.raises(OutOfOrder) as пусто:
         preflight(project, prereg)
-    assert "не по схеме" in str(пусто.value)
+    assert "верхний уровень доказательства — не отображение" in str(пусто.value)
 
     (project / "report" / CONTROL_RUN).write_text(
         "case: 999\nform: aaaaaaaaaaaa\nmanifest: bbbbbbbbbbbb\nfindings: [sentinel_as_value]\n",
@@ -798,3 +804,223 @@ def test_a_prereg_without_a_declared_project_is_refused(tmp_path) -> None:
         preflight(project, prereg)
 
     assert "не объявляет `project`" in str(отказ.value)
+
+
+# --- Разбор трёх спорных сценариев повторного ревью --------------------------
+#
+# Ревьюер оставил три сценария красными, и объяснения «контракт изменился» мало:
+# устойчивый хеш сам по себе не доказывает, что законное снятие разрешено, а
+# всякая иная правка формы поймана. Здесь проверяется свойство, а не хеш;
+# исходное намерение сценариев сохранено, изменён только способ его проверки.
+
+RICH_FORM = """
+observed_until: 2026-01-01
+split:
+  kind: time
+  column: received_at
+columns:
+  - {name: at_night, role: feature}
+  - {name: received_at, role: decision_time}
+  - {name: outcome, role: outcome}
+"""
+
+REMOVED = RICH_FORM.replace("{name: at_night, role: feature}", "{name: at_night, role: ignored}")
+
+
+def _with_form(tmp_path: Path, form: str) -> tuple[Path, Path]:
+    """Кейс с богатой формой: в ней есть срок, сплит и неконтрольные колонки."""
+    project = _project(tmp_path)
+    (project / "project.yaml").write_text(form, encoding="utf-8")
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS)
+    return project, prereg
+
+
+def test_a_lawful_removal_does_not_change_the_form_fingerprint(tmp_path) -> None:
+    """Снятие контроля разрешено: отпечаток формы от него не меняется.
+
+    Это половина требования. Вторая половина — соседний тест: всё прочее он
+    обязан ловить. Устойчивость хеша без неё означала бы просто слепой хеш.
+    """
+    project, prereg = _with_form(tmp_path, RICH_FORM)
+    columns = _control_columns(prereg)
+    до = _form_identity(project / "project.yaml", columns)
+
+    (project / "project.yaml").write_text(REMOVED, encoding="utf-8")
+
+    assert _form_identity(project / "project.yaml", columns) == до
+
+
+def test_a_lawful_removal_passes_the_whole_path(tmp_path) -> None:
+    """И то же самое целиком: доказательство сохранено, контроль снят, отказа нет."""
+    project, prereg = _with_form(tmp_path, RICH_FORM)
+    save_control_run(project, prereg, ["sentinel_as_value"])
+
+    (project / "project.yaml").write_text(REMOVED, encoding="utf-8")
+    preflight(project, _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True)))
+
+
+@pytest.mark.parametrize(
+    "что, форма",
+    [
+        ("добавлена колонка", REMOVED + "  - {name: extra, role: feature}\n"),
+        ("изменён срок наблюдения", REMOVED.replace("2026-01-01", "2026-02-01")),
+        ("изменён сплит", REMOVED.replace("kind: time", "kind: random")),
+        (
+            "изменена роль неконтрольной колонки",
+            REMOVED.replace("name: outcome, role: outcome", "name: outcome, role: ignored"),
+        ),
+        (
+            "удалена неконтрольная колонка",
+            REMOVED.replace("  - {name: outcome, role: outcome}\n", ""),
+        ),
+    ],
+)
+def test_any_other_change_to_the_form_is_caught(tmp_path, что: str, форма: str) -> None:
+    """Изменение значимого поля формы обнаруживается, хотя контроль снят законно.
+
+    Каждый случай — снятие контроля ПЛЮС одна правка. Если бы отпечаток был
+    устойчив ко всему подряд, проверка проходила бы: она не проходит.
+    """
+    project, prereg = _with_form(tmp_path, RICH_FORM)
+    save_control_run(project, prereg, ["sentinel_as_value"])
+
+    (project / "project.yaml").write_text(форма, encoding="utf-8")
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True))
+
+    assert _form_identity(project / "project.yaml", _control_columns(prereg)) != read_control_run(
+        project
+    )["form"], f"отпечаток не заметил, что {что}"
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "форма изменилась" in str(отказ.value), что
+
+
+def test_unreadable_evidence_stops_before_the_builder_and_names_the_cause(tmp_path) -> None:
+    """Испорченные байты доказательства: штатный отказ, а не `UnicodeDecodeError`.
+
+    Сценарий ревьюера ждал `UnicodeDecodeError`, и намерение его было не в
+    классе исключения, а в двух вещах: прогон обязан прекратиться и обязан
+    прекратиться ДО построителя. Обе проверяются здесь прямо — счётчиком вызовов
+    и текстом причины. Отказ, называющий «нет либо не по схеме», намерения не
+    выполнял бы: он неотличим от отсутствующего файла.
+    """
+    project, prereg = _with_form(tmp_path, RICH_FORM)
+    save_control_run(project, prereg, ["sentinel_as_value"])
+    (project / "project.yaml").write_text(REMOVED, encoding="utf-8")
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True))
+    (project / "report" / CONTROL_RUN).write_bytes(b"\xff")
+
+    вызовов = 0
+
+    def build() -> None:
+        nonlocal вызовов
+        вызовов += 1
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+        build()
+
+    assert вызовов == 0, "построитель вызван при нечитаемом доказательстве"
+    assert "не текст в UTF-8" in str(отказ.value)
+    assert read_control_run(project) is None
+
+
+@pytest.mark.parametrize(
+    "содержимое, причина",
+    [
+        (b"[broken", "не разбирается как YAML"),
+        (b"- a\n- b\n", "не отображение"),
+        (b"case: '21'\nfindings: []\nform: a\nmanifest: b\n", "числового `case`"),
+        (b"case: 21\nfindings: null\nform: a\nmanifest: b\n", "не список имён находок"),
+        (b"case: 21\nfindings: []\n", "отпечатков `form` и `manifest`"),
+    ],
+)
+def test_every_kind_of_unusable_evidence_names_its_own_cause(
+    tmp_path, содержимое: bytes, причина: str
+) -> None:
+    """Причины различаются между собой, а не сливаются в одну общую фразу."""
+    project, prereg = _with_form(tmp_path, RICH_FORM)
+    save_control_run(project, prereg, ["sentinel_as_value"])
+    (project / "project.yaml").write_text(REMOVED, encoding="utf-8")
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True))
+    (project / "report" / CONTROL_RUN).write_bytes(содержимое)
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert причина in str(отказ.value)
+
+
+def test_valid_digests_without_a_project_block_are_refused(tmp_path) -> None:
+    """Отпечатки верные, машиночитаемого `project` нет — прогон не начинается.
+
+    Пре-регистрация здесь строится ПОМИМО общей фикстуры `_digests`: та сама
+    объявляет `project`, и сценарий с её помощью проверял бы не то, что назван.
+    Первая проверка теста — что удалённое поле не вернулось: без неё тест
+    зеленел бы по любой другой причине.
+    """
+    project = _project(tmp_path)
+    бит = hashlib.sha256((project / EMPTY_BIT).read_bytes()).hexdigest()[:12]
+    ответ = hashlib.sha256((project / SEALED).read_bytes()).hexdigest()[:12]
+    prereg = _prereg(
+        tmp_path,
+        "## 5а. Слепой контроль\n\n"
+        f"Отпечаток бита пустоты: **`{бит}`**\n"
+        f"Отпечаток ответа: **`{ответ}`**\n",
+    )
+
+    assert declared(prereg).get("project") is None, "поле вернулось — сценарий проверяет не то"
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "не объявляет `project`" in str(отказ.value)
+    assert "отпечаток" not in str(отказ.value).lower(), "отказ пришёл по другой причине"
+
+
+def test_the_evidence_lives_through_the_real_path(tmp_path) -> None:
+    """Создание → сохранение → чтение → сверка, без рукописных фикстур посередине.
+
+    Находки берутся у ЯДРА на мире стенда, записываются `save_control_run`,
+    читаются `read_control_run` и сверяются `fired_against_the_control_run`.
+    Оба круга ревью показали одно: самопроверка на собственных фикстурах
+    пропускает ошибки соединения звеньев, а не самих звеньев.
+
+    Отпечаток формы здесь НЕ хеш файла — сценарий ревьюера ждал именно его.
+    Хеш файла запрещал бы законное снятие контроля; свойство, ради которого
+    отпечаток вообще нужен, проверяют два теста выше.
+    """
+    from dsx.evals.case import Finding
+    from dsx.evals.registry import BY_ID
+    from harness import report_for
+
+    project, prereg = _with_form(tmp_path, RICH_FORM)
+    preflight(project, prereg)  # первый прогон: контроли стоят
+
+    checks = report_for(BY_ID["sentinel-as-value"])
+    assert Finding.SENTINEL_AS_VALUE in checks.findings, "мир стенда перестал давать находку"
+    saved = save_control_run(project, prereg, checks.findings)
+
+    evidence = read_control_run(project)
+    assert evidence is not None
+    assert evidence["case"] == FROM_CASE
+    assert Finding.SENTINEL_AS_VALUE.value in evidence["findings"]
+    assert (
+        evidence["manifest"]
+        == hashlib.sha256((project / "manifest.yaml").read_bytes()).hexdigest()[:12]
+    )
+    assert evidence["form"] == _form_identity(project / "project.yaml", _control_columns(prereg))
+
+    было = saved.read_bytes()
+    assert save_control_run(project, prereg, []) is None, "первый прогон перезаписан вторым"
+    assert saved.read_bytes() == было
+
+    (project / "project.yaml").write_text(REMOVED, encoding="utf-8")
+    снят = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True))
+    preflight(project, снят)
+    assert not fired_against_the_control_run(project, снят)
+
+    ложь = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(False))
+    assert fired_against_the_control_run(project, ложь), "ложное «промолчал» не замечено"
