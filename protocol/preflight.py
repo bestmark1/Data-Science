@@ -58,16 +58,47 @@ def _case_number(prereg: Path) -> int | None:
     return int(found.group(1)) if found else None
 
 
+ANY_BLOCK = re.compile(r"```yaml\n(.*?)\n```", re.DOTALL)
+
+
 def declared(prereg: Path) -> dict:
-    """Машиночитаемые объявления пре-регистрации — все блоки сразу."""
+    """Машиночитаемые объявления пре-регистрации — все блоки сразу.
+
+    Блок протокола обязан нести `project:`. Повторное ревью показало, чем грозит
+    обратное: контроли, объявленные в блоке без `project`, парсер не видел вовсе,
+    и preflight считал, что контролей нет.
+    """
+    text = prereg.read_text(encoding="utf-8")
+    for found in ANY_BLOCK.finditer(text):
+        try:
+            block = yaml.safe_load(found.group(1))
+        except yaml.YAMLError:
+            continue
+        if isinstance(block, dict) and any(key in block for key in PROTOCOL_KEYS):
+            if "project" not in block:
+                raise OutOfOrder(
+                    f"ОТКАЗ: в {prereg.name} есть машиночитаемый блок протокола "
+                    f"({sorted(set(block) & set(PROTOCOL_KEYS))}) без `project`. "
+                    "Такой блок не был бы связан с кейсом и потерялся бы молча. "
+                    "Построитель не вызывался."
+                )
+
     merged: dict = {}
-    for found in BLOCK.finditer(prereg.read_text(encoding="utf-8")):
+    for found in BLOCK.finditer(text):
         block = yaml.safe_load(found.group(1))
         for key, value in block.items():
-            if key in merged and isinstance(value, list):
-                merged[key] = merged[key] + value
-            else:
-                merged[key] = value
+            if key in merged and merged[key] != value:
+                if isinstance(value, list):
+                    merged[key] = merged[key] + value
+                    continue
+                # Молчаливая перезапись позволяла объявить `project: чужой`, а
+                # следующим блоком — `project: свой`, и пройти проверку. Общий
+                # парсер §5 такой конфликт отвергает; здесь он отвергался молча.
+                raise OutOfOrder(
+                    f"ОТКАЗ: объявление {key!r} повторено с другим значением "
+                    f"({merged[key]!r} и {value!r}). Построитель не вызывался."
+                )
+            merged[key] = value
     return merged
 
 
@@ -81,10 +112,25 @@ def _controls_are_standing(prereg: Path, form_path: Path) -> bool:
     block = declared(prereg)
     form = yaml.safe_load(form_path.read_text(encoding="utf-8"))
     roles = {column["name"]: column.get("role") for column in form.get("columns", [])}
-    return any(
-        control.get("column") and roles.get(control["column"]) == control.get("role")
-        for control in block.get("controls", [])
-    )
+    named = [c for c in block.get("controls", []) if c.get("column")]
+    if not named:
+        return False
+    # ВСЕ, а не любой. Прежняя версия брала `any`, и один поставленный контроль
+    # выдавал за поставленные все: прогон с половиной контролей считался
+    # контрольным, а вторая половина не испытывалась вовсе.
+    return all(roles.get(c["column"]) == c.get("role") for c in named)
+
+
+def controls_partly_standing(prereg: Path, form_path: Path) -> list[str]:
+    """Контроли, объявленные с колонкой, но НЕ поставленные в формуляр."""
+    block = declared(prereg)
+    form = yaml.safe_load(form_path.read_text(encoding="utf-8"))
+    roles = {column["name"]: column.get("role") for column in form.get("columns", [])}
+    return [
+        c["name"]
+        for c in block.get("controls", [])
+        if c.get("column") and roles.get(c["column"]) != c.get("role")
+    ]
 
 
 CONTRADICTIONS = {
@@ -191,12 +237,38 @@ def preflight(project: Path, prereg: Path) -> None:
             "Построитель не вызывался."
         )
 
+    # Симлинк не смеет выдавать один кейс за другой: имя ссылки и имя цели
+    # обязаны говорить об одном номере.
+    resolved = prereg.resolve()
+    if _case_number(prereg) != _case_number(resolved):
+        raise OutOfOrder(
+            f"ОТКАЗ: {prereg.name} указывает на {resolved.name} — номер кейса в имени "
+            "ссылки расходится с целью. Построитель не вызывался."
+        )
+    prereg = resolved
     number = _case_number(prereg)
     if number is None:
         raise OutOfOrder(
             f"ОТКАЗ: {prereg.name!r} не опознан как пре-регистрация кейса — ожидается "
             "имя вида `prereg-case-N.md`. Историческое исключение применяется только к "
             "ПОДТВЕРЖДЁННОМУ номеру, а не к нераспознанному документу. "
+            "Построитель не вызывался."
+        )
+
+    # ИДЕНТИЧНОСТЬ ПРОВЕРЯЕТСЯ ДО исторического исключения. Иначе документ
+    # чужого кейса, поданный под старым номером, отключал защиту целиком —
+    # ровно то, что нашло повторное ревью.
+    declared_project = declared(prereg).get("project")
+    if declared_project is None:
+        raise OutOfOrder(
+            f"ОТКАЗ: {prereg.name} не объявляет `project` машиночитаемо. Связать "
+            "пре-регистрацию с прогоняемым кейсом нечем, и историческое исключение "
+            "по одному лишь имени файла не выдаётся. Построитель не вызывался."
+        )
+    if declared_project != project.name:
+        raise OutOfOrder(
+            f"ОТКАЗ: пре-регистрация объявляет проект {declared_project!r}, а прогоняется "
+            f"{project.name!r}. Сверять кейс с чужой пре-регистрацией нельзя. "
             "Построитель не вызывался."
         )
 
@@ -208,14 +280,6 @@ def preflight(project: Path, prereg: Path) -> None:
             "доказательств у него не существует"
         )
         return
-
-    declared_project = declared(prereg).get("project")
-    if declared_project and declared_project != project.name:
-        raise OutOfOrder(
-            f"ОТКАЗ: пре-регистрация объявляет проект {declared_project!r}, а прогоняется "
-            f"{project.name!r}. Сверять кейс с чужой пре-регистрацией нельзя. "
-            "Построитель не вызывался."
-        )
 
     if not (project / "manifest.yaml").is_file():
         raise OutOfOrder(
@@ -237,7 +301,6 @@ def preflight(project: Path, prereg: Path) -> None:
             "нужно ДО прогона: после него запись перестаёт быть обещанием. "
             "Построитель не вызывался."
         )
-
 
     actual = {
         "бита пустоты": hashlib.sha256((project / EMPTY_BIT).read_bytes()).hexdigest()[:12]
@@ -263,18 +326,22 @@ def preflight(project: Path, prereg: Path) -> None:
 
     block = declared(prereg)
     evidence = read_control_run(project)
-    standing = _controls_are_standing(prereg, project / "project.yaml")
     named = [c["name"] for c in block.get("controls", []) if c.get("column")]
 
-    # СНЯТИЕ объявлено — значит прогон ЧИСТЫЙ, и контроли стоять уже не должны.
-    # Проверяется доказательство: оно обязано существовать, читаться и относиться
-    # к этому кейсу. Пустой или чужой файл появляется копированием, без всякой
-    # правки кода.
+    # ПЕРЕХОДЫ. Проверяется не наличие файлов, а допустимость самого перехода.
+    # Повторное ревью показало четыре состояния, которые прежняя версия
+    # пропускала: половина контролей, чистый прогон без объявленного снятия,
+    # снятие при стоящих контролях и ложный `fired`.
+    missing = controls_partly_standing(prereg, project / "project.yaml")
+
     if block.get("spent_controls"):
+        # СНЯТИЕ. Прогон чистый: доказательство обязано существовать, быть по
+        # схеме, относиться к этому кейсу — и форма обязана ОТЛИЧАТЬСЯ от
+        # контрольной, иначе контроли на самом деле не сняты.
         if evidence is None:
             raise OutOfOrder(
                 f"ОТКАЗ: объявлено снятие контролей, а доказательства контрольного "
-                f"прогона нет либо оно нечитаемо ({project / 'report' / CONTROL_RUN}). "
+                f"прогона нет либо оно не по схеме ({project / 'report' / CONTROL_RUN}). "
                 "Снятие без прогона означает, что контроль пропущен. "
                 "Построитель не вызывался."
             )
@@ -284,16 +351,83 @@ def preflight(project: Path, prereg: Path) -> None:
                 f"{evidence.get('case')!r}, а прогоняется {number}. Отчёт другого кейса "
                 "снятия не разрешает. Построитель не вызывался."
             )
-    # ПЕРВЫЙ ПРОГОН. Снятие не объявлено, доказательства нет — значит контроли
-    # обязаны СТОЯТЬ в формуляре. Иначе первый прогон пройдёт без них, и
-    # контрольного прогона не случится вовсе: ни один сигнал не будет отнесён к
-    # подложенному дефекту.
-    elif named and evidence is None and not standing:
+        if evidence.get("manifest") != _fingerprint(project / "manifest.yaml"):
+            raise OutOfOrder(
+                "ОТКАЗ: доказательство получено на других данных — отпечаток манифеста "
+                "не совпадает. Контрольный прогон и чистый обязаны идти по одной "
+                "выгрузке. Построитель не вызывался."
+            )
+        if evidence.get("form") != _form_identity(
+            project / "project.yaml", _control_columns(prereg)
+        ):
+            raise OutOfOrder(
+                "ОТКАЗ: форма изменилась не только снятием контролей — доказательство "
+                "получено на другой форме. Отпечаток считается БЕЗ ролей контрольных "
+                "колонок, поэтому законное снятие его не меняет, а всякая иная правка "
+                "меняет. Построитель не вызывался."
+            )
+        if not missing:
+            raise OutOfOrder(
+                "ОТКАЗ: объявлено снятие контролей, а в формуляре они всё ещё стоят. "
+                "Прогон не чистый. Построитель не вызывался."
+            )
+        problems = fired_against_the_control_run(project, prereg)
+        if problems:
+            raise OutOfOrder(
+                "ОТКАЗ: объявленный исход контролей расходится с доказательством "
+                "прогона: " + "; ".join(problems) + ". Построитель не вызывался."
+            )
+    elif named and evidence is None:
+        # ПЕРВЫЙ ПРОГОН. Все объявленные контроли обязаны стоять — не часть.
+        if missing:
+            raise OutOfOrder(
+                f"ОТКАЗ: контроли {missing} объявлены в §5, доказательства контрольного "
+                "прогона нет, а в формуляре они не стоят. Первый прогон обязан идти СО "
+                "ВСЕМИ объявленными контролями. Построитель не вызывался."
+            )
+    elif named and evidence is not None and missing:
+        # Контроли сняты, доказательство есть, а снятие не объявлено. Прогон
+        # выглядит чистым, но §5 об этом не знает: исход контролей нигде не
+        # записан, и вердикт будет опираться на память автора.
         raise OutOfOrder(
-            f"ОТКАЗ: контроли {named} объявлены в §5, доказательства контрольного "
-            "прогона нет, а в формуляре они не стоят. Первый прогон обязан идти С "
-            "контролями. Построитель не вызывался."
+            f"ОТКАЗ: контроли {missing} сняты с формуляра, доказательство прогона есть, "
+            "а `spent_controls` в пре-регистрации не объявлены. Снятие обязано быть "
+            "записано вместе с исходом. Построитель не вызывался."
         )
+
+
+PROTOCOL_KEYS = ("controls", "promises", "spent_controls", "lost_bets", "predictions")
+
+
+def _form_identity(form_path: Path, control_columns: set[str]) -> str:
+    """Отпечаток формы БЕЗ ролей контрольных колонок.
+
+    Законное снятие контроля меняет форму — и сравнивать её отпечаток целиком
+    нельзя: чистый прогон обязан отличаться от контрольного. Но отличаться он
+    обязан ТОЛЬКО этим.
+
+    Поэтому роли контрольных колонок из отпечатка исключаются. Он одинаков до и
+    после снятия и расходится при любой другой правке: добавленной колонке,
+    смене срока, другом сплите. Так доказательство привязано к форме, а переход
+    «контрольный → чистый» остаётся разрешённым.
+    """
+    form = yaml.safe_load(form_path.read_text(encoding="utf-8")) or {}
+    columns = [
+        {
+            k: v
+            for k, v in column.items()
+            if not (column.get("name") in control_columns and k == "role")
+        }
+        for column in form.get("columns", [])
+    ]
+    skeleton = {**{k: v for k, v in form.items() if k != "columns"}, "columns": columns}
+    return hashlib.sha256(
+        yaml.safe_dump(skeleton, allow_unicode=True, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:12]
+
+
+def _control_columns(prereg: Path) -> set[str]:
+    return {c["column"] for c in declared(prereg).get("controls", []) if c.get("column")}
 
 
 def _fingerprint(path: Path) -> str:
@@ -334,7 +468,7 @@ def save_control_run(project: Path, prereg: Path, findings: Iterable[object]) ->
         yaml.safe_dump(
             {
                 "case": number,
-                "form": _fingerprint(project / "project.yaml"),
+                "form": _form_identity(project / "project.yaml", _control_columns(prereg)),
                 "manifest": _fingerprint(project / "manifest.yaml"),
                 "findings": sorted(str(getattr(f, "value", f)) for f in findings),
             },
@@ -346,16 +480,42 @@ def save_control_run(project: Path, prereg: Path, findings: Iterable[object]) ->
     return target
 
 
+IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
 def read_control_run(project: Path) -> dict | None:
-    """Прочитать доказательство. None — его нет или оно нечитаемо."""
+    """Прочитать доказательство. None — его нет, оно нечитаемо или не по схеме.
+
+    СХЕМА ПРОВЕРЯЕТСЯ, а не предполагается. Первая версия принимала любой
+    словарь с ключом `findings`, и повторное ревью показало, чем это кончается:
+    `findings: null` превращался в пустое множество, `findings: {a: false}` — в
+    множество ключей. Негодный документ становился ПОЛОЖИТЕЛЬНЫМ доказательством:
+    при `fired: false` сверка молчала, потому что находок «не было».
+
+    Пустой список — законное доказательство промолчавшего контроля. Отсутствие
+    списка, `null` и отображение — не список, и это разные вещи.
+    """
     path = project / "report" / CONTROL_RUN
     if not path.is_file():
         return None
     try:
         loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError:
+    except (yaml.YAMLError, UnicodeDecodeError):
         return None
-    return loaded if isinstance(loaded, dict) and "findings" in loaded else None
+    if not isinstance(loaded, dict):
+        return None
+    if not isinstance(loaded.get("case"), int):
+        return None
+    findings = loaded.get("findings")
+    if not isinstance(findings, list) or not all(
+        isinstance(item, str) and IDENTIFIER.match(item) for item in findings
+    ):
+        return None
+    if not all(
+        isinstance(loaded.get(field), str) and loaded.get(field) for field in ("form", "manifest")
+    ):
+        return None
+    return loaded
 
 
 VERDICT_ROW = re.compile(r"^\|\s*(P-\d+)\s*\|[^|]*\|\s*([^|]+?)\s*\|", re.MULTILINE)

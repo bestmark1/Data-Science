@@ -70,6 +70,7 @@ def _digests(project: Path) -> str:
     bit = hashlib.sha256((project / EMPTY_BIT).read_bytes()).hexdigest()[:12]
     answer = hashlib.sha256((project / SEALED).read_bytes()).hexdigest()[:12]
     return (
+        "```yaml\nproject: проба\n```\n\n"
         f"## 5а. Слепой контроль\n\n"
         f"Отпечаток бита пустоты: **`{bit}`**\n"
         f"Отпечаток ответа: **`{answer}`**\n"
@@ -86,7 +87,7 @@ def test_the_builder_is_not_called_without_a_sealed_control(tmp_path) -> None:
     после сборки, означал бы, что данные уже прочитаны и обработаны.
     """
     project = _project(tmp_path, sealed=False, empty=False)
-    prereg = _prereg(tmp_path, "## 5а. Слепой контроль\n")
+    prereg = _prereg(tmp_path, "```yaml\nproject: проба\n```\n\n## 5а. Слепой контроль\n")
     calls = 0
 
     def build():
@@ -119,7 +120,10 @@ def test_missing_digests_stop_the_run(tmp_path) -> None:
     видел сигналы и мог подобрать заключение.
     """
     project = _project(tmp_path)
-    prereg = _prereg(tmp_path, "## 5а. Слепой контроль\n\nОтпечаток бита пустоты: `—`\n")
+    prereg = _prereg(
+        tmp_path,
+        "```yaml\nproject: проба\n```\n\n## 5а\n\nОтпечаток бита пустоты: `—`\n",
+    )
 
     with pytest.raises(OutOfOrder) as отказ:
         preflight(project, prereg)
@@ -132,7 +136,7 @@ def test_a_digest_that_does_not_match_the_file_stops_the_run(tmp_path) -> None:
     project = _project(tmp_path)
     prereg = _prereg(
         tmp_path,
-        "## 5а\n\nОтпечаток бита пустоты: **`000000000000`**\n"
+        "```yaml\nproject: проба\n```\n\n## 5а\n\nОтпечаток бита пустоты: **`000000000000`**\n"
         "Отпечаток ответа: **`111111111111`**\n",
     )
 
@@ -186,8 +190,9 @@ def test_historical_cases_are_left_alone(tmp_path) -> None:
     """
     project = _project(tmp_path, manifest=False, sealed=False, empty=False)
 
-    preflight(project, _prereg(tmp_path, "пусто", number=FROM_CASE - 1))
-    preflight(project, _prereg(tmp_path, "пусто", number=2))
+    блок = "```yaml\nproject: проба\n```\n"
+    preflight(project, _prereg(tmp_path, блок, number=FROM_CASE - 1))
+    preflight(project, _prereg(tmp_path, блок, number=2))
 
 
 # --- Сохранение отчёта контрольного прогона ----------------------------------
@@ -470,7 +475,13 @@ def test_a_missing_prereg_file_is_refused(tmp_path) -> None:
 def test_a_prereg_of_another_project_is_refused(tmp_path) -> None:
     """Кейс не сверяется с чужой пре-регистрацией."""
     project = _project(tmp_path)
-    prereg = _prereg(tmp_path, _digests(project) + "\n```yaml\nproject: чужой\n```\n")
+    bit = hashlib.sha256((project / EMPTY_BIT).read_bytes()).hexdigest()[:12]
+    answer = hashlib.sha256((project / SEALED).read_bytes()).hexdigest()[:12]
+    prereg = _prereg(
+        tmp_path,
+        "```yaml\nproject: чужой\n```\n\n"
+        f"Отпечаток бита пустоты: **`{bit}`**\nОтпечаток ответа: **`{answer}`**\n",
+    )
 
     with pytest.raises(OutOfOrder) as отказ:
         preflight(project, prereg)
@@ -496,7 +507,7 @@ def test_declared_controls_must_stand_before_the_first_run(tmp_path) -> None:
     with pytest.raises(OutOfOrder) as отказ:
         preflight(project, prereg)
 
-    assert "обязан идти С контролями" in str(отказ.value)
+    assert "обязан идти СО ВСЕМИ" in str(отказ.value)
 
 
 def test_an_empty_or_foreign_control_run_does_not_authorize_removal(tmp_path) -> None:
@@ -516,10 +527,11 @@ def test_an_empty_or_foreign_control_run_does_not_authorize_removal(tmp_path) ->
 
     with pytest.raises(OutOfOrder) as пусто:
         preflight(project, prereg)
-    assert "нет либо оно нечитаемо" in str(пусто.value)
+    assert "не по схеме" in str(пусто.value)
 
     (project / "report" / CONTROL_RUN).write_text(
-        "case: 999\nfindings: [sentinel_as_value]\n", encoding="utf-8"
+        "case: 999\nform: aaaaaaaaaaaa\nmanifest: bbbbbbbbbbbb\nfindings: [sentinel_as_value]\n",
+        encoding="utf-8",
     )
     with pytest.raises(OutOfOrder) as чужое:
         preflight(project, prereg)
@@ -597,3 +609,192 @@ def test_the_audit_catches_a_contradiction_in_temporary_artifacts(tmp_path) -> N
 
     assert problems, "обход не заметил снятия без доказательства прогона"
     assert "доказательства прогона нет" in problems[0]
+
+
+# --- Регрессии по ПОВТОРНОМУ ревью 9 сентября --------------------------------
+#
+# Первая редакция исправлений закрыла две находки из пяти и породила новую.
+# Ревьюер воспроизвёл 17 сценариев; ниже те, что защищают исправленное.
+
+
+@pytest.mark.parametrize("findings", ["null", "{sentinel_as_value: false}", "'строка'"])
+def test_evidence_off_schema_is_refused(tmp_path, findings) -> None:
+    """Негодный документ становился ПОЛОЖИТЕЛЬНЫМ доказательством.
+
+    Reader проверял только тип dict и наличие ключа. `findings: null` давал
+    пустое множество, отображение — множество ключей. При `fired: false` сверка
+    молчала, потому что находок «не было».
+    """
+    project = _project(tmp_path)
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(False))
+    (project / "project.yaml").write_text(
+        "columns:\n  - {name: at_night, role: ignored}\n"
+        "  - {name: received_at, role: decision_time}\n",
+        encoding="utf-8",
+    )
+    (project / "report" / CONTROL_RUN).write_text(
+        f"case: 21\nform: aaaaaaaaaaaa\nmanifest: bbbbbbbbbbbb\nfindings: {findings}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OutOfOrder):
+        preflight(project, prereg)
+
+
+def test_evidence_without_fingerprints_is_refused(tmp_path) -> None:
+    """Отпечатки записывались и НИКОГДА не читались — обещание без обеспечения."""
+    project = _project(tmp_path)
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True))
+    (project / "report" / CONTROL_RUN).write_text(
+        "case: 21\nfindings: [sentinel_as_value]\n", encoding="utf-8"
+    )
+
+    with pytest.raises(OutOfOrder):
+        preflight(project, prereg)
+
+
+def test_only_part_of_the_controls_standing_is_refused(tmp_path) -> None:
+    """`any` выдавал один поставленный контроль за все объявленные."""
+    project = _project(tmp_path)
+    (project / "project.yaml").write_text(
+        "columns:\n  - {name: at_night, role: feature}\n"
+        "  - {name: chain, role: ignored}\n"
+        "  - {name: received_at, role: decision_time}\n",
+        encoding="utf-8",
+    )
+    prereg = _prereg(
+        tmp_path,
+        _digests(project) + "\n```yaml\nproject: проба\ncontrols:\n"
+        "  - {name: К-1, column: at_night, role: feature,\n"
+        "     expect: sentinel_as_value, basis: plant}\n"
+        "  - {name: К-2, column: chain, role: group_id, expect: undeclared_group, basis: plant}\n"
+        "```\n",
+    )
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "К-2" in str(отказ.value)
+    assert "СО ВСЕМИ" in str(отказ.value)
+
+
+def test_a_clean_run_without_declared_removal_is_refused(tmp_path) -> None:
+    """Контроли сняты, доказательство есть, а §5 об этом не знает.
+
+    Исход контролей нигде не записан, и вердикт опёрся бы на память автора.
+    """
+    project = _project(tmp_path)
+    prereg_with = _prereg(tmp_path, _digests(project) + CONTROLS)
+    save_control_run(project, prereg_with, ["sentinel_as_value"])
+    (project / "project.yaml").write_text(
+        "columns:\n  - {name: at_night, role: ignored}\n"
+        "  - {name: received_at, role: decision_time}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg_with)
+
+    assert "не объявлены" in str(отказ.value)
+
+
+def test_removal_declared_while_controls_still_stand_is_refused(tmp_path) -> None:
+    """Снятие объявлено, а колонка осталась в контрольной роли."""
+    project = _project(tmp_path)
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True))
+    save_control_run(project, prereg, ["sentinel_as_value"])
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "всё ещё стоят" in str(отказ.value)
+
+
+def test_a_symlink_may_not_pass_one_case_for_another(tmp_path) -> None:
+    """`prereg-case-20.md` — ссылка на кейс 21: имя говорило одно, цель другое."""
+    project = _project(tmp_path)
+    настоящая = _prereg(tmp_path, _digests(project) + CONTROLS)
+    ссылка = tmp_path / "prereg-case-20.md"
+    ссылка.symlink_to(настоящая)
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, ссылка)
+
+    assert "расходится с целью" in str(отказ.value)
+
+
+def test_a_protocol_block_without_project_is_refused(tmp_path) -> None:
+    """Контроли в блоке без `project` парсер не видел вовсе.
+
+    Preflight считал, что контролей нет, и пропускал прогон без них.
+    """
+    project = _project(tmp_path)
+    prereg = _prereg(
+        tmp_path,
+        _digests(project)
+        + "\n```yaml\nproject: проба\n```\n"
+        + "\n```yaml\ncontrols:\n  - {name: К-1, column: at_night, role: feature,\n"
+        "     expect: sentinel_as_value, basis: plant}\n```\n",
+    )
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "без `project`" in str(отказ.value)
+
+
+def test_conflicting_project_declarations_are_refused(tmp_path) -> None:
+    """`project: чужой`, следом `project: проба` — конфликт перезаписывался молча."""
+    project = _project(tmp_path)
+    prereg = _prereg(
+        tmp_path,
+        _digests(project) + "\n```yaml\nproject: чужой\n```\n" + CONTROLS,
+    )
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "повторено с другим значением" in str(отказ.value)
+
+
+def test_the_check_command_keeps_the_cause_of_a_long_collection_error(monkeypatch, capsys) -> None:
+    """Регрессия, которую прошлый раз ЗАБЫЛИ перенести, вопреки отчёту.
+
+    Причина ошибки сборки стоит в начале вывода, а хвост занимают
+    предупреждения. Прежняя версия печатала последние 4000 знаков и теряла имя
+    отсутствующего модуля — то самое, ради чего диагностику и чинили.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("check", ROOT / "tools" / "check.py")
+    check = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(check)
+
+    вывод = (
+        "ImportError while loading conftest\n"
+        "ModuleNotFoundError: No module named 'missing_fixture_module'\n"
+        + "\n".join(f"warning {i}: длинное предупреждение" for i in range(400))
+    )
+    answers = iter([(2, вывод), (0, "All checks passed!")])
+    monkeypatch.setattr(check, "_run", lambda argv: next(answers))
+
+    assert check.main() == 1
+    напечатано = capsys.readouterr().out
+
+    assert "missing_fixture_module" in напечатано, "первопричина потеряна в хвосте"
+    (ROOT / ".check-collection-error.log").unlink(missing_ok=True)
+
+
+def test_a_prereg_without_a_declared_project_is_refused(tmp_path) -> None:
+    """Историческое исключение не выдаётся по одному имени файла.
+
+    Прежде ветка `< FROM_CASE` возвращала управление ДО чтения `project`, и
+    документ чужого кейса под старым номером отключал защиту целиком.
+    """
+    project = _project(tmp_path)
+    prereg = _prereg(tmp_path, "## 5а\n\nбез машиночитаемого блока\n")
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "не объявляет `project`" in str(отказ.value)

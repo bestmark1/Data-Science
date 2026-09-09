@@ -62,12 +62,23 @@ def main() -> int:
         # (ImportError, синтаксис, отсутствующий модуль). Прежняя версия печатала
         # «passed 0, failed 0» и «ЕСТЬ ПРОВАЛЫ», уничтожая первопричину: имя
         # отсутствующего модуля в вывод не попадало вовсе.
+        # Обрезать нельзя: первопричина стоит В НАЧАЛЕ, а хвост занимают
+        # предупреждения. Прежняя версия печатала последние 4000 знаков и теряла
+        # имя отсутствующего модуля ровно тогда, когда оно нужнее всего.
+        log = ROOT / ".check-collection-error.log"
+        log.write_text(out, encoding="utf-8")
+        first = [
+            line
+            for line in out.splitlines()
+            if any(mark in line for mark in ("Error", "error:", "ImportError", "ERROR"))
+        ]
         print(
             f"\n--- pytest завершился с кодом {code}, не дав статистики ---\n"
-            "Похоже на ошибку сборки тестов, а не на провал проверки.\n"
-            "Вывод целиком:"
+            "Похоже на ошибку сборки тестов, а не на провал проверки."
         )
-        print(out.strip()[-4000:] or "(пусто)")
+        for line in first[:20]:
+            print(f"  {line}")
+        print(f"\nполный вывод сохранён: {log}")
 
     style, styled = _run([str(PYTHON), "-m", "ruff", "check", "src", "tests", "tools", "protocol"])
     print(f"стиль:   {'чисто' if style == 0 else 'есть замечания'}")
