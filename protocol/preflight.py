@@ -28,6 +28,8 @@ from pathlib import Path
 
 import yaml
 
+from dsx.roles import Role
+
 FROM_CASE = 21
 """Кейс, с которого действует проверка порядка.
 
@@ -123,7 +125,7 @@ CLEAN_ROLE = "clean_role"
 
 
 def controls_without_clean_role(prereg: Path) -> list[str]:
-    """Контроли с колонкой, но без объявленной исходной роли.
+    """Контроли с колонкой, но без допустимой объявленной исходной роли.
 
     Умолчание здесь запрещено: оно совпадало бы с честным ответом там, где
     колонка и правда снимается в `ignored`, и было бы неотличимо от
@@ -135,7 +137,20 @@ def controls_without_clean_role(prereg: Path) -> list[str]:
             continue
         if CLEAN_ROLE not in control:
             broken.append(f"{control['name']}: нет `{CLEAN_ROLE}`")
-        elif control[CLEAN_ROLE] == control.get("role"):
+            continue
+
+        clean_role = control[CLEAN_ROLE]
+        if not isinstance(clean_role, str):
+            broken.append(f"{control['name']}: `{CLEAN_ROLE}` не строка роли ({clean_role!r})")
+            continue
+        try:
+            Role(clean_role)
+        except ValueError:
+            broken.append(
+                f"{control['name']}: `{CLEAN_ROLE}` {clean_role!r} не входит в `dsx.roles.Role`"
+            )
+            continue
+        if clean_role == control.get("role"):
             broken.append(
                 f"{control['name']}: `{CLEAN_ROLE}` совпадает с ролью контроля "
                 f"({control.get('role')!r}) — стоящий контроль неотличим от снятого"

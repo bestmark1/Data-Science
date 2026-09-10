@@ -1229,6 +1229,75 @@ def test_a_clean_role_equal_to_the_control_role_is_refused(tmp_path) -> None:
     assert "совпадает с ролью контроля" in str(отказ.value)
 
 
+@pytest.mark.parametrize(
+    ("clean_role", "yaml_value"),
+    [(None, "null"), ("", "''"), ("not_a_role", "not_a_role")],
+)
+def test_an_invalid_clean_role_stops_before_the_builder(
+    tmp_path, clean_role, yaml_value: str
+) -> None:
+    """`clean_role` обязан быть существующей Role, а не просто ключом в YAML.
+
+    `null`, пустая строка и неизвестное имя прежде проходили до построителя.
+    Счётчик проверяет именно границу `guarded`: следующий вызов после отдельного
+    `preflight` не доказывал бы, что построитель недостижим при отказе.
+    """
+    project = _project(tmp_path)
+    prereg = _prereg(
+        tmp_path,
+        _digests(project)
+        + "\n```yaml\nproject: проба\ncontrols:\n"
+        "  - {name: К-1, column: at_night, role: feature, "
+        f"clean_role: {yaml_value}, expect: sentinel_as_value, basis: plant}}\n```\n",
+    )
+    вызовов = 0
+
+    def build() -> None:
+        nonlocal вызовов
+        вызовов += 1
+
+    with pytest.raises(OutOfOrder) as отказ:
+        guarded(project, prereg, build)
+
+    assert вызовов == 0, f"построитель вызван при clean_role={clean_role!r}"
+    assert "контроли объявлены без исходной роли" in str(отказ.value)
+
+
+def test_invalid_clean_role_stops_a_removed_control_after_saved_evidence(tmp_path) -> None:
+    """Удаление `role` после сохранения не проходит через `clean_role: null`.
+
+    Доказательство создано и прочитано по корректному объявлению. Затем
+    отдельная испорченная версия §5 одновременно удаляет роль колонки и меняет
+    `clean_role` на `null`: отказ обязан прийти до состояний и построителя.
+    """
+    project, prereg = _with_form(tmp_path, RICH_FORM)
+    preflight(project, prereg)
+    save_control_run(project, prereg, ["sentinel_as_value"])
+    assert read_control_run(project) is not None
+
+    (project / "project.yaml").write_text(
+        RICH_FORM.replace("{name: at_night, role: feature}", "{name: at_night}"),
+        encoding="utf-8",
+    )
+    malformed = _prereg(
+        tmp_path,
+        _digests(project)
+        + CONTROLS.replace("clean_role: ignored", "clean_role: null")
+        + _spent(True),
+    )
+    вызовов = 0
+
+    def build() -> None:
+        nonlocal вызовов
+        вызовов += 1
+
+    with pytest.raises(OutOfOrder) as отказ:
+        guarded(project, malformed, build)
+
+    assert вызовов == 0, "построитель вызван при удалённой роли и clean_role: null"
+    assert "не строка роли" in str(отказ.value)
+
+
 def test_a_role_swap_is_named_even_when_the_finding_is_also_unreachable(tmp_path) -> None:
     """Подмена роли отвергается ДО проверки достижимости, как обещает спецификация.
 
