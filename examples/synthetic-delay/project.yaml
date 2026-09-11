@@ -1,0 +1,68 @@
+# ФОРМА ПРИКЛАДНОГО ПРИМЕРА
+#
+# Зачем этот файл существует. Ядро принимает ОБЪЯВЛЕНИЯ через форму, и обойти
+# её загрузку значило бы показать не тот путь, которым пользуются кейсы:
+# `dsx.project.load` разбирает роли, контракт исхода, тип задачи и сплит и
+# отказывает при ошибке в объявлении, а не даёт неверный результат позже.
+# Собрать эти объекты в коде примера было бы короче на один файл и неверно по
+# существу.
+#
+# Мир синтетический (`dsx.evals.registry`, кейс `feature-falsely-declared-available`),
+# и данные порождаются детерминированно — выгрузок и сети не требуется.
+#
+# ОДНО ОБЪЯВЛЕНИЕ ЗДЕСЬ ЗАВЕДОМО ЛОЖНО, и это устройство мира, а не опечатка:
+# `overrun_days` объявлена доступной в момент решения, хотя вычислена из
+# исхода. Ядро обязано возразить — и возражает находкой `feature_after_decision`.
+# Само по себе это возражение НЕ доказывает утечку: проверка меряет силу связи
+# и по устройству не отличает утечку от сильного добросовестного признака.
+# Здесь ответ известен по построению мира; на настоящих данных его знает
+# только тот, кто знает, когда величина становится известной.
+
+title: "Синтетический пример: наступит ли событие позже назначенного срока"
+observed_until: 2025-08-31T00:00:00
+observed_until_source: "мир стенда порождается детерминированно; последнее событие 2025-07-31, месяц добавлен запасом"
+
+assumptions:
+  - statement: "мир синтетический, и ответ в нём известен по построению"
+    basis: document
+    author: "пример"
+    consequence: "числа примера ничего не говорят о качестве на настоящей задаче"
+    evidence: "src/dsx/evals/registry.py, кейс feature-falsely-declared-available"
+
+columns:
+  - {name: entity_id, role: entity_id}
+  - {name: decided_at, role: decision_time, temporal: instant}
+  - {name: deadline_on, role: deadline, temporal: date, value_as_of: decided_at}
+  - {name: event_at, role: outcome_component, temporal: instant}
+  - {name: status, role: status}
+  - {name: lead_days, role: feature, availability: at_decision, value_as_of: decided_at, source_of_claim: "генератор мира"}
+  - {name: size, role: feature, availability: at_decision, value_as_of: decided_at, source_of_claim: "генератор мира"}
+  - {name: region, role: feature, availability: at_decision, value_as_of: decided_at, source_of_claim: "генератор мира"}
+  - {name: overrun_days, role: feature, availability: at_decision, value_as_of: decided_at, source_of_claim: "инжектор"}
+
+outcome:
+  event_column: event_at
+  deadline_column: deadline_on
+  comparison: by_date
+  positive_class: event_after_deadline
+  event_name: "событие"
+  deadline_name: "назначенный срок"
+  degenerate_beyond: 0.01
+  missing_causes:
+    - {name: "событие не произошло", meaning: not_occurred, status_value: completed}
+    - {name: "объект исключён из обработки", meaning: excluded, status_value: aborted}
+    - {name: "событие ещё не наступило", meaning: not_occurred, status_value: pending}
+
+task:
+  target_kind: binary
+  outcome_timing: delayed
+  has_process: true
+  is_stream: true
+  object_lifetime: one_shot
+
+split:
+  windows:
+    - {name: w0, start_day: 296, stop_day: 339}
+    - {name: w1, start_day: 339, stop_day: 382}
+    - {name: w2, start_day: 382, stop_day: 425}
+  reserve_from_day: 474
