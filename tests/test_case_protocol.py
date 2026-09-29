@@ -1706,3 +1706,67 @@ def test_a_full_reference_result_is_accepted(tmp_path) -> None:
     (project / ANALOGS).write_text(_with_reference(GOOD_REFERENCE), encoding="utf-8")
 
     assert guarded(project, prereg, lambda: "построено") == "построено"
+
+
+def _decisions(found: str, taken: str = "[]", rejected: str = "[]") -> str:
+    return ANALOGS_BLOCK.replace(
+        "found: []\n  taken: []\n  rejected: []",
+        f"found: {found}\n  taken: {taken}\n  rejected: {rejected}",
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "record"),
+    [
+        (
+            "ссылка — не URL",
+            _decisions("[{url: 'x'}]", rejected="[{url: 'x', reason: 'проверен'}]"),
+        ),
+        (
+            "ссылка без хоста с точкой",
+            _decisions("[{url: 'https://x'}]", rejected="[{url: 'https://x', reason: 'проверен'}]"),
+        ),
+        (
+            "ссылка не http",
+            _decisions(
+                "[{url: 'ftp://kaggle.com/x'}]",
+                rejected="[{url: 'ftp://kaggle.com/x', reason: 'проверен'}]",
+            ),
+        ),
+        (
+            "решение о ненайденном",
+            _decisions("[]", taken="[{url: 'https://kaggle.com/x', reason: 'взят'}]"),
+        ),
+        (
+            "взят и отвергнут сразу",
+            _decisions(
+                "[{url: 'https://kaggle.com/x'}]",
+                taken="[{url: 'https://kaggle.com/x', reason: 'взят'}]",
+                rejected="[{url: 'https://kaggle.com/x', reason: 'отвергнут'}]",
+            ),
+        ),
+        (
+            "найден дважды",
+            _decisions(
+                "[{url: 'https://kaggle.com/x'}, {url: 'https://kaggle.com/x'}]",
+                rejected="[{url: 'https://kaggle.com/x', reason: 'проверен'}]",
+            ),
+        ),
+    ],
+)
+def test_decisions_answer_for_what_was_found(tmp_path, label, record) -> None:
+    """Третье ревью PR #2: `url: 'x'` проходил как ссылка, а решение в `taken` —
+    при пустом `found`: согласованность проверялась лишь от найденного к решению.
+    """
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(record, encoding="utf-8")
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, build)
+
+    assert calls == 0, f"построитель вызван: {label}"

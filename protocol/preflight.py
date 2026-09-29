@@ -24,12 +24,14 @@ from __future__ import annotations
 import datetime
 import hashlib
 import re
+import urllib.parse
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -370,6 +372,22 @@ _Text = Annotated[str, StringConstraints(strict=True, strip_whitespace=True, min
 _Asked = Annotated[list[_Text], Field(min_length=1)]
 
 
+def _web_link(value: str) -> str:
+    """Ссылка: схема http(s) и хост с точкой. Существует ли страница — не проверяется."""
+    parts = urllib.parse.urlsplit(value)
+    host = parts.hostname or ""
+    if (
+        parts.scheme not in ("http", "https")
+        or "." not in host.strip(".")
+        or any(char.isspace() for char in value)
+    ):
+        raise ValueError("не ссылка http(s) с хостом")
+    return value
+
+
+_Link = Annotated[_Text, AfterValidator(_web_link)]
+
+
 class _Form(BaseModel):
     """Строгая форма: точные типы, лишние поля — ошибка (опечатка в имени тоже)."""
 
@@ -392,13 +410,13 @@ class _Reference(_Form):
 
 
 class _Found(_Form):
-    url: _Text
+    url: _Link
     reference_result: _Reference | None = None
     """Может отсутствовать: не всякий аналог публикует результат."""
 
 
 class _Decision(_Form):
-    url: _Text
+    url: _Link
     reason: _Text
 
 
@@ -446,6 +464,14 @@ def analogs_defects(block: object) -> list[str]:
     split: []}` без `population`. Заплата на каждое поле оставляет непроверенным
     соседнее, поэтому форма задана строгой схемой: точные типы, «ничего» — это
     `[]`, лишние и опечатанные поля — ошибка.
+
+    ГРАНИЦА ФОРМЫ. Проверяется: типы и обязательные поля; ссылка — http(s) с
+    хостом; запросы по каждому источнику непусты; каждый найденный аналог имеет
+    ровно одно решение, и каждое решение — о найденном (третье ревью PR #2:
+    `url: 'x'` и решение при пустом `found` проходили). НЕ проверяется —
+    содержание: существует ли страница, относится ли аналог к задаче, правдивы
+    ли запросы и причины. `https://example.com` с причиной «проверен» форму
+    пройдёт; это предел, а не дыра.
     """
     if not isinstance(block, dict):
         return ["блока `analogs` нет"]
@@ -456,12 +482,21 @@ def analogs_defects(block: object) -> list[str]:
             f"`{'.'.join(str(part) for part in error['loc'])}`: {error['msg']}"
             for error in exc.errors()
         ]
-    decided = {entry.url for entry in (*record.taken, *record.rejected)}
-    return [
-        f"аналог {item.url} найден, но не взят и не отвергнут"
-        for item in record.found
-        if item.url not in decided
+    found = [item.url for item in record.found]
+    taken = [entry.url for entry in record.taken]
+    rejected = [entry.url for entry in record.rejected]
+    decided = [*taken, *rejected]
+    defects = [f"аналог {url} найден дважды" for url in sorted(set(found)) if found.count(url) > 1]
+    defects += [
+        f"решение дважды об аналоге {url}" for url in sorted(set(decided)) if decided.count(url) > 1
     ]
+    defects += [
+        f"аналог {url} найден, но не взят и не отвергнут" for url in found if url not in decided
+    ]
+    defects += [
+        f"решение об аналоге {url}, которого нет в `found`" for url in decided if url not in found
+    ]
+    return defects
 
 
 def preflight(project: Path, prereg: Path) -> None:
