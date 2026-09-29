@@ -1971,3 +1971,73 @@ def test_a_host_of_the_maximum_length_is_accepted() -> None:
     host = ".".join(["a" * 63] * 3 + ["b" * 61])
     assert len(host) == 253
     assert _web_link(f"https://{host}/x")
+
+
+CONTRADICTION = ANALOGS_BLOCK.replace("project: проба\nanalogs:", "analogs:").replace(
+    "  pitfalls: []\n```", "  pitfalls: ['утечка через статус']\nproject: проба\n```"
+)
+"""Второй блок того же проекта с другим содержимым: `project` не первой строкой."""
+
+
+@pytest.mark.parametrize(
+    ("label", "extra"),
+    [
+        ("project не первой строкой", CONTRADICTION),
+        ("битый YAML", "\n```yaml\nproject: проба\nanalogs: [\n```\n"),
+        (
+            "повтор ключа",
+            ANALOGS_BLOCK.replace(
+                "  found: []", "  found:\n    - {url: 'https://kaggle.com/x'}\n  found: []"
+            ),
+        ),
+        ("ключ слияния", "\n```yaml\nбаза: &b {project: проба}\n<<: *b\n```\n"),
+        ("ограда тильдами", CONTRADICTION.replace("```yaml", "~~~yaml").replace("```", "~~~")),
+        ("ограда заглавными", CONTRADICTION.replace("```yaml", "```YAML")),
+        ("ограда с отступом", CONTRADICTION.replace("```yaml", "  ```yaml")),
+    ],
+)
+def test_a_hidden_block_is_refused_from_case_21(tmp_path, label, extra) -> None:
+    """Шестое ревью PR #2, пункты 1–3: разбор блоков пропускал то, что не понимал.
+
+    Блок, где `project:` не первой строкой, битый YAML и повтор ключа прятали
+    запись от проверки, и построитель вызывался. Нестандартная ограда блока —
+    та же дыра, найдена автором при перечитывании.
+    """
+    project, prereg = _ready(tmp_path)
+    record = ANALOGS_BLOCK if label == "повтор ключа" else ANALOGS_BLOCK + extra
+    if label == "повтор ключа":
+        record = extra
+    (project / ANALOGS).write_text(record, encoding="utf-8")
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, build)
+
+    assert calls == 0, f"построитель вызван: {label}"
+
+
+def test_project_after_the_controls_is_read_from_case_21(tmp_path) -> None:
+    """Та же дыра в контролях: блок `controls` с `project` второй строкой не читался."""
+    prereg = _prereg(
+        tmp_path,
+        "```yaml\ncontrols:\n  - {name: К-1, column: at_night}\nproject: проба\n```\n",
+        analogs=False,
+    )
+
+    assert declared(prereg)["controls"][0]["name"] == "К-1"
+
+
+def test_a_historical_case_keeps_its_old_reading(tmp_path) -> None:
+    """Опечатанные документы 2–20 разбираются по-старому: битый блок молча пропускается."""
+    prereg = _prereg(
+        tmp_path,
+        "```yaml\nproject: проба\n```\n\n```yaml\nanalogs: [\n```\n",
+        number=20,
+        analogs=False,
+    )
+
+    assert declared(prereg) == {"project": "проба"}

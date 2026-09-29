@@ -79,15 +79,95 @@ def _case_number(prereg: Path) -> int | None:
 ANY_BLOCK = re.compile(r"```yaml\n(.*?)\n```", re.DOTALL)
 
 
+FENCE_OPEN = re.compile(r"^[ \t]*(?:`{3,}|~{3,})[ \t]*ya?ml\b", re.IGNORECASE | re.MULTILINE)
+"""Любое открытие блока YAML: тильды, заглавные, отступ. Строгий разбор обязан видеть все."""
+
+
+class _UniqueKeys(yaml.SafeLoader):
+    """Загрузчик, отвергающий повтор ключа и ключ слияния `<<`.
+
+    Обычный загрузчик оставляет последнее из повторённых значений: запись
+    `found: [...]`, затем `found: []` проходила проверку пустой (шестое ревью
+    PR #2). Ключ слияния прячет запись тем же способом и тоже отвергается.
+    """
+
+    def construct_mapping(self, node, deep=False):
+        seen = set()
+        for key_node, _ in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                raise yaml.constructor.ConstructorError(
+                    None, None, "ключ слияния `<<` прячет запись", key_node.start_mark
+                )
+            key = self.construct_object(key_node, deep=True)
+            if key in seen:
+                raise yaml.constructor.ConstructorError(
+                    None, None, f"ключ {key!r} повторён", key_node.start_mark
+                )
+            seen.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
+def _strict(path: Path) -> bool:
+    """Строгий разбор — для пре-регистраций с `FROM_CASE` и для прочих файлов протокола."""
+    number = _case_number(path)
+    return number is None or number >= FROM_CASE
+
+
+def _blocks(path: Path) -> list[object]:
+    """Все блоки YAML документа, разобранные строго: ничего не пропускается молча.
+
+    Шестое ревью PR #2: блок, где `project:` не первой строкой, битый YAML и
+    повтор ключа прятали запись, и построитель вызывался. Нестандартная ограда
+    блока — та же дыра, найдена автором. Здесь любой блок либо разобран, либо
+    отказ.
+    """
+    text = path.read_text(encoding="utf-8")
+    fenced = ANY_BLOCK.findall(text)
+    if len(FENCE_OPEN.findall(text)) != len(fenced):
+        raise OutOfOrder(
+            f"ОТКАЗ: в {path.name} есть блок YAML в нестандартной ограде — нужна "
+            "```yaml с начала строки. Такой блок разбор бы пропустил. Построитель не вызывался."
+        )
+    blocks = []
+    for body in fenced:
+        try:
+            blocks.append(yaml.load(body, Loader=_UniqueKeys))
+        except yaml.YAMLError as exc:
+            reason = str(exc).splitlines()[0]
+            raise OutOfOrder(
+                f"ОТКАЗ: блок YAML в {path.name} не разобран ({reason}). Его содержимое "
+                "потерялось бы молча. Построитель не вызывался."
+            ) from None
+    return blocks
+
+
 def declared(prereg: Path) -> dict:
     """Машиночитаемые объявления пре-регистрации — все блоки сразу.
 
     Блок протокола обязан нести `project:`. Повторное ревью показало, чем грозит
     обратное: контроли, объявленные в блоке без `project`, парсер не видел вовсе,
     и preflight считал, что контролей нет.
+
+    С `FROM_CASE` разбор строгий (`_blocks`): `project` — на любой строке блока,
+    битый YAML, повтор ключа и нестандартная ограда — отказ. Опечатанные
+    документы старших кейсов разбираются прежним способом: правило вводится вперёд.
     """
-    text = prereg.read_text(encoding="utf-8")
     keys = _protocol_keys(prereg)
+    if _strict(prereg):
+        candidates = _blocks(prereg)
+        for block in candidates:
+            if isinstance(block, dict) and "project" not in block and set(block) & set(keys):
+                raise OutOfOrder(
+                    f"ОТКАЗ: в {prereg.name} есть машиночитаемый блок протокола "
+                    f"({sorted(set(block) & set(keys))}) без `project`. "
+                    "Такой блок не был бы связан с кейсом и потерялся бы молча. "
+                    "Построитель не вызывался."
+                )
+        return _merge(
+            block for block in candidates if isinstance(block, dict) and "project" in block
+        )
+
+    text = prereg.read_text(encoding="utf-8")
     for found in ANY_BLOCK.finditer(text):
         try:
             block = yaml.safe_load(found.group(1))
@@ -101,10 +181,12 @@ def declared(prereg: Path) -> dict:
                     "Такой блок не был бы связан с кейсом и потерялся бы молча. "
                     "Построитель не вызывался."
                 )
+    return _merge(yaml.safe_load(found.group(1)) for found in BLOCK.finditer(text))
 
+
+def _merge(blocks) -> dict:
     merged: dict = {}
-    for found in BLOCK.finditer(text):
-        block = yaml.safe_load(found.group(1))
+    for block in blocks:
         for key, value in block.items():
             if key in merged and merged[key] != value:
                 if isinstance(value, list):
