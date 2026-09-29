@@ -129,11 +129,21 @@ def rates(ids: list[str], worlds: int) -> None:
         print(f"{i}: провалов {count[i]} из {worlds}")
 
 
+def _strength(frame: pl.DataFrame) -> float:
+    return abs(association(frame["lead_days"], frame[LABEL]))
+
+
 def n4(worlds: int) -> None:
-    """Сила связи lead_days с исходом против порога 3σ N4 на кейсе смены знака."""
+    """Сила связи lead_days с исходом против порога 3σ N4 на кейсе смены знака.
+
+    Момент разворота берётся из мира, построенного ВНУТРИ того же сдвига с seed по
+    умолчанию: `build_world(seed=7 + shift)` внутри `shifted(shift)` сдвинул бы
+    seed дважды — ошибка, найденная повторным ревью PR #2.
+    """
     bundle = BY_ID["flipped-feature-relation"]
     clean = BY_ID["clean-baseline"]
-    caught, thresholds, whole, early, late, share = [], [], [], [], [], []
+    caught, thresholds, whole, early, late, flipped_late = [], [], [], [], [], []
+    where, share = [], []
     for shift in range(worlds):
         with shifted(shift):
             windows = _windows_with_labels(context_for(bundle))
@@ -143,28 +153,40 @@ def n4(worlds: int) -> None:
                     for s in report_for(bundle).signals
                 )
             )
-            thresholds.append(np.median([SIGMA * _association_error(f[LABEL]) for _, f in windows]))
-            flip = _moment_at(world.build_world(seed=7 + shift).main, 0.72)
-            share.append(float((windows[-1][1]["decided_at"] >= flip).mean()))
-            ctx = context_for(clean)
-            frame = pl.concat([f for _, f in _windows_with_labels(ctx)])
-            whole.append(abs(association(frame["lead_days"], frame[LABEL])))
-            clean_windows = _windows_with_labels(ctx)
-            early.append(
-                abs(association(clean_windows[0][1]["lead_days"], clean_windows[0][1][LABEL]))
-            )
-            late.append(
-                abs(association(clean_windows[-1][1]["lead_days"], clean_windows[-1][1][LABEL]))
-            )
-    print(f"N4 поймала смену знака: {sum(caught)} из {worlds}")
+            flip = _moment_at(world.build_world().main, 0.72)
+            clean_windows = _windows_with_labels(context_for(clean))
+        thresholds.append(np.median([SIGMA * _association_error(f[LABEL]) for _, f in windows]))
+        flipped_late.append(_strength(windows[-1][1]))
+        whole.append(_strength(pl.concat([f for _, f in clean_windows])))
+        early.append(_strength(clean_windows[0][1]))
+        late.append(_strength(clean_windows[-1][1]))
+        spot = "до окон"
+        for name, frame in windows:
+            if frame["decided_at"].min() <= flip:
+                spot = name if flip <= frame["decided_at"].max() else f"после {name}"
+        where.append(spot)
+        share.append(float((windows[-1][1]["decided_at"] >= flip).mean()))
+    caught, share = np.array(caught), np.array(share)
+    print(f"N4 поймала смену знака: {caught.sum()} из {worlds}")
     print(f"порог 3σ по окнам, медиана: {np.median(thresholds):.4f}")
     print(
-        f"сила связи на чистом мире (|association|), медианы: "
-        f"все окна вместе {np.median(whole):.4f}, "
+        f"чистый мир (|association|), медианы: все окна вместе {np.median(whole):.4f}, "
         f"первое окно {np.median(early):.4f}, последнее {np.median(late):.4f}"
     )
-    print(f"отношение силы (все окна) к порогу: {np.median(whole) / np.median(thresholds):.2f}")
-    print(f"доля последнего окна после разворота: {min(share):.2f}–{max(share):.2f}")
+    print(f"мир с разворотом, последнее окно: медиана {np.median(flipped_late):.4f}")
+    print(
+        f"отношение силы (чистый, все окна) к порогу: "
+        f"{np.median(whole) / np.median(thresholds):.2f}"
+    )
+    for spot in sorted(set(where)):
+        mask = np.array([w == spot for w in where])
+        print(f"разворот {spot}: миров {mask.sum()}, поймано {caught[mask].sum()}")
+    print(f"доля последнего окна после разворота: {share.min():.2f}–{share.max():.2f}")
+    low = share < np.median(share)
+    print(
+        f"поймано при доле ниже медианы: {caught[low].mean():.2f} ({low.sum()} миров); "
+        f"не ниже: {caught[~low].mean():.2f} ({(~low).sum()} миров)"
+    )
 
 
 def n18(worlds: int) -> None:
