@@ -344,6 +344,76 @@ def fired_against_the_control_run(project: Path, prereg: Path) -> list[str]:
     return problems
 
 
+ANALOGS = "analogs.md"
+"""Второй этап поиска аналогов: решения на ТОМ ЖЕ наборе, после опечатывания."""
+
+ANALOG_SOURCES = ("github", "kaggle", "openml")
+ANALOG_FIELDS = ("date", "queries", "found", "taken", "rejected", "pitfalls")
+
+
+def analogs_defects(block: object) -> list[str]:
+    """Чем запись об аналогах не дотягивает до доказательства поиска.
+
+    ДВА ЭТАПА. Первый — аналоги на ДРУГИХ наборах той же задачи — пишется в
+    пре-регистрацию и опечатывается вместе с ней: дата, вписанная автором, ничего
+    бы не удостоверила, а опечатывание уже есть. Второй — решения на том же
+    наборе — читается только после опечатывания: чужие ноутбуки показывают
+    значения колонок и известные утечки, и предсказания подгонялись бы под них.
+
+    ЧЕГО ЭТО НЕ ДАЁТ. Проверяется форма записи, а не честность поиска. Запросы
+    можно выдумать, найденное — не записать. Пустой список запросов, однако, не
+    проходит: «ничего не найдено» без запросов неотличимо от «не искал».
+    """
+    if not isinstance(block, dict):
+        return ["блока `analogs` нет"]
+    defects = [f"нет поля `{field}`" for field in ANALOG_FIELDS if field not in block]
+    if not block.get("date"):
+        defects.append("не записана дата поиска")
+
+    queries = block.get("queries")
+    queries = queries if isinstance(queries, dict) else {}
+    for source in ANALOG_SOURCES:
+        asked = queries.get(source)
+        if not (
+            isinstance(asked, list)
+            and asked
+            and all(isinstance(q, str) and q.strip() for q in asked)
+        ):
+            defects.append(f"по {source} не записано ни одного запроса")
+
+    found = block.get("found")
+    found = found if isinstance(found, list) else []
+    urls = []
+    for item in found:
+        url = item.get("url") if isinstance(item, dict) else None
+        if not url:
+            defects.append("найденный аналог без ссылки")
+            continue
+        urls.append(url)
+        reference = item.get("reference_result")
+        if reference is not None:
+            absent = [
+                k
+                for k in ("metric", "value", "split")
+                if not isinstance(reference, dict) or reference.get(k) in (None, "")
+            ]
+            if absent:
+                defects.append(f"у опорного результата {url} не названы {absent}")
+
+    decided = set()
+    for field in ("taken", "rejected"):
+        entries = block.get(field)
+        for entry in entries if isinstance(entries, list) else []:
+            if not (isinstance(entry, dict) and entry.get("url") and entry.get("reason")):
+                defects.append(f"запись в `{field}` без ссылки или причины")
+                continue
+            decided.add(entry["url"])
+    defects.extend(
+        f"аналог {url} найден, но не взят и не отвергнут" for url in urls if url not in decided
+    )
+    return defects
+
+
 def preflight(project: Path, prereg: Path) -> None:
     """Проверить порядок. Возбуждает OutOfOrder, называя недостающий шаг."""
     if not prereg.is_file():
@@ -397,6 +467,14 @@ def preflight(project: Path, prereg: Path) -> None:
         )
         return
 
+    первый_этап = analogs_defects(declared(prereg).get("analogs"))
+    if первый_этап:
+        raise OutOfOrder(
+            f"ОТКАЗ: в {prereg.name} нет годной записи об аналогах на других наборах — "
+            f"{'; '.join(первый_этап)}. Первый этап поиска опечатывается вместе с "
+            "пре-регистрацией. Построитель не вызывался."
+        )
+
     if not (project / "manifest.yaml").is_file():
         raise OutOfOrder(
             f"ОТКАЗ: данные не собраны — нет {project / 'manifest.yaml'}. Построитель не вызывался."
@@ -431,6 +509,26 @@ def preflight(project: Path, prereg: Path) -> None:
                 "Либо вписан не тот, либо файл изменён после запечатывания. "
                 "Построитель не вызывался."
             )
+
+    записка = project / ANALOGS
+    if not записка.is_file():
+        raise OutOfOrder(
+            f"ОТКАЗ: второй этап поиска аналогов не записан — нет {записка}. Решения "
+            "на том же наборе читаются после опечатывания и до первого прогона. "
+            "Построитель не вызывался."
+        )
+    второй = declared(записка)
+    if второй.get("project") != project.name:
+        raise OutOfOrder(
+            f"ОТКАЗ: {записка.name} объявляет проект {второй.get('project')!r}, а "
+            f"прогоняется {project.name!r}. Построитель не вызывался."
+        )
+    второй_этап = analogs_defects(второй.get("analogs"))
+    if второй_этап:
+        raise OutOfOrder(
+            f"ОТКАЗ: запись второго этапа поиска аналогов негодна — "
+            f"{'; '.join(второй_этап)}. Построитель не вызывался."
+        )
 
     # ПОРЯДОК ВЕТВЕЙ ЗДЕСЬ ЗНАЧИМ, и он проверяется тестами. Сначала — пригодно ли
     # объявление контроля вообще (есть исходная роль), затем — в каком состоянии
@@ -541,7 +639,7 @@ def guarded(project: Path, prereg: Path, build: Callable[[], object]) -> object:
     return build()
 
 
-PROTOCOL_KEYS = ("controls", "promises", "spent_controls", "lost_bets", "predictions")
+PROTOCOL_KEYS = ("controls", "promises", "spent_controls", "lost_bets", "predictions", "analogs")
 
 
 def _form_identity(form_path: Path, control_roles: dict[str, str]) -> str:

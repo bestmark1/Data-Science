@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT))
 
 from protocol import OutOfOrder, guarded, preflight, save_control_run  # noqa: E402
 from protocol.preflight import (  # noqa: E402
+    ANALOGS,
     CONTROL_RUN,
     EMPTY_BIT,
     FROM_CASE,
@@ -53,16 +54,40 @@ controls:
 """
 
 
-def _prereg(tmp_path: Path, body: str, number: int = FROM_CASE) -> Path:
+ANALOGS_BLOCK = """
+```yaml
+project: проба
+analogs:
+  date: 2026-09-29
+  queries:
+    github: ["задержка доставки прогноз"]
+    kaggle: ["delivery delay prediction"]
+    openml: ["delivery delay"]
+  found: []
+  taken: []
+  rejected: []
+  pitfalls: []
+```
+"""
+"""Годная запись об аналогах: «ничего не найдено», но с запросами по всем трём
+источникам. Добавляется фикстурами по умолчанию, чтобы тесты других шагов
+проверяли свой шаг, а не отказ по аналогам."""
+
+
+def _prereg(tmp_path: Path, body: str, number: int = FROM_CASE, *, analogs=True) -> Path:
     path = tmp_path / f"prereg-case-{number}.md"
+    if analogs and "project: проба" in body:
+        body += ANALOGS_BLOCK
     path.write_text(body, encoding="utf-8")
     return path
 
 
-def _project(tmp_path: Path, *, manifest=True, sealed=True, empty=True) -> Path:
+def _project(tmp_path: Path, *, manifest=True, sealed=True, empty=True, analogs=True) -> Path:
     project = tmp_path / "проба"
     (project / "report").mkdir(parents=True)
     (project / "project.yaml").write_text(FORM, encoding="utf-8")
+    if analogs:
+        (project / ANALOGS).write_text(ANALOGS_BLOCK, encoding="utf-8")
     if manifest:
         (project / "manifest.yaml").write_text("source: проба\n", encoding="utf-8")
     if sealed:
@@ -899,9 +924,10 @@ def test_any_other_change_to_the_form_is_caught(tmp_path, что: str, форм�
     (project / "project.yaml").write_text(форма, encoding="utf-8")
     prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True))
 
-    assert _form_identity(project / "project.yaml", _control_roles(prereg)) != read_control_run(
-        project
-    )["form"], f"отпечаток не заметил, что {что}"
+    assert (
+        _form_identity(project / "project.yaml", _control_roles(prereg))
+        != read_control_run(project)["form"]
+    ), f"отпечаток не заметил, что {что}"
 
     with pytest.raises(OutOfOrder) as отказ:
         preflight(project, prereg)
@@ -1098,9 +1124,10 @@ def test_a_control_column_moved_to_another_role_is_not_a_removal(tmp_path, ро�
     prereg = _prereg(tmp_path, _digests(project) + CONTROLS + _spent(True))
 
     assert control_states(prereg, project / "project.yaml") == {"К-1": "изменён"}
-    assert _form_identity(project / "project.yaml", _control_roles(prereg)) != read_control_run(
-        project
-    )["form"], "отпечаток не заметил подмены роли"
+    assert (
+        _form_identity(project / "project.yaml", _control_roles(prereg))
+        != read_control_run(project)["form"]
+    ), "отпечаток не заметил подмены роли"
 
     with pytest.raises(OutOfOrder) as отказ:
         preflight(project, prereg)
@@ -1245,8 +1272,7 @@ def test_an_invalid_clean_role_stops_before_the_builder(
     project = _project(tmp_path)
     prereg = _prereg(
         tmp_path,
-        _digests(project)
-        + "\n```yaml\nproject: проба\ncontrols:\n"
+        _digests(project) + "\n```yaml\nproject: проба\ncontrols:\n"
         "  - {name: К-1, column: at_night, role: feature, "
         f"clean_role: {yaml_value}, expect: sentinel_as_value, basis: plant}}\n```\n",
     )
@@ -1376,3 +1402,132 @@ def test_the_diagnostic_test_does_not_disturb_an_existing_log(monkeypatch, capsy
             лог.unlink(missing_ok=True)
         else:
             лог.write_bytes(было)
+
+
+# --- Поиск аналогов: два этапа, с двадцать первого кейса ----------------------
+#
+# Первый этап (другие наборы) опечатывается вместе с пре-регистрацией, второй
+# (тот же набор) пишется после опечатывания. Проверяется форма записи, а не
+# честность поиска — этот предел назван в `analogs_defects`.
+
+
+def _ready(tmp_path: Path, *, analogs_in_prereg=True, analogs_file=True) -> tuple[Path, Path]:
+    project = _project(tmp_path, analogs=analogs_file)
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS, analogs=analogs_in_prereg)
+    return project, prereg
+
+
+def test_the_builder_is_not_called_without_the_first_stage_of_analogs(tmp_path) -> None:
+    project, prereg = _ready(tmp_path, analogs_in_prereg=False)
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    with pytest.raises(OutOfOrder) as отказ:
+        guarded(project, prereg, build)
+
+    assert calls == 0, "построитель вызван без первого этапа поиска аналогов"
+    assert "аналогах на других наборах" in str(отказ.value)
+
+
+def test_nothing_found_without_queries_is_not_a_search(tmp_path) -> None:
+    """«Ничего не найдено» с пустыми запросами неотличимо от «не искал»."""
+    project, prereg = _ready(tmp_path)
+    prereg.write_text(
+        prereg.read_text(encoding="utf-8").replace('openml: ["delivery delay"]', "openml: []"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "по openml не записано ни одного запроса" in str(отказ.value)
+
+
+def test_a_found_analog_needs_a_decision(tmp_path) -> None:
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(
+        ANALOGS_BLOCK.replace(
+            "found: []",
+            "found:\n    - {url: 'https://kaggle.com/x',\n"
+            "       reference_result: {metric: roc_auc, value: 0.91, split: random}}",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "найден, но не взят и не отвергнут" in str(отказ.value)
+
+
+def test_a_reference_result_names_its_conditions(tmp_path) -> None:
+    """Опорный результат без сплита сравнивать не с чем."""
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(
+        ANALOGS_BLOCK.replace(
+            "found: []",
+            "found:\n    - {url: 'https://kaggle.com/x',\n"
+            "       reference_result: {metric: roc_auc, value: 0.91}}",
+        ).replace(
+            "rejected: []",
+            "rejected:\n    - {url: 'https://kaggle.com/x', reason: 'случайный сплит'}",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "не названы ['split']" in str(отказ.value)
+
+
+def test_the_second_stage_is_required_after_sealing(tmp_path) -> None:
+    project, prereg = _ready(tmp_path, analogs_file=False)
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "второй этап поиска аналогов не записан" in str(отказ.value)
+
+
+def test_the_second_stage_belongs_to_this_project(tmp_path) -> None:
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(
+        ANALOGS_BLOCK.replace("project: проба", "project: чужой"), encoding="utf-8"
+    )
+
+    with pytest.raises(OutOfOrder) as отказ:
+        preflight(project, prereg)
+
+    assert "объявляет проект 'чужой'" in str(отказ.value)
+
+
+def test_complete_analogs_let_the_builder_run(tmp_path) -> None:
+    """Обратный исход: при полной записи обоих этапов построитель зовётся."""
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(
+        ANALOGS_BLOCK.replace(
+            "found: []",
+            "found:\n    - {url: 'https://kaggle.com/x',\n"
+            "       reference_result: {metric: roc_auc, value: 0.91, split: random}}",
+        ).replace(
+            "rejected: []",
+            "rejected:\n    - {url: 'https://kaggle.com/x', reason: 'случайный сплит'}",
+        ),
+        encoding="utf-8",
+    )
+
+    assert guarded(project, prereg, lambda: "построено") == "построено"
+
+
+def test_historical_cases_do_not_need_analogs(tmp_path) -> None:
+    """Правило вводится вперёд: у кейсов до двадцать первого записи нет и не будет."""
+    project = _project(tmp_path, analogs=False)
+    prereg = _prereg(
+        tmp_path, "```yaml\nproject: проба\n```\n", number=FROM_CASE - 1, analogs=False
+    )
+
+    preflight(project, prereg)
