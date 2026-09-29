@@ -1828,3 +1828,83 @@ def test_the_reviewers_bad_port_stops_the_builder(tmp_path) -> None:
 
     with pytest.raises(OutOfOrder):
         guarded(project, prereg, lambda: "построено")
+
+
+def _two_found(first: str, second: str) -> str:
+    return _decisions(
+        f"[{{url: '{first}'}}, {{url: '{second}'}}]",
+        taken=f"[{{url: '{first}', reason: 'взят'}}]",
+        rejected=f"[{{url: '{second}', reason: 'отвергнут'}}]",
+    )
+
+
+SAME_LINK = [
+    ("https://kaggle.com/x", "https://Kaggle.COM/x"),
+    ("https://kaggle.com/x", "HTTPS://kaggle.com/x"),
+    ("https://kaggle.com/x", "https://kaggle.com:443/x"),
+    ("https://kaggle.com/x", "https://kaggle.com/a/../x"),
+    ("https://kaggle.com/~x", "https://kaggle.com/%7Ex"),
+    ("https://kaggle.com/a%3ab", "https://kaggle.com/a%3Ab"),
+    ("https://kaggle.com/x", "https://kaggle.com/x#обзор"),
+    ("https://пример.рф/x", "https://xn--e1afmkfd.xn--p1ai/x"),
+]
+DIFFERENT_LINK = [
+    ("https://kaggle.com/x", "https://kaggle.com/y"),
+    ("https://kaggle.com/x", "https://kaggle.com/x/"),
+    ("https://kaggle.com/x", "http://kaggle.com/x"),
+    ("https://kaggle.com/x?a=1", "https://kaggle.com/x?a=2"),
+]
+
+
+@pytest.mark.parametrize(("first", "second"), SAME_LINK)
+def test_one_link_written_twice_is_a_repeat(tmp_path, first, second) -> None:
+    """Пятое ревью PR #2: `https://kaggle.com/x` и `https://Kaggle.COM/x` проходили
+    двумя аналогами — разбор нормализовал ссылку, а повторы сверялись по исходной строке.
+
+    Тождество — синтаксическая нормализация RFC 3986 §6.2.2 без фрагмента.
+    """
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(_two_found(first, second), encoding="utf-8")
+
+    with pytest.raises(OutOfOrder) as отказ:
+        guarded(project, prereg, lambda: "построено")
+
+    assert "дважды" in str(отказ.value)
+
+
+@pytest.mark.parametrize(("first", "second"), DIFFERENT_LINK)
+def test_different_links_are_not_merged(tmp_path, first, second) -> None:
+    """Обратный исход: то, что стандарт тождеством не считает, остаётся разным.
+
+    http и https, слэш на конце — одна ли это страница, знает сервер, а не форма.
+    """
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(_two_found(first, second), encoding="utf-8")
+
+    assert guarded(project, prereg, lambda: "построено") == "построено"
+
+
+@pytest.mark.parametrize(
+    ("label", "record"),
+    [
+        (
+            "учётные данные в ссылке",
+            _decisions(
+                "[{url: 'https://user:pass@kaggle.com/x'}]",
+                rejected="[{url: 'https://user:pass@kaggle.com/x', reason: 'проверен'}]",
+            ),
+        ),
+        ("дата поиска в будущем", ANALOGS_BLOCK.replace("date: 2026-09-29", "date: 2999-01-01")),
+    ],
+)
+def test_what_the_record_itself_rules_out(tmp_path, label, record) -> None:
+    """Найдено автором при перечитывании после пятого ревью PR #2, до шестого.
+
+    Ссылка с логином и паролем — не ссылка на аналог, а чужой доступ; дата поиска
+    позже сегодняшней невозможна. Оба видны по самой записи, без чтения страниц.
+    """
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(record, encoding="utf-8")
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, lambda: "построено")

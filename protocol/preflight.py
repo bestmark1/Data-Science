@@ -397,6 +397,8 @@ def _web_link(value: str) -> str:
         url = _HTTP_URL.validate_python(value)
     except ValidationError as exc:
         raise ValueError(f"не ссылка http(s): {exc.errors()[0]['msg']}") from None
+    if url.username is not None or url.password is not None:
+        raise ValueError("учётные данные в ссылке")
     labels = (url.host or "").split(".")
     if (
         len(labels) < 2
@@ -408,6 +410,30 @@ def _web_link(value: str) -> str:
 
 
 _Link = Annotated[_Text, AfterValidator(_web_link)]
+
+PERCENT = re.compile(r"%([0-9A-Fa-f]{2})")
+UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
+
+def _link_key(value: str) -> str:
+    """Тождество ссылок: синтаксическая нормализация RFC 3986 §6.2.2, без фрагмента.
+
+    Пятое ревью PR #2: `https://kaggle.com/x` и `https://Kaggle.COM/x` проходили
+    двумя аналогами — ссылка разбиралась, а повторы сверялись по исходной строке.
+
+    Разборщик сводит регистр схемы и хоста, порт по умолчанию, точки в пути и
+    IDNA; здесь добавлено остальное из §6.2.2 — регистр `%xx` и раскодирование
+    незарезервированных символов, — а фрагмент отброшен: он не часть ресурса.
+    НЕ сводится то, что стандарт тождеством не считает: `http` и `https`, слэш
+    на конце, `www.`. Одна ли это страница, знает сервер, а не форма записи.
+    """
+
+    def unescape(match: re.Match) -> str:
+        char = chr(int(match.group(1), 16))
+        return char if char in UNRESERVED else f"%{match.group(1).upper()}"
+
+    normalized = str(_HTTP_URL.validate_python(value)).split("#", 1)[0]
+    return PERCENT.sub(unescape, normalized)
 
 
 class _Form(BaseModel):
@@ -459,11 +485,14 @@ class _Analogs(_Form):
         `datetime` — подкласс `date` и отвергается: нужна дата, а не момент.
         """
         if type(value) is datetime.date:
-            return value
-        if isinstance(value, str) and ISO_DATE.fullmatch(value):
-            datetime.date.fromisoformat(value)
-            return value
-        raise ValueError("не дата ГГГГ-ММ-ДД")
+            day = value
+        elif isinstance(value, str) and ISO_DATE.fullmatch(value):
+            day = datetime.date.fromisoformat(value)
+        else:
+            raise ValueError("не дата ГГГГ-ММ-ДД")
+        if day > datetime.date.today():
+            raise ValueError(f"дата поиска {day} позже сегодняшней")
+        return value
 
 
 def analogs_defects(block: object) -> list[str]:
@@ -488,7 +517,9 @@ def analogs_defects(block: object) -> list[str]:
     `[]`, лишние и опечатанные поля — ошибка.
 
     ГРАНИЦА ФОРМЫ. Проверяется: типы и обязательные поля; ссылка — http(s),
-    разобранная стандартным разборщиком, с именем хоста по RFC 1123; запросы по
+    разобранная стандартным разборщиком, с именем хоста по RFC 1123, без учётных
+    данных; одна ссылка в разном написании — повтор (RFC 3986 §6.2.2); дата не
+    позже сегодняшней; запросы по
     каждому источнику непусты; каждый найденный аналог имеет
     ровно одно решение, и каждое решение — о найденном (третье ревью PR #2:
     `url: 'x'` и решение при пустом `found` проходили). НЕ проверяется —
@@ -505,10 +536,8 @@ def analogs_defects(block: object) -> list[str]:
             f"`{'.'.join(str(part) for part in error['loc'])}`: {error['msg']}"
             for error in exc.errors()
         ]
-    found = [item.url for item in record.found]
-    taken = [entry.url for entry in record.taken]
-    rejected = [entry.url for entry in record.rejected]
-    decided = [*taken, *rejected]
+    found = [_link_key(item.url) for item in record.found]
+    decided = [_link_key(entry.url) for entry in (*record.taken, *record.rejected)]
     defects = [f"аналог {url} найден дважды" for url in sorted(set(found)) if found.count(url) > 1]
     defects += [
         f"решение дважды об аналоге {url}" for url in sorted(set(decided)) if decided.count(url) > 1
