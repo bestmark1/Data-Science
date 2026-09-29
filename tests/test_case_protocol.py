@@ -1908,3 +1908,66 @@ def test_what_the_record_itself_rules_out(tmp_path, label, record) -> None:
 
     with pytest.raises(OutOfOrder):
         guarded(project, prereg, lambda: "построено")
+
+
+LONG_HOST = ".".join(["a" * 60] * 5) + ".com"
+
+
+@pytest.mark.parametrize(
+    ("label", "record"),
+    [
+        (
+            "запрос из управляющего символа",
+            ANALOGS_BLOCK.replace('openml: ["delivery delay"]', 'openml: ["\\0"]'),
+        ),
+        (
+            "запрос из невидимого символа",
+            ANALOGS_BLOCK.replace('openml: ["delivery delay"]', 'openml: ["\\u200b"]'),
+        ),
+        (
+            "причина из управляющего символа",
+            _decisions(
+                "[{url: 'https://kaggle.com/x'}]",
+                rejected='[{url: "https://kaggle.com/x", reason: "\\0"}]',
+            ),
+        ),
+    ],
+)
+def test_text_without_text_is_refused(tmp_path, label, record) -> None:
+    """Шестое ревью PR #2 (пункт 4): `"\\0"` и `"\\u200b"` проходили как непустой текст."""
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(record, encoding="utf-8")
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, lambda: "построено")
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "https://kaggle.com/%GG",
+        "https://kaggle.com/%",
+        "https://kaggle.com\\evil",
+        "https://kag​gle.com/x",
+        "https://kaggle.com/a​b",
+        f"https://{LONG_HOST}/x",
+    ],
+)
+def test_a_link_the_parser_would_repair_is_refused(link) -> None:
+    """Шестое ревью PR #2 (пункты 5–7): разборщик чинил ссылку молча, а хранилась исходная.
+
+    Неверный процент, обратная косая черта, невидимый символ; и хост длиннее 253
+    знаков — DNS-имя длиннее 255 октетов (RFC 1035) при допустимых частях.
+    """
+    from protocol.preflight import _web_link
+
+    with pytest.raises(ValueError):
+        _web_link(link)
+
+
+def test_a_host_of_the_maximum_length_is_accepted() -> None:
+    from protocol.preflight import _web_link
+
+    host = ".".join(["a" * 63] * 3 + ["b" * 61])
+    assert len(host) == 253
+    assert _web_link(f"https://{host}/x")

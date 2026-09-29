@@ -24,6 +24,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import re
+import unicodedata
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Annotated, Literal
@@ -367,8 +368,28 @@ ANALOG_SOURCES = ("github", "kaggle", "openml")
 
 ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
-_Text = Annotated[str, StringConstraints(strict=True, strip_whitespace=True, min_length=1)]
-"""Непустая строка. `true`, число или пробелы на месте текста — не текст."""
+INVISIBLE = frozenset({"Cc", "Cf", "Zs", "Zl", "Zp"})
+"""Категории Unicode без видимого знака: управляющие, форматные, пробельные."""
+
+
+def _visible(value: str) -> str:
+    """Текст — это хотя бы один видимый знак и ни одного управляющего.
+
+    Шестое ревью PR #2: `"\\0"` и `"\\u200b"` проходили как непустые строки.
+    """
+    if any(unicodedata.category(char) == "Cc" for char in value):
+        raise ValueError("управляющий символ в тексте")
+    if all(unicodedata.category(char) in INVISIBLE for char in value):
+        raise ValueError("в тексте нет видимого знака")
+    return value
+
+
+_Text = Annotated[
+    str,
+    StringConstraints(strict=True, strip_whitespace=True, min_length=1),
+    AfterValidator(_visible),
+]
+"""Непустой видимый текст. `true`, число, пробелы или невидимые знаки — не текст."""
 
 _Asked = Annotated[list[_Text], Field(min_length=1)]
 
@@ -377,6 +398,11 @@ HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 """Часть имени хоста по RFC 1123: буквы, цифры, дефис не с краю, до 63 символов."""
 
 _HTTP_URL = TypeAdapter(HttpUrl)
+
+URL_FORBIDDEN = frozenset('\\<>"{}|^`')
+"""Знаки, которых нет в RFC 3986 и RFC 3987: разборщик заменил бы или закодировал их молча."""
+
+PERCENT_BROKEN = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
 
 def _web_link(value: str) -> str:
@@ -389,16 +415,29 @@ def _web_link(value: str) -> str:
 
     Прежде проверка была самодельной — «схема и точка в хосте» — и четвёртое
     ревью PR #2 провело через неё `https://a.b:badport/x` и `https://a..b/x`.
+    Шестое показало, что разборщик ЧИНИТ часть негодных ссылок молча
+    (`\\` в `/`, невидимый знак выбрасывает), а хранится исходная строка: поэтому
+    сырая строка проверяется до разбора — недопустимые знаки, `%` без двух цифр,
+    — и длина имени хоста (не больше 253 знаков) после.
     Существует ли страница — не проверяется: это содержание, а не форма.
     """
-    if any(char.isspace() for char in value):
-        raise ValueError("пробел в ссылке")
+    bad = [
+        char
+        for char in value
+        if char in URL_FORBIDDEN or char.isspace() or unicodedata.category(char) in INVISIBLE
+    ]
+    if bad:
+        raise ValueError(f"в ссылке недопустимые знаки {bad!r}: разборщик исправил бы их молча")
+    if PERCENT_BROKEN.search(value):
+        raise ValueError("`%` без двух шестнадцатеричных цифр (RFC 3986, 2.1)")
     try:
         url = _HTTP_URL.validate_python(value)
     except ValidationError as exc:
         raise ValueError(f"не ссылка http(s): {exc.errors()[0]['msg']}") from None
     if url.username is not None or url.password is not None:
         raise ValueError("учётные данные в ссылке")
+    if len(url.host or "") > 253:
+        raise ValueError("имя хоста длиннее 253 знаков (RFC 1035: не больше 255 октетов)")
     labels = (url.host or "").split(".")
     if (
         len(labels) < 2
