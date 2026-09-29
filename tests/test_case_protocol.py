@@ -1531,3 +1531,100 @@ def test_historical_cases_do_not_need_analogs(tmp_path) -> None:
     )
 
     preflight(project, prereg)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("found", "null"),
+        ("taken", "null"),
+        ("rejected", "null"),
+        ("pitfalls", "null"),
+        ("found", "'нет'"),
+        ("date", "true"),
+        ("date", "'вчера'"),
+    ],
+)
+def test_a_wrong_type_is_not_an_empty_answer(tmp_path, field, value) -> None:
+    """Независимое ревью PR #1: `null` вместо списка проходил как пустой список.
+
+    Валидатор проверял наличие поля и трактовал негодный тип как «ничего»:
+    запись `found: null, taken: null, rejected: null, pitfalls: null, date: true`
+    с непустыми запросами пропускала построитель. Умолчание, совпадающее с
+    честным ответом, — ровно то, что главное правило проекта запрещает.
+    """
+    project, prereg = _ready(tmp_path)
+    default = {
+        "found": "[]",
+        "taken": "[]",
+        "rejected": "[]",
+        "pitfalls": "[]",
+        "date": "2026-09-29",
+    }
+    (project / ANALOGS).write_text(
+        ANALOGS_BLOCK.replace(f"{field}: {default[field]}", f"{field}: {value}"), encoding="utf-8"
+    )
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    with pytest.raises(OutOfOrder) as отказ:
+        guarded(project, prereg, build)
+
+    assert calls == 0, f"построитель вызван при {field}: {value}"
+    assert field in str(отказ.value)
+
+
+def test_the_reviewers_record_is_refused(tmp_path) -> None:
+    """Запись ревьюера целиком, как она была предъявлена."""
+    project, prereg = _ready(tmp_path)
+    record = ANALOGS_BLOCK
+    for field in ("found", "taken", "rejected", "pitfalls"):
+        record = record.replace(f"{field}: []", f"{field}: null")
+    (project / ANALOGS).write_text(
+        record.replace("date: 2026-09-29", "date: true"), encoding="utf-8"
+    )
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, lambda: "построено")
+
+
+def test_a_stray_analogs_block_does_not_touch_a_historical_case(tmp_path) -> None:
+    """Независимое ревью PR #1: на 4637616 такой документ проходил — и проходит снова."""
+    prereg = _prereg(
+        tmp_path,
+        "```yaml\nproject: проба\n```\n\n```yaml\nanalogs: {}\n```\n",
+        number=20,
+        analogs=False,
+    )
+
+    assert declared(prereg)["project"] == "проба"
+
+
+def test_an_analogs_block_without_project_is_refused_from_case_21(tmp_path) -> None:
+    prereg = _prereg(
+        tmp_path, "```yaml\nproject: проба\n```\n\n```yaml\nanalogs: {}\n```\n", analogs=False
+    )
+
+    with pytest.raises(OutOfOrder) as отказ:
+        declared(prereg)
+
+    assert "без `project`" in str(отказ.value)
+
+
+def test_a_boolean_is_not_a_link_or_a_reason(tmp_path) -> None:
+    """`url: true` и `reason: true` проходили проверкой на истинность."""
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(
+        ANALOGS_BLOCK.replace("found: []", "found:\n    - {url: true}").replace(
+            "rejected: []", "rejected:\n    - {url: true, reason: true}"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OutOfOrder) as отказ:
+        guarded(project, prereg, lambda: "построено")
+
+    assert "без ссылки" in str(отказ.value)

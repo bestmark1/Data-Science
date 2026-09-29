@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import re
 from collections.abc import Callable, Iterable
@@ -71,16 +72,17 @@ def declared(prereg: Path) -> dict:
     и preflight считал, что контролей нет.
     """
     text = prereg.read_text(encoding="utf-8")
+    keys = _protocol_keys(prereg)
     for found in ANY_BLOCK.finditer(text):
         try:
             block = yaml.safe_load(found.group(1))
         except yaml.YAMLError:
             continue
-        if isinstance(block, dict) and any(key in block for key in PROTOCOL_KEYS):
+        if isinstance(block, dict) and any(key in block for key in keys):
             if "project" not in block:
                 raise OutOfOrder(
                     f"ОТКАЗ: в {prereg.name} есть машиночитаемый блок протокола "
-                    f"({sorted(set(block) & set(PROTOCOL_KEYS))}) без `project`. "
+                    f"({sorted(set(block) & set(keys))}) без `project`. "
                     "Такой блок не был бы связан с кейсом и потерялся бы молча. "
                     "Построитель не вызывался."
                 )
@@ -349,6 +351,31 @@ ANALOGS = "analogs.md"
 
 ANALOG_SOURCES = ("github", "kaggle", "openml")
 ANALOG_FIELDS = ("date", "queries", "found", "taken", "rejected", "pitfalls")
+ANALOG_LISTS = ("found", "taken", "rejected", "pitfalls")
+
+
+def _text(value: object) -> bool:
+    """Непустая строка. `true` на месте ссылки или причины — не ссылка и не причина."""
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _is_date(value: object) -> bool:
+    """Дата ГГГГ-ММ-ДД: YAML читает её как `date`; строку того же вида — тоже.
+
+    `bool` отвергается явно: `true` — не дата, а ответ «да» на вопрос, которого
+    не задавали.
+    """
+    if isinstance(value, datetime.datetime | bool):
+        return False
+    if isinstance(value, datetime.date):
+        return True
+    if isinstance(value, str):
+        try:
+            datetime.date.fromisoformat(value)
+        except ValueError:
+            return False
+        return True
+    return False
 
 
 def analogs_defects(block: object) -> list[str]:
@@ -363,12 +390,23 @@ def analogs_defects(block: object) -> list[str]:
     ЧЕГО ЭТО НЕ ДАЁТ. Проверяется форма записи, а не честность поиска. Запросы
     можно выдумать, найденное — не записать. Пустой список запросов, однако, не
     проходит: «ничего не найдено» без запросов неотличимо от «не искал».
+
+    ТИП — ЧАСТЬ ФОРМЫ. «Ничего» записывается пустым списком `[]`. Прежде `null`
+    и строка на месте списка читались как пустой список, а `date: true` — как
+    дата: запись, где поля есть, но ничего не сказано, пропускала построитель.
+    Умолчание совпадало с честным ответом. Найдено независимым ревью PR #1.
     """
     if not isinstance(block, dict):
         return ["блока `analogs` нет"]
     defects = [f"нет поля `{field}`" for field in ANALOG_FIELDS if field not in block]
-    if not block.get("date"):
-        defects.append("не записана дата поиска")
+    for field in ANALOG_LISTS:
+        if field in block and not isinstance(block[field], list):
+            defects.append(f"`{field}` не список ({block[field]!r}); «ничего» — это `[]`")
+    if "date" in block and not _is_date(block["date"]):
+        defects.append(f"`date` не дата ГГГГ-ММ-ДД ({block['date']!r})")
+    pitfalls = block.get("pitfalls")
+    if isinstance(pitfalls, list) and not all(isinstance(p, str) and p.strip() for p in pitfalls):
+        defects.append("в `pitfalls` не строка")
 
     queries = block.get("queries")
     queries = queries if isinstance(queries, dict) else {}
@@ -386,7 +424,7 @@ def analogs_defects(block: object) -> list[str]:
     urls = []
     for item in found:
         url = item.get("url") if isinstance(item, dict) else None
-        if not url:
+        if not _text(url):
             defects.append("найденный аналог без ссылки")
             continue
         urls.append(url)
@@ -404,7 +442,9 @@ def analogs_defects(block: object) -> list[str]:
     for field in ("taken", "rejected"):
         entries = block.get(field)
         for entry in entries if isinstance(entries, list) else []:
-            if not (isinstance(entry, dict) and entry.get("url") and entry.get("reason")):
+            if not (
+                isinstance(entry, dict) and _text(entry.get("url")) and _text(entry.get("reason"))
+            ):
                 defects.append(f"запись в `{field}` без ссылки или причины")
                 continue
             decided.add(entry["url"])
@@ -640,6 +680,23 @@ def guarded(project: Path, prereg: Path, build: Callable[[], object]) -> object:
 
 
 PROTOCOL_KEYS = ("controls", "promises", "spent_controls", "lost_bets", "predictions", "analogs")
+
+FORWARD_KEYS = ("analogs",)
+"""Ключи, введённые с `FROM_CASE`: в документах старших кейсов блоком протокола не считаются.
+
+Независимое ревью PR #1: добавление `analogs` в `PROTOCOL_KEYS` действовало при
+разборе ДО исторического выхода, и пре-регистрация двадцатого кейса с блоком
+`analogs: {}` без `project` получала отказ, которого прежде не было. В настоящих
+документах 2–20 такого блока нет, но правило вводится вперёд, а не назад.
+"""
+
+
+def _protocol_keys(path: Path) -> tuple[str, ...]:
+    """Ключи протокола для документа: у пре-регистраций старше `FROM_CASE` — без новых."""
+    number = _case_number(path)
+    if number is not None and number < FROM_CASE:
+        return tuple(key for key in PROTOCOL_KEYS if key not in FORWARD_KEYS)
+    return PROTOCOL_KEYS
 
 
 def _form_identity(form_path: Path, control_roles: dict[str, str]) -> str:
