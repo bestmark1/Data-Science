@@ -1770,3 +1770,61 @@ def test_decisions_answer_for_what_was_found(tmp_path, label, record) -> None:
         guarded(project, prereg, build)
 
     assert calls == 0, f"построитель вызван: {label}"
+
+
+GOOD_LINKS = [
+    "https://kaggle.com/x",
+    "http://www.openml.org/t/1",
+    "https://github.com/a/b?x=1#y",
+    "https://Kaggle.COM/x",
+    "https://kaggle.com:443/x",
+    "https://пример.рф/x",
+]
+BAD_LINKS = [
+    "x",
+    "https://x",
+    "ftp://kaggle.com/x",
+    "https://kaggle .com/x",
+    "https://.com",
+    "https://a.b:badport/x",
+    "https://a.b:99999/x",
+    "https://a..b/x",
+    "https://-a.com",
+    "https://a-.com",
+    "https://a_b.com",
+    "https://1.2.3.4/x",
+    "https://a.123",
+]
+
+
+@pytest.mark.parametrize("link", GOOD_LINKS)
+def test_a_link_parsed_by_the_standard_is_accepted(link) -> None:
+    from protocol.preflight import _web_link
+
+    assert _web_link(link) == link
+
+
+@pytest.mark.parametrize("link", BAD_LINKS)
+def test_a_link_the_standard_rejects_is_refused(link) -> None:
+    """Четвёртое ревью PR #2: порт `badport` и пустая часть хоста `a..b` проходили.
+
+    Ручная проверка «схема и точка в хосте» — та же заплата поле за полем, что
+    уже дважды подводила. Ссылка разбирается стандартным разборщиком (порт,
+    схема, IPv4, IDNA), имя хоста — по RFC 1123.
+    """
+    from protocol.preflight import _web_link
+
+    with pytest.raises(ValueError):
+        _web_link(link)
+
+
+def test_the_reviewers_bad_port_stops_the_builder(tmp_path) -> None:
+    project, prereg = _ready(tmp_path)
+    link = "https://a.b:badport/x"
+    (project / ANALOGS).write_text(
+        _decisions(f"[{{url: '{link}'}}]", rejected=f"[{{url: '{link}', reason: 'проверен'}}]"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, lambda: "построено")

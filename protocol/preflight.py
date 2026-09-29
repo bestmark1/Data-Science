@@ -24,7 +24,6 @@ from __future__ import annotations
 import datetime
 import hashlib
 import re
-import urllib.parse
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Annotated, Literal
@@ -35,9 +34,11 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    HttpUrl,
     StrictFloat,
     StrictInt,
     StringConstraints,
+    TypeAdapter,
     ValidationError,
     field_validator,
 )
@@ -372,16 +373,37 @@ _Text = Annotated[str, StringConstraints(strict=True, strip_whitespace=True, min
 _Asked = Annotated[list[_Text], Field(min_length=1)]
 
 
+HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+"""Часть имени хоста по RFC 1123: буквы, цифры, дефис не с краю, до 63 символов."""
+
+_HTTP_URL = TypeAdapter(HttpUrl)
+
+
 def _web_link(value: str) -> str:
-    """Ссылка: схема http(s) и хост с точкой. Существует ли страница — не проверяется."""
-    parts = urllib.parse.urlsplit(value)
-    host = parts.hostname or ""
+    """Ссылка http(s): разбор стандартным разборщиком, имя хоста — по RFC 1123.
+
+    Разборщик pydantic отвергает негодный порт, схему и IPv4 и переводит
+    национальное имя в IDNA. Имя хоста он не проверяет — `a..b`, `-a.com`,
+    `a_b.com` проходят, — поэтому части имени сверяются с RFC 1123, а у старшей
+    части обязана быть буква: IP-адрес вместо имени ссылкой на аналог не считается.
+
+    Прежде проверка была самодельной — «схема и точка в хосте» — и четвёртое
+    ревью PR #2 провело через неё `https://a.b:badport/x` и `https://a..b/x`.
+    Существует ли страница — не проверяется: это содержание, а не форма.
+    """
+    if any(char.isspace() for char in value):
+        raise ValueError("пробел в ссылке")
+    try:
+        url = _HTTP_URL.validate_python(value)
+    except ValidationError as exc:
+        raise ValueError(f"не ссылка http(s): {exc.errors()[0]['msg']}") from None
+    labels = (url.host or "").split(".")
     if (
-        parts.scheme not in ("http", "https")
-        or "." not in host.strip(".")
-        or any(char.isspace() for char in value)
+        len(labels) < 2
+        or not all(HOST_LABEL.fullmatch(label) for label in labels)
+        or labels[-1].isdigit()
     ):
-        raise ValueError("не ссылка http(s) с хостом")
+        raise ValueError(f"имя хоста {url.host!r} не по RFC 1123")
     return value
 
 
@@ -465,8 +487,9 @@ def analogs_defects(block: object) -> list[str]:
     соседнее, поэтому форма задана строгой схемой: точные типы, «ничего» — это
     `[]`, лишние и опечатанные поля — ошибка.
 
-    ГРАНИЦА ФОРМЫ. Проверяется: типы и обязательные поля; ссылка — http(s) с
-    хостом; запросы по каждому источнику непусты; каждый найденный аналог имеет
+    ГРАНИЦА ФОРМЫ. Проверяется: типы и обязательные поля; ссылка — http(s),
+    разобранная стандартным разборщиком, с именем хоста по RFC 1123; запросы по
+    каждому источнику непусты; каждый найденный аналог имеет
     ровно одно решение, и каждое решение — о найденном (третье ревью PR #2:
     `url: 'x'` и решение при пустом `found` проходили). НЕ проверяется —
     содержание: существует ли страница, относится ли аналог к задаче, правдивы
