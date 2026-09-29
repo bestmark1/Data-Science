@@ -26,8 +26,19 @@ import hashlib
 import re
 from collections.abc import Callable, Iterable
 from pathlib import Path
+from typing import Annotated, Literal
 
 import yaml
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictFloat,
+    StrictInt,
+    StringConstraints,
+    ValidationError,
+    field_validator,
+)
 
 from dsx.roles import Role
 
@@ -350,32 +361,69 @@ ANALOGS = "analogs.md"
 """Второй этап поиска аналогов: решения на ТОМ ЖЕ наборе, после опечатывания."""
 
 ANALOG_SOURCES = ("github", "kaggle", "openml")
-ANALOG_FIELDS = ("date", "queries", "found", "taken", "rejected", "pitfalls")
-ANALOG_LISTS = ("found", "taken", "rejected", "pitfalls")
+
+ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+_Text = Annotated[str, StringConstraints(strict=True, strip_whitespace=True, min_length=1)]
+"""Непустая строка. `true`, число или пробелы на месте текста — не текст."""
+
+_Asked = Annotated[list[_Text], Field(min_length=1)]
 
 
-def _text(value: object) -> bool:
-    """Непустая строка. `true` на месте ссылки или причины — не ссылка и не причина."""
-    return isinstance(value, str) and bool(value.strip())
+class _Form(BaseModel):
+    """Строгая форма: точные типы, лишние поля — ошибка (опечатка в имени тоже)."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
 
 
-def _is_date(value: object) -> bool:
-    """Дата ГГГГ-ММ-ДД: YAML читает её как `date`; строку того же вида — тоже.
+class _Queries(_Form):
+    github: _Asked
+    kaggle: _Asked
+    openml: _Asked
 
-    `bool` отвергается явно: `true` — не дата, а ответ «да» на вопрос, которого
-    не задавали.
-    """
-    if isinstance(value, datetime.datetime | bool):
-        return False
-    if isinstance(value, datetime.date):
-        return True
-    if isinstance(value, str):
-        try:
+
+class _Reference(_Form):
+    """Опорный результат вместе с условиями, в которых он получен."""
+
+    metric: _Text
+    value: StrictInt | Annotated[StrictFloat, Field(allow_inf_nan=False)]
+    split: Literal["random", "time", "group", "unknown"]
+    population: _Text
+
+
+class _Found(_Form):
+    url: _Text
+    reference_result: _Reference | None = None
+    """Может отсутствовать: не всякий аналог публикует результат."""
+
+
+class _Decision(_Form):
+    url: _Text
+    reason: _Text
+
+
+class _Analogs(_Form):
+    date: object
+    queries: _Queries
+    found: list[_Found]
+    taken: list[_Decision]
+    rejected: list[_Decision]
+    pitfalls: list[_Text]
+
+    @field_validator("date")
+    @classmethod
+    def _iso_date(cls, value: object) -> object:
+        """Дата ГГГГ-ММ-ДД. YAML читает её как `date`; строку — только этого вида.
+
+        `date.fromisoformat` принимает и '20260929', поэтому вид сверяется отдельно.
+        `datetime` — подкласс `date` и отвергается: нужна дата, а не момент.
+        """
+        if type(value) is datetime.date:
+            return value
+        if isinstance(value, str) and ISO_DATE.fullmatch(value):
             datetime.date.fromisoformat(value)
-        except ValueError:
-            return False
-        return True
-    return False
+            return value
+        raise ValueError("не дата ГГГГ-ММ-ДД")
 
 
 def analogs_defects(block: object) -> list[str]:
@@ -391,67 +439,29 @@ def analogs_defects(block: object) -> list[str]:
     можно выдумать, найденное — не записать. Пустой список запросов, однако, не
     проходит: «ничего не найдено» без запросов неотличимо от «не искал».
 
-    ТИП — ЧАСТЬ ФОРМЫ. «Ничего» записывается пустым списком `[]`. Прежде `null`
-    и строка на месте списка читались как пустой список, а `date: true` — как
-    дата: запись, где поля есть, но ничего не сказано, пропускала построитель.
-    Умолчание совпадало с честным ответом. Найдено независимым ревью PR #1.
+    ФОРМА — СХЕМОЙ, А НЕ ЗАПЛАТАМИ. Первая версия проверяла наличие полей и
+    читала `null` как пустой список; ревью PR #1 нашло это, и типы были
+    залатаны поле за полем. Повторное ревью PR #2 нашло следующие дыры того же
+    рода — `date: '20260929'` и `reference_result: {metric: true, value: false,
+    split: []}` без `population`. Заплата на каждое поле оставляет непроверенным
+    соседнее, поэтому форма задана строгой схемой: точные типы, «ничего» — это
+    `[]`, лишние и опечатанные поля — ошибка.
     """
     if not isinstance(block, dict):
         return ["блока `analogs` нет"]
-    defects = [f"нет поля `{field}`" for field in ANALOG_FIELDS if field not in block]
-    for field in ANALOG_LISTS:
-        if field in block and not isinstance(block[field], list):
-            defects.append(f"`{field}` не список ({block[field]!r}); «ничего» — это `[]`")
-    if "date" in block and not _is_date(block["date"]):
-        defects.append(f"`date` не дата ГГГГ-ММ-ДД ({block['date']!r})")
-    pitfalls = block.get("pitfalls")
-    if isinstance(pitfalls, list) and not all(isinstance(p, str) and p.strip() for p in pitfalls):
-        defects.append("в `pitfalls` не строка")
-
-    queries = block.get("queries")
-    queries = queries if isinstance(queries, dict) else {}
-    for source in ANALOG_SOURCES:
-        asked = queries.get(source)
-        if not (
-            isinstance(asked, list)
-            and asked
-            and all(isinstance(q, str) and q.strip() for q in asked)
-        ):
-            defects.append(f"по {source} не записано ни одного запроса")
-
-    found = block.get("found")
-    found = found if isinstance(found, list) else []
-    urls = []
-    for item in found:
-        url = item.get("url") if isinstance(item, dict) else None
-        if not _text(url):
-            defects.append("найденный аналог без ссылки")
-            continue
-        urls.append(url)
-        reference = item.get("reference_result")
-        if reference is not None:
-            absent = [
-                k
-                for k in ("metric", "value", "split")
-                if not isinstance(reference, dict) or reference.get(k) in (None, "")
-            ]
-            if absent:
-                defects.append(f"у опорного результата {url} не названы {absent}")
-
-    decided = set()
-    for field in ("taken", "rejected"):
-        entries = block.get(field)
-        for entry in entries if isinstance(entries, list) else []:
-            if not (
-                isinstance(entry, dict) and _text(entry.get("url")) and _text(entry.get("reason"))
-            ):
-                defects.append(f"запись в `{field}` без ссылки или причины")
-                continue
-            decided.add(entry["url"])
-    defects.extend(
-        f"аналог {url} найден, но не взят и не отвергнут" for url in urls if url not in decided
-    )
-    return defects
+    try:
+        record = _Analogs.model_validate(block)
+    except ValidationError as exc:
+        return [
+            f"`{'.'.join(str(part) for part in error['loc'])}`: {error['msg']}"
+            for error in exc.errors()
+        ]
+    decided = {entry.url for entry in (*record.taken, *record.rejected)}
+    return [
+        f"аналог {item.url} найден, но не взят и не отвергнут"
+        for item in record.found
+        if item.url not in decided
+    ]
 
 
 def preflight(project: Path, prereg: Path) -> None:

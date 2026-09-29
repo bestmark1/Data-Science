@@ -1443,7 +1443,7 @@ def test_nothing_found_without_queries_is_not_a_search(tmp_path) -> None:
     with pytest.raises(OutOfOrder) as отказ:
         preflight(project, prereg)
 
-    assert "по openml не записано ни одного запроса" in str(отказ.value)
+    assert "queries.openml" in str(отказ.value)
 
 
 def test_a_found_analog_needs_a_decision(tmp_path) -> None:
@@ -1452,7 +1452,8 @@ def test_a_found_analog_needs_a_decision(tmp_path) -> None:
         ANALOGS_BLOCK.replace(
             "found: []",
             "found:\n    - {url: 'https://kaggle.com/x',\n"
-            "       reference_result: {metric: roc_auc, value: 0.91, split: random}}",
+            "       reference_result: {metric: roc_auc, value: 0.91, split: random,"
+            " population: 'заявки 2019–2021'}}",
         ),
         encoding="utf-8",
     )
@@ -1481,7 +1482,7 @@ def test_a_reference_result_names_its_conditions(tmp_path) -> None:
     with pytest.raises(OutOfOrder) as отказ:
         preflight(project, prereg)
 
-    assert "не названы ['split']" in str(отказ.value)
+    assert "reference_result.split" in str(отказ.value)
 
 
 def test_the_second_stage_is_required_after_sealing(tmp_path) -> None:
@@ -1512,7 +1513,8 @@ def test_complete_analogs_let_the_builder_run(tmp_path) -> None:
         ANALOGS_BLOCK.replace(
             "found: []",
             "found:\n    - {url: 'https://kaggle.com/x',\n"
-            "       reference_result: {metric: roc_auc, value: 0.91, split: random}}",
+            "       reference_result: {metric: roc_auc, value: 0.91, split: random,"
+            " population: 'заявки 2019–2021'}}",
         ).replace(
             "rejected: []",
             "rejected:\n    - {url: 'https://kaggle.com/x', reason: 'случайный сплит'}",
@@ -1627,4 +1629,80 @@ def test_a_boolean_is_not_a_link_or_a_reason(tmp_path) -> None:
     with pytest.raises(OutOfOrder) as отказ:
         guarded(project, prereg, lambda: "построено")
 
-    assert "без ссылки" in str(отказ.value)
+    assert "found.0.url" in str(отказ.value)
+
+
+FOUND_WITH_DECISION = (
+    "found:\n    - url: 'https://kaggle.com/x'\n      reference_result: {REF}\n"
+    "  taken: []\n  rejected:\n    - {url: 'https://kaggle.com/x', reason: 'случайный сплит'}"
+)
+GOOD_REFERENCE = "{metric: roc_auc, value: 0.91, split: random, population: 'заявки 2019–2021'}"
+
+
+def _with_reference(reference: str) -> str:
+    return ANALOGS_BLOCK.replace(
+        "found: []\n  taken: []\n  rejected: []",
+        FOUND_WITH_DECISION.replace("{REF}", reference),
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "record"),
+    [
+        ("дата без дефисов", ANALOGS_BLOCK.replace("date: 2026-09-29", "date: '20260929'")),
+        ("дата-время", ANALOGS_BLOCK.replace("date: 2026-09-29", "date: 2026-09-29 10:00:00")),
+        (
+            "опорный результат без содержания",
+            _with_reference("{metric: true, value: false, split: []}"),
+        ),
+        (
+            "нет population",
+            _with_reference("{metric: roc_auc, value: 0.91, split: random}"),
+        ),
+        (
+            "сплит не из шаблона",
+            _with_reference(GOOD_REFERENCE.replace("split: random", "split: случайный")),
+        ),
+        (
+            "значение — bool",
+            _with_reference(GOOD_REFERENCE.replace("value: 0.91", "value: true")),
+        ),
+        (
+            "опечатка в поле",
+            ANALOGS_BLOCK.replace("rejected: []", "rejected: []\n  rejeted: []"),
+        ),
+        ("запрос — число", ANALOGS_BLOCK.replace('openml: ["delivery delay"]', "openml: [42]")),
+        (
+            "значение — NaN",
+            _with_reference(GOOD_REFERENCE.replace("value: 0.91", "value: .nan")),
+        ),
+    ],
+)
+def test_form_without_content_is_refused(tmp_path, label, record) -> None:
+    """Повторное ревью PR #2: заплаты по одному полю пропускали следующие дыры.
+
+    `date: '20260929'` проходил, потому что `date.fromisoformat` принимает запись
+    без дефисов; `reference_result: {metric: true, value: false, split: []}` —
+    потому что проверялось наличие полей, а не их типы. Корень — ручная проверка
+    поле за полем; теперь форма задана строгой схемой.
+    """
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(record, encoding="utf-8")
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, build)
+
+    assert calls == 0, f"построитель вызван: {label}"
+
+
+def test_a_full_reference_result_is_accepted(tmp_path) -> None:
+    """Обратный исход: полная запись шаблона проходит."""
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(_with_reference(GOOD_REFERENCE), encoding="utf-8")
+
+    assert guarded(project, prereg, lambda: "построено") == "построено"
