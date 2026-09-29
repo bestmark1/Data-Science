@@ -79,8 +79,8 @@ def _case_number(prereg: Path) -> int | None:
 ANY_BLOCK = re.compile(r"```yaml\n(.*?)\n```", re.DOTALL)
 
 
-FENCE_OPEN = re.compile(r"^[ \t]*(?:`{3,}|~{3,})[ \t]*ya?ml\b", re.IGNORECASE | re.MULTILINE)
-"""Любое открытие блока YAML: тильды, заглавные, отступ. Строгий разбор обязан видеть все."""
+FENCE = re.compile(r"```([a-z0-9_+-]*)")
+"""Единственная допустимая ограда в документе протокола: ```язык с начала строки, закрытие — ```."""
 
 
 class _UniqueKeys(yaml.SafeLoader):
@@ -113,31 +113,72 @@ def _strict(path: Path) -> bool:
     return number is None or number >= FROM_CASE
 
 
-def _blocks(path: Path) -> list[object]:
-    """Все блоки YAML документа, разобранные строго: ничего не пропускается молча.
+def _refuse_fence(path: Path, number: int, why: str) -> OutOfOrder:
+    return OutOfOrder(
+        f"ОТКАЗ: {path.name}, строка {number}: {why}. Блок открывается строкой ```язык с "
+        "начала строки и закрывается строкой ```; иначе разбор мог бы его не увидеть. "
+        "Построитель не вызывался."
+    )
+
+
+def _load(path: Path, number: int, body: str) -> object:
+    try:
+        return yaml.load(body, Loader=_UniqueKeys)
+    except yaml.YAMLError as exc:
+        reason = str(exc).splitlines()[0]
+        raise OutOfOrder(
+            f"ОТКАЗ: блок YAML в {path.name} (строка {number}) не разобран ({reason}). Его "
+            "содержимое потерялось бы молча. Построитель не вызывался."
+        ) from None
+
+
+def _blocks(path: Path, keys: tuple[str, ...]) -> list[dict]:
+    """Все блоки YAML документа — по одной грамматике оград, ничего не пропуская молча.
 
     Шестое ревью PR #2: блок, где `project:` не первой строкой, битый YAML и
-    повтор ключа прятали запись, и построитель вызывался. Нестандартная ограда
-    блока — та же дыра, найдена автором. Здесь любой блок либо разобран, либо
-    отказ.
+    повтор ключа прятали запись. Седьмое: ограды искались шаблонами, и блок в
+    цитате (`> ```yaml`), блок-список и счёт оград при строчном ```yaml пропускали
+    запись. Перечень неправильных оград неполон, поэтому задана одна ПРАВИЛЬНАЯ:
+    строка ```язык с начала строки открывает блок, строка ``` закрывает; любая
+    другая строка с ``` или ~~~ — отказ. Блок другого языка, чьё тело читается
+    как запись протокола, — тоже отказ; блок YAML обязан быть словарём.
     """
-    text = path.read_text(encoding="utf-8")
-    fenced = ANY_BLOCK.findall(text)
-    if len(FENCE_OPEN.findall(text)) != len(fenced):
-        raise OutOfOrder(
-            f"ОТКАЗ: в {path.name} есть блок YAML в нестандартной ограде — нужна "
-            "```yaml с начала строки. Такой блок разбор бы пропустил. Построитель не вызывался."
-        )
-    blocks = []
-    for body in fenced:
-        try:
-            blocks.append(yaml.load(body, Loader=_UniqueKeys))
-        except yaml.YAMLError as exc:
-            reason = str(exc).splitlines()[0]
-            raise OutOfOrder(
-                f"ОТКАЗ: блок YAML в {path.name} не разобран ({reason}). Его содержимое "
-                "потерялось бы молча. Построитель не вызывался."
-            ) from None
+    text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    if "\r" in text:
+        number = text[: text.index("\r")].count("\n") + 1
+        raise _refuse_fence(path, number, "одиночный возврат каретки")
+    blocks: list[dict] = []
+    language, start, body = None, 0, []
+    for number, line in enumerate(text.split("\n"), 1):
+        if language is None:
+            opened = FENCE.fullmatch(line)
+            if opened:
+                language, start, body = opened.group(1), number, []
+            elif "```" in line or "~~~" in line:
+                raise _refuse_fence(path, number, "ограда блока не по правилу")
+            continue
+        if line != "```":
+            if "```" in line or "~~~" in line:
+                raise _refuse_fence(path, number, "ограда внутри блока")
+            body.append(line)
+            continue
+        content = "\n".join(body)
+        if language == "yaml":
+            block = _load(path, start, content)
+            if not isinstance(block, dict):
+                raise _refuse_fence(path, start, "блок YAML не словарь")
+            blocks.append(block)
+        else:
+            try:
+                other = yaml.safe_load(content)
+            except yaml.YAMLError:
+                other = None
+            if isinstance(other, dict) and set(other) & {"project", *keys}:
+                kind = language or "без языка"
+                raise _refuse_fence(path, start, f"запись протокола в блоке «{kind}»")
+        language = None
+    if language is not None:
+        raise _refuse_fence(path, start, "блок не закрыт")
     return blocks
 
 
@@ -154,18 +195,16 @@ def declared(prereg: Path) -> dict:
     """
     keys = _protocol_keys(prereg)
     if _strict(prereg):
-        candidates = _blocks(prereg)
+        candidates = _blocks(prereg, keys)
         for block in candidates:
-            if isinstance(block, dict) and "project" not in block and set(block) & set(keys):
+            if "project" not in block and set(block) & set(keys):
                 raise OutOfOrder(
                     f"ОТКАЗ: в {prereg.name} есть машиночитаемый блок протокола "
                     f"({sorted(set(block) & set(keys))}) без `project`. "
                     "Такой блок не был бы связан с кейсом и потерялся бы молча. "
                     "Построитель не вызывался."
                 )
-        return _merge(
-            block for block in candidates if isinstance(block, dict) and "project" in block
-        )
+        return _merge(block for block in candidates if "project" in block)
 
     text = prereg.read_text(encoding="utf-8")
     for found in ANY_BLOCK.finditer(text):
@@ -450,18 +489,21 @@ ANALOG_SOURCES = ("github", "kaggle", "openml")
 
 ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
-INVISIBLE = frozenset({"Cc", "Cf", "Zs", "Zl", "Zp"})
-"""Категории Unicode без видимого знака: управляющие, форматные, пробельные."""
+VISIBLE = frozenset("LNPS")
+"""Старшая буква категории Unicode видимого знака: буква, цифра, пунктуация, символ."""
 
 
 def _visible(value: str) -> str:
     """Текст — это хотя бы один видимый знак и ни одного управляющего.
 
-    Шестое ревью PR #2: `"\\0"` и `"\\u200b"` проходили как непустые строки.
+    Шестое ревью PR #2: `"\\0"` и `"\\u200b"` проходили как непустые строки;
+    седьмое — одиночные метки `U+FE0F`, `U+034F` (категория Mn). Перечень
+    невидимого всегда неполон, поэтому задан перечень ВИДИМОГО: хотя бы одна
+    буква, цифра, знак препинания или символ (категории L, N, P, S).
     """
     if any(unicodedata.category(char) == "Cc" for char in value):
         raise ValueError("управляющий символ в тексте")
-    if all(unicodedata.category(char) in INVISIBLE for char in value):
+    if not any(unicodedata.category(char)[0] in VISIBLE for char in value):
         raise ValueError("в тексте нет видимого знака")
     return value
 
@@ -481,8 +523,11 @@ HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 
 _HTTP_URL = TypeAdapter(HttpUrl)
 
-URL_FORBIDDEN = frozenset('\\<>"{}|^`')
-"""Знаки, которых нет в RFC 3986 и RFC 3987: разборщик заменил бы или закодировал их молча."""
+URL_ASCII = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%"
+)
+"""Знаки ASCII, допустимые в ссылке по RFC 3986. Кроме них — только не-ASCII буквы и цифры
+(национальные имена и пути); всё прочее разборщик заменил бы или закодировал молча."""
 
 PERCENT_BROKEN = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
@@ -506,7 +551,7 @@ def _web_link(value: str) -> str:
     bad = [
         char
         for char in value
-        if char in URL_FORBIDDEN or char.isspace() or unicodedata.category(char) in INVISIBLE
+        if not (char in URL_ASCII or (not char.isascii() and unicodedata.category(char)[0] in "LN"))
     ]
     if bad:
         raise ValueError(f"в ссылке недопустимые знаки {bad!r}: разборщик исправил бы их молча")

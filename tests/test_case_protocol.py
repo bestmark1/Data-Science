@@ -2041,3 +2041,88 @@ def test_a_historical_case_keeps_its_old_reading(tmp_path) -> None:
     )
 
     assert declared(prereg) == {"project": "проба"}
+
+
+@pytest.mark.parametrize("text", ["\\uFE0F", "\\u034F", "\\u200d\\uFE0F"])
+def test_a_lone_mark_is_not_text(tmp_path, text) -> None:
+    """Седьмое ревью PR #2: невидимые метки (категория Mn) проходили как текст.
+
+    Перечень запрещённого всегда неполон — текст теперь обязан нести хотя бы
+    одну букву, цифру, знак препинания или символ.
+    """
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(
+        ANALOGS_BLOCK.replace('openml: ["delivery delay"]', f'openml: ["{text}"]'), encoding="utf-8"
+    )
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, lambda: "построено")
+
+
+def test_ordinary_text_in_any_script_is_text(tmp_path) -> None:
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(
+        ANALOGS_BLOCK.replace('openml: ["delivery delay"]', 'openml: ["задержка 🙂 délai"]'),
+        encoding="utf-8",
+    )
+
+    assert guarded(project, prereg, lambda: "построено") == "построено"
+
+
+def test_a_link_with_a_mark_the_parser_would_encode_is_refused() -> None:
+    from protocol.preflight import _web_link
+
+    with pytest.raises(ValueError):
+        _web_link("https://kaggle.com/a️b")
+
+
+def test_a_link_in_cyrillic_is_accepted() -> None:
+    from protocol.preflight import _web_link
+
+    assert _web_link("https://пример.рф/путь/к-аналогу")
+
+
+QUOTED_BLOCK = "\n> ```yaml\n> project: проба\n> analogs: {}\n> ```\n"
+
+
+@pytest.mark.parametrize(
+    ("label", "extra"),
+    [
+        ("блок в цитате", QUOTED_BLOCK),
+        ("блок-список", "\n```yaml\n- project: проба\n  analogs: {}\n```\n"),
+        (
+            "строчная ограда и тильды",
+            "\nсм. ```yaml\nproject: проба\n```\n" + CONTRADICTION.replace("```", "~~~"),
+        ),
+        ("единственная ограда с отступом", None),
+        ("ограда из четырёх", None),
+        ("незакрытый блок", "\n```yaml\nproject: проба\n"),
+    ],
+)
+def test_only_one_way_to_fence_a_block(tmp_path, label, extra) -> None:
+    """Седьмое ревью PR #2: ограды искались шаблонами, и блок в цитате, блок-список,
+    счёт оград при строчном ```yaml пропускали запись. Теперь грамматика одна:
+    блок открывается строкой ```язык с начала строки и закрывается строкой ```;
+    любая другая строка с ``` или ~~~ — отказ.
+    """
+    project, prereg = _ready(tmp_path)
+    if label == "единственная ограда с отступом":
+        record = ANALOGS_BLOCK.replace("\n```yaml", "\n  ```yaml")
+    elif label == "ограда из четырёх":
+        record = ANALOGS_BLOCK.replace("```", "````")
+    else:
+        record = ANALOGS_BLOCK + extra
+    (project / ANALOGS).write_text(record, encoding="utf-8")
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, lambda: "построено")
+
+
+def test_other_code_blocks_are_allowed(tmp_path) -> None:
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(
+        "Запрос выполнен так:\n\n```bash\ncurl https://kaggle.com\n```\n" + ANALOGS_BLOCK,
+        encoding="utf-8",
+    )
+
+    assert guarded(project, prereg, lambda: "построено") == "построено"
