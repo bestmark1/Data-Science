@@ -29,6 +29,7 @@ from protocol.preflight import (  # noqa: E402
     SEALED,
     _control_roles,
     _form_identity,
+    challenger_defects,
     control_states,
     declared,
     fired_against_the_control_run,
@@ -74,10 +75,29 @@ analogs:
 проверяли свой шаг, а не отказ по аналогам."""
 
 
-def _prereg(tmp_path: Path, body: str, number: int = FROM_CASE, *, analogs=True) -> Path:
+NO_CHALLENGER_BLOCK = """
+```yaml
+project: проба
+challenger:
+  none: "кейс проверяет инструмент, новых методов не сравнивает"
+```
+"""
+"""Годное объявление «претендента нет» с причиной. Добавляется фикстурами по
+умолчанию, как и аналоги, чтобы тесты других шагов проверяли свой шаг."""
+
+
+def _prereg(
+    tmp_path: Path, body: str, number: int = FROM_CASE, *, analogs=True, challenger=None
+) -> Path:
+    """`challenger` по умолчанию следует `analogs`: тесты, выключающие добавки,
+    проверяют документ в точности как написан."""
     path = tmp_path / f"prereg-case-{number}.md"
+    if challenger is None:
+        challenger = analogs
     if analogs and "project: проба" in body:
         body += ANALOGS_BLOCK
+    if challenger and "project: проба" in body:
+        body += NO_CHALLENGER_BLOCK
     path.write_text(body, encoding="utf-8")
     return path
 
@@ -1443,7 +1463,7 @@ def test_nothing_found_without_queries_is_not_a_search(tmp_path) -> None:
     with pytest.raises(OutOfOrder) as отказ:
         preflight(project, prereg)
 
-    assert "по openml не записано ни одного запроса" in str(отказ.value)
+    assert "queries.openml" in str(отказ.value)
 
 
 def test_a_found_analog_needs_a_decision(tmp_path) -> None:
@@ -1452,7 +1472,8 @@ def test_a_found_analog_needs_a_decision(tmp_path) -> None:
         ANALOGS_BLOCK.replace(
             "found: []",
             "found:\n    - {url: 'https://kaggle.com/x',\n"
-            "       reference_result: {metric: roc_auc, value: 0.91, split: random}}",
+            "       reference_result: {metric: roc_auc, value: 0.91, split: random,"
+            " population: 'заявки 2019–2021'}}",
         ),
         encoding="utf-8",
     )
@@ -1481,7 +1502,7 @@ def test_a_reference_result_names_its_conditions(tmp_path) -> None:
     with pytest.raises(OutOfOrder) as отказ:
         preflight(project, prereg)
 
-    assert "не названы ['split']" in str(отказ.value)
+    assert "reference_result.split" in str(отказ.value)
 
 
 def test_the_second_stage_is_required_after_sealing(tmp_path) -> None:
@@ -1512,7 +1533,8 @@ def test_complete_analogs_let_the_builder_run(tmp_path) -> None:
         ANALOGS_BLOCK.replace(
             "found: []",
             "found:\n    - {url: 'https://kaggle.com/x',\n"
-            "       reference_result: {metric: roc_auc, value: 0.91, split: random}}",
+            "       reference_result: {metric: roc_auc, value: 0.91, split: random,"
+            " population: 'заявки 2019–2021'}}",
         ).replace(
             "rejected: []",
             "rejected:\n    - {url: 'https://kaggle.com/x', reason: 'случайный сплит'}",
@@ -1531,3 +1553,1014 @@ def test_historical_cases_do_not_need_analogs(tmp_path) -> None:
     )
 
     preflight(project, prereg)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("found", "null"),
+        ("taken", "null"),
+        ("rejected", "null"),
+        ("pitfalls", "null"),
+        ("found", "'нет'"),
+        ("date", "true"),
+        ("date", "'вчера'"),
+    ],
+)
+def test_a_wrong_type_is_not_an_empty_answer(tmp_path, field, value) -> None:
+    """Независимое ревью PR #1: `null` вместо списка проходил как пустой список.
+
+    Валидатор проверял наличие поля и трактовал негодный тип как «ничего»:
+    запись `found: null, taken: null, rejected: null, pitfalls: null, date: true`
+    с непустыми запросами пропускала построитель. Умолчание, совпадающее с
+    честным ответом, — ровно то, что главное правило проекта запрещает.
+    """
+    project, prereg = _ready(tmp_path)
+    default = {
+        "found": "[]",
+        "taken": "[]",
+        "rejected": "[]",
+        "pitfalls": "[]",
+        "date": "2026-09-29",
+    }
+    (project / ANALOGS).write_text(
+        ANALOGS_BLOCK.replace(f"{field}: {default[field]}", f"{field}: {value}"), encoding="utf-8"
+    )
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    with pytest.raises(OutOfOrder) as отказ:
+        guarded(project, prereg, build)
+
+    assert calls == 0, f"построитель вызван при {field}: {value}"
+    assert field in str(отказ.value)
+
+
+def test_the_reviewers_record_is_refused(tmp_path) -> None:
+    """Запись ревьюера целиком, как она была предъявлена."""
+    project, prereg = _ready(tmp_path)
+    record = ANALOGS_BLOCK
+    for field in ("found", "taken", "rejected", "pitfalls"):
+        record = record.replace(f"{field}: []", f"{field}: null")
+    (project / ANALOGS).write_text(
+        record.replace("date: 2026-09-29", "date: true"), encoding="utf-8"
+    )
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, lambda: "построено")
+
+
+def test_a_stray_analogs_block_does_not_touch_a_historical_case(tmp_path) -> None:
+    """Независимое ревью PR #1: на 4637616 такой документ проходил — и проходит снова."""
+    prereg = _prereg(
+        tmp_path,
+        "```yaml\nproject: проба\n```\n\n```yaml\nanalogs: {}\n```\n",
+        number=20,
+        analogs=False,
+    )
+
+    assert declared(prereg)["project"] == "проба"
+
+
+def test_an_analogs_block_without_project_is_refused_from_case_21(tmp_path) -> None:
+    prereg = _prereg(
+        tmp_path, "```yaml\nproject: проба\n```\n\n```yaml\nanalogs: {}\n```\n", analogs=False
+    )
+
+    with pytest.raises(OutOfOrder) as отказ:
+        declared(prereg)
+
+    assert "без `project`" in str(отказ.value)
+
+
+def test_a_boolean_is_not_a_link_or_a_reason(tmp_path) -> None:
+    """`url: true` и `reason: true` проходили проверкой на истинность."""
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(
+        ANALOGS_BLOCK.replace("found: []", "found:\n    - {url: true}").replace(
+            "rejected: []", "rejected:\n    - {url: true, reason: true}"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OutOfOrder) as отказ:
+        guarded(project, prereg, lambda: "построено")
+
+    assert "found.0.url" in str(отказ.value)
+
+
+FOUND_WITH_DECISION = (
+    "found:\n    - url: 'https://kaggle.com/x'\n      reference_result: {REF}\n"
+    "  taken: []\n  rejected:\n    - {url: 'https://kaggle.com/x', reason: 'случайный сплит'}"
+)
+GOOD_REFERENCE = "{metric: roc_auc, value: 0.91, split: random, population: 'заявки 2019–2021'}"
+
+
+def _with_reference(reference: str) -> str:
+    return ANALOGS_BLOCK.replace(
+        "found: []\n  taken: []\n  rejected: []",
+        FOUND_WITH_DECISION.replace("{REF}", reference),
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "record"),
+    [
+        ("дата без дефисов", ANALOGS_BLOCK.replace("date: 2026-09-29", "date: '20260929'")),
+        ("дата-время", ANALOGS_BLOCK.replace("date: 2026-09-29", "date: 2026-09-29 10:00:00")),
+        (
+            "опорный результат без содержания",
+            _with_reference("{metric: true, value: false, split: []}"),
+        ),
+        (
+            "нет population",
+            _with_reference("{metric: roc_auc, value: 0.91, split: random}"),
+        ),
+        (
+            "сплит не из шаблона",
+            _with_reference(GOOD_REFERENCE.replace("split: random", "split: случайный")),
+        ),
+        (
+            "значение — bool",
+            _with_reference(GOOD_REFERENCE.replace("value: 0.91", "value: true")),
+        ),
+        (
+            "опечатка в поле",
+            ANALOGS_BLOCK.replace("rejected: []", "rejected: []\n  rejeted: []"),
+        ),
+        ("запрос — число", ANALOGS_BLOCK.replace('openml: ["delivery delay"]', "openml: [42]")),
+        (
+            "значение — NaN",
+            _with_reference(GOOD_REFERENCE.replace("value: 0.91", "value: .nan")),
+        ),
+    ],
+)
+def test_form_without_content_is_refused(tmp_path, label, record) -> None:
+    """Повторное ревью PR #2: заплаты по одному полю пропускали следующие дыры.
+
+    `date: '20260929'` проходил, потому что `date.fromisoformat` принимает запись
+    без дефисов; `reference_result: {metric: true, value: false, split: []}` —
+    потому что проверялось наличие полей, а не их типы. Корень — ручная проверка
+    поле за полем; теперь форма задана строгой схемой.
+    """
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(record, encoding="utf-8")
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, build)
+
+    assert calls == 0, f"построитель вызван: {label}"
+
+
+def test_a_full_reference_result_is_accepted(tmp_path) -> None:
+    """Обратный исход: полная запись шаблона проходит."""
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(_with_reference(GOOD_REFERENCE), encoding="utf-8")
+
+    assert guarded(project, prereg, lambda: "построено") == "построено"
+
+
+def _decisions(found: str, taken: str = "[]", rejected: str = "[]") -> str:
+    return ANALOGS_BLOCK.replace(
+        "found: []\n  taken: []\n  rejected: []",
+        f"found: {found}\n  taken: {taken}\n  rejected: {rejected}",
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "record"),
+    [
+        (
+            "ссылка — не URL",
+            _decisions("[{url: 'x'}]", rejected="[{url: 'x', reason: 'проверен'}]"),
+        ),
+        (
+            "ссылка без хоста с точкой",
+            _decisions("[{url: 'https://x'}]", rejected="[{url: 'https://x', reason: 'проверен'}]"),
+        ),
+        (
+            "ссылка не http",
+            _decisions(
+                "[{url: 'ftp://kaggle.com/x'}]",
+                rejected="[{url: 'ftp://kaggle.com/x', reason: 'проверен'}]",
+            ),
+        ),
+        (
+            "решение о ненайденном",
+            _decisions("[]", taken="[{url: 'https://kaggle.com/x', reason: 'взят'}]"),
+        ),
+        (
+            "взят и отвергнут сразу",
+            _decisions(
+                "[{url: 'https://kaggle.com/x'}]",
+                taken="[{url: 'https://kaggle.com/x', reason: 'взят'}]",
+                rejected="[{url: 'https://kaggle.com/x', reason: 'отвергнут'}]",
+            ),
+        ),
+        (
+            "найден дважды",
+            _decisions(
+                "[{url: 'https://kaggle.com/x'}, {url: 'https://kaggle.com/x'}]",
+                rejected="[{url: 'https://kaggle.com/x', reason: 'проверен'}]",
+            ),
+        ),
+    ],
+)
+def test_decisions_answer_for_what_was_found(tmp_path, label, record) -> None:
+    """Третье ревью PR #2: `url: 'x'` проходил как ссылка, а решение в `taken` —
+    при пустом `found`: согласованность проверялась лишь от найденного к решению.
+    """
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(record, encoding="utf-8")
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, build)
+
+    assert calls == 0, f"построитель вызван: {label}"
+
+
+SPACES = [chr(code) for code in range(0x110000) if chr(code).isspace()]
+"""Всё, что `str.strip` снимает с краёв: ASCII-пробелы и Unicode-пробелы."""
+
+
+@pytest.mark.parametrize("stage", ["пре-регистрация", "analogs.md"])
+@pytest.mark.parametrize("space", SPACES, ids=lambda char: f"U+{ord(char):04X}")
+def test_a_link_is_checked_as_written_not_after_trimming(tmp_path, stage, space) -> None:
+    """Десятое ревью PR #2: ссылка наследовала обрезку краёв у текста, и
+    `\\u00A0https://example.com/x\\u3000` доходила до проверки ASCII уже без
+    них — полная запись проходила на обоих этапах. Ссылка проверяется в том
+    виде, в каком записана."""
+    code = f"\\u{ord(space):04x}"
+    url = f'"{code}https://example.com/x{code}"'
+    record = _decisions(f"[{{url: {url}}}]", rejected=f"[{{url: {url}, reason: 'проверен'}}]")
+    project, prereg = _ready(tmp_path)
+    if stage == "analogs.md":
+        (project / ANALOGS).write_text(record, encoding="utf-8")
+    else:
+        text = prereg.read_text(encoding="utf-8")
+        assert ANALOGS_BLOCK in text
+        prereg.write_text(text.replace(ANALOGS_BLOCK, record), encoding="utf-8")
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, build)
+
+    assert calls == 0, f"построитель вызван: U+{ord(space):04X} по краям ссылки, {stage}"
+
+
+GOOD_LINKS = [
+    "https://kaggle.com/x",
+    "http://www.openml.org/t/1",
+    "https://github.com/a/b?x=1#y",
+    "https://Kaggle.COM/x",
+    "https://kaggle.com:443/x",
+    "https://xn--e1afmkfd.xn--p1ai/%D0%BF%D1%83%D1%82%D1%8C",
+]
+BAD_LINKS = [
+    "x",
+    "https://x",
+    "ftp://kaggle.com/x",
+    "https://kaggle .com/x",
+    "https://.com",
+    "https://a.b:badport/x",
+    "https://a.b:99999/x",
+    "https://a..b/x",
+    "https://-a.com",
+    "https://a-.com",
+    "https://a_b.com",
+    "https://1.2.3.4/x",
+    "https://a.123",
+]
+
+
+@pytest.mark.parametrize("link", GOOD_LINKS)
+def test_a_link_parsed_by_the_standard_is_accepted(link) -> None:
+    from protocol.preflight import _web_link
+
+    assert _web_link(link) == link
+
+
+@pytest.mark.parametrize("link", BAD_LINKS)
+def test_a_link_the_standard_rejects_is_refused(link) -> None:
+    """Четвёртое ревью PR #2: порт `badport` и пустая часть хоста `a..b` проходили.
+
+    Ручная проверка «схема и точка в хосте» — та же заплата поле за полем, что
+    уже дважды подводила. Ссылка разбирается стандартным разборщиком (порт,
+    схема, IPv4, IDNA), имя хоста — по RFC 1123.
+    """
+    from protocol.preflight import _web_link
+
+    with pytest.raises(ValueError):
+        _web_link(link)
+
+
+def test_the_reviewers_bad_port_stops_the_builder(tmp_path) -> None:
+    project, prereg = _ready(tmp_path)
+    link = "https://a.b:badport/x"
+    (project / ANALOGS).write_text(
+        _decisions(f"[{{url: '{link}'}}]", rejected=f"[{{url: '{link}', reason: 'проверен'}}]"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, lambda: "построено")
+
+
+def _two_found(first: str, second: str) -> str:
+    return _decisions(
+        f"[{{url: '{first}'}}, {{url: '{second}'}}]",
+        taken=f"[{{url: '{first}', reason: 'взят'}}]",
+        rejected=f"[{{url: '{second}', reason: 'отвергнут'}}]",
+    )
+
+
+SAME_LINK = [
+    ("https://kaggle.com/x", "https://Kaggle.COM/x"),
+    ("https://kaggle.com/x", "HTTPS://kaggle.com/x"),
+    ("https://kaggle.com/x", "https://kaggle.com:443/x"),
+    ("https://kaggle.com/x", "https://kaggle.com/a/../x"),
+    ("https://kaggle.com/~x", "https://kaggle.com/%7Ex"),
+    ("https://kaggle.com/a%3ab", "https://kaggle.com/a%3Ab"),
+    ("https://kaggle.com/x", "https://kaggle.com/x#review"),
+    ("https://kaggle.com/%d0%bf", "https://kaggle.com/%D0%BF"),
+]
+DIFFERENT_LINK = [
+    ("https://kaggle.com/x", "https://kaggle.com/y"),
+    ("https://kaggle.com/x", "https://kaggle.com/x/"),
+    ("https://kaggle.com/x", "http://kaggle.com/x"),
+    ("https://kaggle.com/x?a=1", "https://kaggle.com/x?a=2"),
+]
+
+
+@pytest.mark.parametrize(("first", "second"), SAME_LINK)
+def test_one_link_written_twice_is_a_repeat(tmp_path, first, second) -> None:
+    """Пятое ревью PR #2: `https://kaggle.com/x` и `https://Kaggle.COM/x` проходили
+    двумя аналогами — разбор нормализовал ссылку, а повторы сверялись по исходной строке.
+
+    Тождество — синтаксическая нормализация RFC 3986 §6.2.2 без фрагмента.
+    """
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(_two_found(first, second), encoding="utf-8")
+
+    with pytest.raises(OutOfOrder) as отказ:
+        guarded(project, prereg, lambda: "построено")
+
+    assert "дважды" in str(отказ.value)
+
+
+@pytest.mark.parametrize(("first", "second"), DIFFERENT_LINK)
+def test_different_links_are_not_merged(tmp_path, first, second) -> None:
+    """Обратный исход: то, что стандарт тождеством не считает, остаётся разным.
+
+    http и https, слэш на конце — одна ли это страница, знает сервер, а не форма.
+    """
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(_two_found(first, second), encoding="utf-8")
+
+    assert guarded(project, prereg, lambda: "построено") == "построено"
+
+
+@pytest.mark.parametrize(
+    ("label", "record"),
+    [
+        (
+            "учётные данные в ссылке",
+            _decisions(
+                "[{url: 'https://user:pass@kaggle.com/x'}]",
+                rejected="[{url: 'https://user:pass@kaggle.com/x', reason: 'проверен'}]",
+            ),
+        ),
+        ("дата поиска в будущем", ANALOGS_BLOCK.replace("date: 2026-09-29", "date: 2999-01-01")),
+    ],
+)
+def test_what_the_record_itself_rules_out(tmp_path, label, record) -> None:
+    """Найдено автором при перечитывании после пятого ревью PR #2, до шестого.
+
+    Ссылка с логином и паролем — не ссылка на аналог, а чужой доступ; дата поиска
+    позже сегодняшней невозможна. Оба видны по самой записи, без чтения страниц.
+    """
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(record, encoding="utf-8")
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, lambda: "построено")
+
+
+LONG_HOST = ".".join(["a" * 60] * 5) + ".com"
+
+
+@pytest.mark.parametrize(
+    ("label", "record"),
+    [
+        (
+            "запрос из управляющего символа",
+            ANALOGS_BLOCK.replace('openml: ["delivery delay"]', 'openml: ["\\0"]'),
+        ),
+        (
+            "запрос из невидимого символа",
+            ANALOGS_BLOCK.replace('openml: ["delivery delay"]', 'openml: ["\\u200b"]'),
+        ),
+        (
+            "причина из управляющего символа",
+            _decisions(
+                "[{url: 'https://kaggle.com/x'}]",
+                rejected='[{url: "https://kaggle.com/x", reason: "\\0"}]',
+            ),
+        ),
+    ],
+)
+def test_text_without_text_is_refused(tmp_path, label, record) -> None:
+    """Шестое ревью PR #2 (пункт 4): `"\\0"` и `"\\u200b"` проходили как непустой текст."""
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(record, encoding="utf-8")
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, lambda: "построено")
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "https://kaggle.com/%GG",
+        "https://kaggle.com/%",
+        "https://kaggle.com\\evil",
+        "https://kag​gle.com/x",
+        "https://kaggle.com/a​b",
+        f"https://{LONG_HOST}/x",
+    ],
+)
+def test_a_link_the_parser_would_repair_is_refused(link) -> None:
+    """Шестое ревью PR #2 (пункты 5–7): разборщик чинил ссылку молча, а хранилась исходная.
+
+    Неверный процент, обратная косая черта, невидимый символ; и хост длиннее 253
+    знаков — DNS-имя длиннее 255 октетов (RFC 1035) при допустимых частях.
+    """
+    from protocol.preflight import _web_link
+
+    with pytest.raises(ValueError):
+        _web_link(link)
+
+
+def test_a_host_of_the_maximum_length_is_accepted() -> None:
+    from protocol.preflight import _web_link
+
+    host = ".".join(["a" * 63] * 3 + ["b" * 61])
+    assert len(host) == 253
+    assert _web_link(f"https://{host}/x")
+
+
+CONTRADICTION = ANALOGS_BLOCK.replace("project: проба\nanalogs:", "analogs:").replace(
+    "  pitfalls: []\n```", "  pitfalls: ['утечка через статус']\nproject: проба\n```"
+)
+"""Второй блок того же проекта с другим содержимым: `project` не первой строкой."""
+
+
+@pytest.mark.parametrize(
+    ("label", "extra"),
+    [
+        ("project не первой строкой", CONTRADICTION),
+        ("битый YAML", "\n```yaml\nproject: проба\nanalogs: [\n```\n"),
+        (
+            "повтор ключа",
+            ANALOGS_BLOCK.replace(
+                "  found: []", "  found:\n    - {url: 'https://kaggle.com/x'}\n  found: []"
+            ),
+        ),
+        ("ключ слияния", "\n```yaml\nбаза: &b {project: проба}\n<<: *b\n```\n"),
+        ("ограда тильдами", CONTRADICTION.replace("```yaml", "~~~yaml").replace("```", "~~~")),
+        ("ограда заглавными", CONTRADICTION.replace("```yaml", "```YAML")),
+        ("ограда с отступом", CONTRADICTION.replace("```yaml", "  ```yaml")),
+    ],
+)
+def test_a_hidden_block_is_refused_from_case_21(tmp_path, label, extra) -> None:
+    """Шестое ревью PR #2, пункты 1–3: разбор блоков пропускал то, что не понимал.
+
+    Блок, где `project:` не первой строкой, битый YAML и повтор ключа прятали
+    запись от проверки, и построитель вызывался. Нестандартная ограда блока —
+    та же дыра, найдена автором при перечитывании.
+    """
+    project, prereg = _ready(tmp_path)
+    record = ANALOGS_BLOCK if label == "повтор ключа" else ANALOGS_BLOCK + extra
+    if label == "повтор ключа":
+        record = extra
+    (project / ANALOGS).write_text(record, encoding="utf-8")
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, build)
+
+    assert calls == 0, f"построитель вызван: {label}"
+
+
+def test_project_after_the_controls_is_read_from_case_21(tmp_path) -> None:
+    """Та же дыра в контролях: блок `controls` с `project` второй строкой не читался."""
+    prereg = _prereg(
+        tmp_path,
+        "```yaml\ncontrols:\n  - {name: К-1, column: at_night}\nproject: проба\n```\n",
+        analogs=False,
+    )
+
+    assert declared(prereg)["controls"][0]["name"] == "К-1"
+
+
+def test_a_historical_case_keeps_its_old_reading(tmp_path) -> None:
+    """Опечатанные документы 2–20 разбираются по-старому: битый блок молча пропускается."""
+    prereg = _prereg(
+        tmp_path,
+        "```yaml\nproject: проба\n```\n\n```yaml\nanalogs: [\n```\n",
+        number=20,
+        analogs=False,
+    )
+
+    assert declared(prereg) == {"project": "проба"}
+
+
+@pytest.mark.parametrize("text", ["\\uFE0F", "\\u034F", "\\u200d\\uFE0F"])
+def test_a_lone_mark_is_not_text(tmp_path, text) -> None:
+    """Седьмое ревью PR #2: невидимые метки (категория Mn) проходили как текст.
+
+    Перечень запрещённого всегда неполон — текст теперь обязан нести хотя бы
+    одну букву, цифру, знак препинания или символ.
+    """
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(
+        ANALOGS_BLOCK.replace('openml: ["delivery delay"]', f'openml: ["{text}"]'), encoding="utf-8"
+    )
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, lambda: "построено")
+
+
+def test_ordinary_text_in_any_script_is_text(tmp_path) -> None:
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(
+        ANALOGS_BLOCK.replace('openml: ["delivery delay"]', 'openml: ["задержка 🙂 délai"]'),
+        encoding="utf-8",
+    )
+
+    assert guarded(project, prereg, lambda: "построено") == "построено"
+
+
+def test_a_link_with_a_mark_the_parser_would_encode_is_refused() -> None:
+    from protocol.preflight import _web_link
+
+    with pytest.raises(ValueError):
+        _web_link("https://kaggle.com/a️b")
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "https://пример.рф/путь",
+        "https://kaggle.com/é",
+        "https://kaggle.com/²",
+        "https://kaggle.com/x?é=1",
+        "https://kaggle.com/x#é",
+        "https://kaggle.com/\u3164",
+    ],
+)
+def test_a_link_outside_ascii_is_refused(link) -> None:
+    """Девятое ревью PR #2: не-ASCII знаки подменялись на `a` перед сверкой с
+    грамматикой, а граница обещает RFC 3986 — там URI только из ASCII; Unicode —
+    это IRI (RFC 3987). Национальное имя — через IDNA, путь — через percent-encoding.
+    """
+    from protocol.preflight import _web_link
+
+    with pytest.raises(ValueError):
+        _web_link(link)
+
+
+def test_a_link_in_cyrillic_is_accepted_when_encoded() -> None:
+    from protocol.preflight import _web_link
+
+    assert _web_link("https://xn--e1afmkfd.xn--p1ai/%D0%BF%D1%83%D1%82%D1%8C")
+
+
+QUOTED_BLOCK = "\n> ```yaml\n> project: проба\n> analogs: {}\n> ```\n"
+
+
+@pytest.mark.parametrize(
+    ("label", "extra"),
+    [
+        ("блок в цитате", QUOTED_BLOCK),
+        ("блок-список", "\n```yaml\n- project: проба\n  analogs: {}\n```\n"),
+        (
+            "строчная ограда и тильды",
+            "\nсм. ```yaml\nproject: проба\n```\n" + CONTRADICTION.replace("```", "~~~"),
+        ),
+        ("единственная ограда с отступом", None),
+        ("ограда из четырёх", None),
+        ("незакрытый блок", "\n```yaml\nproject: проба\n"),
+    ],
+)
+def test_only_one_way_to_fence_a_block(tmp_path, label, extra) -> None:
+    """Седьмое ревью PR #2: ограды искались шаблонами, и блок в цитате, блок-список,
+    счёт оград при строчном ```yaml пропускали запись. Теперь грамматика одна:
+    блок открывается строкой ```язык с начала строки и закрывается строкой ```;
+    любая другая строка с ``` или ~~~ — отказ.
+    """
+    project, prereg = _ready(tmp_path)
+    if label == "единственная ограда с отступом":
+        record = ANALOGS_BLOCK.replace("\n```yaml", "\n  ```yaml")
+    elif label == "ограда из четырёх":
+        record = ANALOGS_BLOCK.replace("```", "````")
+    else:
+        record = ANALOGS_BLOCK + extra
+    (project / ANALOGS).write_text(record, encoding="utf-8")
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, lambda: "построено")
+
+
+def test_other_code_blocks_are_allowed(tmp_path) -> None:
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(
+        "Запрос выполнен так:\n\n```bash\ncurl https://kaggle.com\n```\n" + ANALOGS_BLOCK,
+        encoding="utf-8",
+    )
+
+    assert guarded(project, prereg, lambda: "построено") == "построено"
+
+
+@pytest.mark.parametrize(
+    ("label", "extra"),
+    [
+        ("список в json", "\n```json\n- project: проба\n  analogs: {}\n```\n"),
+        ("вложенный json", '\n```json\n{"record": {"project": "проба", "analogs": {}}}\n```\n'),
+        ("битый yml", "\n```yml\nproject: проба\nanalogs: [\n```\n"),
+        ("без языка", "\n```\nproject: проба\nanalogs: {}\n```\n"),
+        ("неизвестный тег", "\n```yml\n!Protocol\nproject: проба\n```\n"),
+        ("два документа", "\n```text\nproject: проба\n---\nanalogs: {}\n```\n"),
+    ],
+)
+def test_a_record_in_another_block_is_refused(tmp_path, label, extra) -> None:
+    """Восьмое ревью PR #2: блок другого языка проверялся разбором и лишь на
+    словарь верхнего уровня — список, вложенность, битый YAML, тег и `---`
+    прятали запись. Теперь блок другого языка не смеет упоминать ключи
+    протокола как слова — проверка по тексту, без разбора.
+    """
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(ANALOGS_BLOCK + extra, encoding="utf-8")
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, lambda: "построено")
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "https:kaggle.com/x",
+        "https:/kaggle.com/x",
+        "https:////kaggle.com/x",
+        "https://@kaggle.com/x",
+        "https://:@kaggle.com/x",
+        "https://kaggle.com:/x",
+        "https://kaggle.com/a[b]",
+        "https://kaggle.com/x#b#c",
+        "https://kaggle.com/x?foo[bar]",
+    ],
+)
+def test_a_link_off_the_rfc_3986_grammar_is_refused(link) -> None:
+    """Восьмое ревью PR #2: разборщик чинил разделители и пустой userinfo молча.
+
+    Сырая ссылка обязана целиком лежать в грамматике RFC 3986 (Appendix A)
+    для http(s): scheme://host[:port][/path][?query][#fragment], без userinfo.
+    """
+    from protocol.preflight import _web_link
+
+    with pytest.raises(ValueError):
+        _web_link(link)
+
+
+@pytest.mark.parametrize("filler", ["\\u3164", "\\u115F", "\\u1160", "\\uFFA0"])
+def test_a_default_ignorable_filler_is_not_text(tmp_path, filler) -> None:
+    """Невидимые заполнители категории Lo — по свойству Default_Ignorable_Code_Point."""
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(
+        ANALOGS_BLOCK.replace('openml: ["delivery delay"]', f'openml: ["{filler}"]'),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, lambda: "построено")
+
+
+# --- Претендент: спецификация опечатывается с пре-регистрацией -------------------
+
+
+def _spec() -> dict:
+    """Годная полная спецификация претендента; тесты портят её по одному полю."""
+    return {
+        "challenger": {
+            "name": "TabPFN",
+            "version": "2.6",
+            "checkpoint": "tabpfn-v2.6-classifier",
+            "settings": {"n_estimators": 8},
+            "preprocessing": "те же признаки, категории как коды",
+        },
+        "incumbent": {
+            "name": "LightGBM",
+            "version": "4.5",
+            "settings": {"num_leaves": 31},
+            "preprocessing": "те же признаки",
+        },
+        "metric": {"name": "average_precision", "definition": "sklearn average_precision_score"},
+        "min_improvement": 0.01,
+        "tuning": "none",
+        "split": "окна split_by_windows и резерв формуляра",
+        "bootstrap": {
+            "confidence": 0.95,
+            "method": "перцентильный, парный",
+            "unit": "строка",
+            "repeats": 400,
+            "seed": 20260101,
+        },
+        "window_predictions": "модель окна обучена на его обучающей части",
+        "on_failure": "отказ записывается проигрышем претендента, другая версия не берётся",
+        "measurement_order": "одно итоговое измерение обоих на резерве, одним checkout",
+        "license": "некоммерческое использование, решение владельца 30 сентября 2026",
+    }
+
+
+def test_a_full_challenger_spec_and_an_explicit_none_pass() -> None:
+    assert challenger_defects(_spec()) == []
+    assert challenger_defects({"none": "новых методов не сравниваем"}) == []
+
+
+def test_the_builder_is_not_called_without_a_challenger_declaration(tmp_path) -> None:
+    """Отсутствие блока не читается как «претендента нет»: это умолчание."""
+    project = _project(tmp_path)
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS, challenger=False)
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    with pytest.raises(OutOfOrder) as отказ:
+        guarded(project, prereg, build)
+
+    assert calls == 0, "построитель вызван без объявления претендента"
+    assert "объявления претендента" in str(отказ.value)
+
+
+def test_a_full_challenger_spec_passes_the_whole_path(tmp_path) -> None:
+    import yaml
+
+    project = _project(tmp_path)
+    block = yaml.safe_dump({"project": "проба", "challenger": _spec()}, allow_unicode=True)
+    prereg = _prereg(
+        tmp_path, _digests(project) + CONTROLS + f"\n```yaml\n{block}```\n", challenger=False
+    )
+
+    preflight(project, prereg)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("challenger",),
+        ("challenger", "checkpoint"),
+        ("challenger", "settings"),
+        ("challenger", "preprocessing"),
+        ("challenger", "version"),
+        ("incumbent",),
+        ("incumbent", "settings"),
+        ("metric",),
+        ("metric", "definition"),
+        ("min_improvement",),
+        ("tuning",),
+        ("split",),
+        ("bootstrap",),
+        ("bootstrap", "confidence"),
+        ("bootstrap", "unit"),
+        ("bootstrap", "repeats"),
+        ("bootstrap", "seed"),
+        ("window_predictions",),
+        ("on_failure",),
+        ("measurement_order",),
+        ("license",),
+    ],
+)
+def test_every_field_of_the_rule_is_required(path) -> None:
+    spec = _spec()
+    target = spec
+    for key in path[:-1]:
+        target = target[key]
+    del target[path[-1]]
+
+    defects = challenger_defects(spec)
+
+    assert any(".".join(path) in defect for defect in defects), defects
+
+
+@pytest.mark.parametrize(
+    "path, value",
+    [
+        (("challenger", "settings"), {}),  # «умолчания версии» — не объявление
+        (("challenger", "version"), 2.6),  # YAML без кавычек: версия стала числом
+        (("challenger", "name"), "   "),
+        (("metric", "name"), "accuracy"),  # проект её не считает
+        (("min_improvement",), -0.01),
+        (("min_improvement",), float("nan")),
+        (("min_improvement",), True),
+        (("tuning",), "optuna"),  # подбора в кейсе нет
+        (("bootstrap", "confidence"), 1.0),
+        (("bootstrap", "confidence"), 95),
+        (("bootstrap", "repeats"), 0),
+        (("bootstrap", "repeats"), True),
+        (("bootstrap", "seed"), "20260101"),
+        (("license",), ""),
+    ],
+)
+def test_a_malformed_field_is_refused(path, value) -> None:
+    spec = _spec()
+    target = spec
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+    assert challenger_defects(spec), f"{'.'.join(path)} = {value!r} прошло"
+
+
+def test_an_extra_or_misspelled_field_is_refused() -> None:
+    spec = _spec()
+    spec["min_improvment"] = spec.pop("min_improvement")
+
+    defects = challenger_defects(spec)
+
+    assert any("min_improvment" in defect for defect in defects)
+    assert any("min_improvement" in defect for defect in defects)
+
+
+def test_none_needs_a_reason_and_cannot_be_mixed_with_a_spec() -> None:
+    assert challenger_defects({"none": ""})
+    assert challenger_defects({"none": None})
+    assert challenger_defects({"none": "причина", **_spec()})
+    assert challenger_defects(None)
+    assert challenger_defects([])
+
+
+def test_a_historical_case_is_not_refused_over_a_challenger_block(tmp_path) -> None:
+    """Правило вводится вперёд: блок `challenger` без `project` в документе 2–20 не
+    считается блоком протокола, как и `analogs`."""
+    prereg = _prereg(
+        tmp_path,
+        "```yaml\nproject: проба\n```\n\n```yaml\nchallenger: {}\n```\n",
+        number=20,
+        analogs=False,
+    )
+
+    assert declared(prereg) == {"project": "проба"}
+
+
+CONTROLS_CC = [chr(code) for code in range(0x110000) if chr(code).isspace() and chr(code) < " "]
+CONTROLS_CC += ["\x85"]
+"""Управляющие знаки (Cc), которые `str.strip` снимает с краёв."""
+
+
+def _challenger_block(spec: dict) -> str:
+    import json
+
+    return f"\n```yaml\nproject: проба\nchallenger: {json.dumps(spec, ensure_ascii=True)}\n```\n"
+
+
+@pytest.mark.parametrize("field", ["analogs.queries", "challenger.none", "challenger.name"])
+@pytest.mark.parametrize("char", CONTROLS_CC, ids=lambda char: f"U+{ord(char):04X}")
+def test_text_is_checked_as_written_not_after_trimming(tmp_path, field, char) -> None:
+    """Одиннадцатое ревью PR #2: `_Text` обрезал края ДО проверки управляющих знаков,
+    и `"\\tTabPFN\\n"` проходил, хотя `_visible` его отвергает. Тот же корень, что у
+    ссылки в десятом: строка исправлялась молча до проверки."""
+    import json
+
+    value = f"{char}проба{char}"
+    project = _project(tmp_path)
+    if field == "analogs.queries":
+        prereg = _prereg(tmp_path, _digests(project) + CONTROLS)
+        text = prereg.read_text(encoding="utf-8")
+        prereg.write_text(
+            text.replace('openml: ["delivery delay"]', f"openml: [{json.dumps(value)}]"),
+            encoding="utf-8",
+        )
+    else:
+        spec = {"none": value} if field == "challenger.none" else _spec()
+        if field == "challenger.name":
+            spec["challenger"]["name"] = value
+        prereg = _prereg(
+            tmp_path, _digests(project) + CONTROLS + _challenger_block(spec), challenger=False
+        )
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, build)
+
+    assert calls == 0, f"построитель вызван: U+{ord(char):04X} по краям {field}"
+
+
+@pytest.mark.parametrize("key", ["", "   ", "\t", "\u200b", "\tn_estimators"])
+@pytest.mark.parametrize("method", ["challenger", "incumbent"])
+def test_a_settings_name_must_be_visible_text(method, key) -> None:
+    """Одиннадцатое ревью PR #2: `settings: {"": null}` засчитывался объявленными
+    настройками — словарь непуст, а названного параметра в нём нет."""
+    spec = _spec()
+    spec[method]["settings"] = {key: 8}
+
+    assert challenger_defects(spec), f"{method}.settings с ключом {key!r} прошло"
+
+
+def test_a_settings_value_may_be_anything(tmp_path) -> None:
+    """Значение параметра — не текст: `null` и список бывают законными значениями."""
+    spec = _spec()
+    spec["challenger"]["settings"] = {"categorical_features": None, "ignore": []}
+    project = _project(tmp_path)
+    prereg = _prereg(
+        tmp_path, _digests(project) + CONTROLS + _challenger_block(spec), challenger=False
+    )
+
+    preflight(project, prereg)
+
+
+def _guarded_calls(project: Path, prereg: Path) -> int:
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    try:
+        guarded(project, prereg, build)
+    except OutOfOrder:
+        pass
+    return calls
+
+
+@pytest.mark.parametrize("variant", ["один LF", "все LF"])
+def test_a_lone_carriage_return_is_refused_as_written(tmp_path, variant) -> None:
+    """Двенадцатое ревью PR #2: `read_text` переводил одиночный CR в LF ДО
+    проверки, и обещанный отказ за одиночный возврат каретки не срабатывал."""
+    project = _project(tmp_path)
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS)
+    data = prereg.read_bytes()
+    data = data.replace(b"\n", b"\r", 1) if variant == "один LF" else data.replace(b"\n", b"\r")
+    prereg.write_bytes(data)
+
+    assert _guarded_calls(project, prereg) == 0, f"построитель вызван: {variant} заменён на CR"
+
+
+def test_windows_line_endings_pass(tmp_path) -> None:
+    project = _project(tmp_path)
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS)
+    prereg.write_bytes(prereg.read_bytes().replace(b"\n", b"\r\n"))
+
+    assert _guarded_calls(project, prereg) == 1
+
+
+FOLDED_LAST = (
+    "```yaml\nproject: проба\nchallenger:\n  none: {style}\n    первая фраза\n"
+    "    вторая фраза\n```\n"
+)
+FOLDED_MIDDLE = (
+    "```yaml\nproject: проба\nchallenger:\n  none: {style}\n    первая фраза\n"
+    "    вторая фраза\nnote: x\n```\n"
+)
+
+
+@pytest.mark.parametrize("where", ["последнее поле", "поле в середине"])
+@pytest.mark.parametrize("style, passes", [(">", False), (">-", True)])
+def test_a_folded_scalar_is_read_the_same_wherever_it_stands(
+    tmp_path, where, style, passes
+) -> None:
+    """Двенадцатое ревью PR #2: сборка блока теряла последний перевод строки, и `>`
+    в конце блока проходил, а тот же `>` перед другим полем — нет. `>` оставляет
+    управляющий знак и отвергается везде; `>-` проходит везде."""
+    project = _project(tmp_path)
+    template = FOLDED_LAST if where == "последнее поле" else FOLDED_MIDDLE
+    block = template.format(style=style)
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS + "\n" + block, challenger=False)
+
+    assert _guarded_calls(project, prereg) == (1 if passes else 0), f"{style}, {where}"

@@ -21,12 +21,28 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import re
+import unicodedata
 from collections.abc import Callable, Iterable
 from pathlib import Path
+from typing import Annotated, Literal
 
 import yaml
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    StrictFloat,
+    StrictInt,
+    StringConstraints,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
 
 from dsx.roles import Role
 
@@ -63,31 +79,161 @@ def _case_number(prereg: Path) -> int | None:
 ANY_BLOCK = re.compile(r"```yaml\n(.*?)\n```", re.DOTALL)
 
 
+FENCE = re.compile(r"```([a-z0-9_+-]*)")
+"""Единственная допустимая ограда в документе протокола: ```язык с начала строки, закрытие — ```."""
+
+
+class _UniqueKeys(yaml.SafeLoader):
+    """Загрузчик, отвергающий повтор ключа и ключ слияния `<<`.
+
+    Обычный загрузчик оставляет последнее из повторённых значений: запись
+    `found: [...]`, затем `found: []` проходила проверку пустой (шестое ревью
+    PR #2). Ключ слияния прячет запись тем же способом и тоже отвергается.
+    """
+
+    def construct_mapping(self, node, deep=False):
+        seen = set()
+        for key_node, _ in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                raise yaml.constructor.ConstructorError(
+                    None, None, "ключ слияния `<<` прячет запись", key_node.start_mark
+                )
+            key = self.construct_object(key_node, deep=True)
+            if key in seen:
+                raise yaml.constructor.ConstructorError(
+                    None, None, f"ключ {key!r} повторён", key_node.start_mark
+                )
+            seen.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
+def _strict(path: Path) -> bool:
+    """Строгий разбор — для пре-регистраций с `FROM_CASE` и для прочих файлов протокола."""
+    number = _case_number(path)
+    return number is None or number >= FROM_CASE
+
+
+def _refuse_fence(path: Path, number: int, why: str) -> OutOfOrder:
+    return OutOfOrder(
+        f"ОТКАЗ: {path.name}, строка {number}: {why}. Блок открывается строкой ```язык с "
+        "начала строки и закрывается строкой ```; иначе разбор мог бы его не увидеть. "
+        "Построитель не вызывался."
+    )
+
+
+def _load(path: Path, number: int, body: str) -> object:
+    try:
+        return yaml.load(body, Loader=_UniqueKeys)
+    except yaml.YAMLError as exc:
+        reason = str(exc).splitlines()[0]
+        raise OutOfOrder(
+            f"ОТКАЗ: блок YAML в {path.name} (строка {number}) не разобран ({reason}). Его "
+            "содержимое потерялось бы молча. Построитель не вызывался."
+        ) from None
+
+
+def _blocks(path: Path, keys: tuple[str, ...]) -> list[dict]:
+    """Все блоки YAML документа — по одной грамматике оград, ничего не пропуская молча.
+
+    Шестое ревью PR #2: блок, где `project:` не первой строкой, битый YAML и
+    повтор ключа прятали запись. Седьмое: ограды искались шаблонами, и блок в
+    цитате (`> ```yaml`), блок-список и счёт оград при строчном ```yaml пропускали
+    запись. Перечень неправильных оград неполон, поэтому задана одна ПРАВИЛЬНАЯ:
+    строка ```язык с начала строки открывает блок, строка ``` закрывает; любая
+    другая строка с ``` или ~~~ — отказ. Блок YAML обязан быть словарём.
+
+    Блок другого языка не смеет упоминать `project` и ключи протокола как слова.
+    Восьмое ревью PR #2: прежде такой блок РАЗБИРАЛСЯ и проверялся лишь на
+    словарь верхнего уровня — список, вложенный JSON, битый YAML, неизвестный
+    тег и `---` прятали запись. Проверка по тексту разбору не поддаётся.
+    """
+    # Байты, а не `read_text`: тот переводит и одиночный CR в LF, и проверка ниже
+    # его бы не увидела (двенадцатое ревью PR #2). Заменяется только CRLF.
+    text = path.read_bytes().decode("utf-8").replace("\r\n", "\n")
+    if "\r" in text:
+        number = text[: text.index("\r")].count("\n") + 1
+        raise _refuse_fence(path, number, "одиночный возврат каретки")
+    blocks: list[dict] = []
+    language, start, body = None, 0, []
+    for number, line in enumerate(text.split("\n"), 1):
+        if language is None:
+            opened = FENCE.fullmatch(line)
+            if opened:
+                language, start, body = opened.group(1), number, []
+            elif "```" in line or "~~~" in line:
+                raise _refuse_fence(path, number, "ограда блока не по правилу")
+            continue
+        if line != "```":
+            if "```" in line or "~~~" in line:
+                raise _refuse_fence(path, number, "ограда внутри блока")
+            body.append(line)
+            continue
+        # Перевод строки перед закрывающей оградой — часть тела блока. Без него
+        # свёрнутый скаляр `>` в последнем поле терял управляющий знак и проходил,
+        # а тот же `>` в середине блока — нет (двенадцатое ревью PR #2).
+        content = "".join(line + "\n" for line in body)
+        if language == "yaml":
+            block = _load(path, start, content)
+            if not isinstance(block, dict):
+                raise _refuse_fence(path, start, "блок YAML не словарь")
+            blocks.append(block)
+        else:
+            named = sorted(
+                {word for word in ("project", *keys) if re.search(rf"\b{word}\b", content)}
+            )
+            if named:
+                kind = language or "без языка"
+                raise _refuse_fence(path, start, f"ключи протокола {named} в блоке «{kind}»")
+        language = None
+    if language is not None:
+        raise _refuse_fence(path, start, "блок не закрыт")
+    return blocks
+
+
 def declared(prereg: Path) -> dict:
     """Машиночитаемые объявления пре-регистрации — все блоки сразу.
 
     Блок протокола обязан нести `project:`. Повторное ревью показало, чем грозит
     обратное: контроли, объявленные в блоке без `project`, парсер не видел вовсе,
     и preflight считал, что контролей нет.
+
+    С `FROM_CASE` разбор строгий (`_blocks`): `project` — на любой строке блока,
+    битый YAML, повтор ключа и нестандартная ограда — отказ. Опечатанные
+    документы старших кейсов разбираются прежним способом: правило вводится вперёд.
     """
+    keys = _protocol_keys(prereg)
+    if _strict(prereg):
+        candidates = _blocks(prereg, keys)
+        for block in candidates:
+            if "project" not in block and set(block) & set(keys):
+                raise OutOfOrder(
+                    f"ОТКАЗ: в {prereg.name} есть машиночитаемый блок протокола "
+                    f"({sorted(set(block) & set(keys))}) без `project`. "
+                    "Такой блок не был бы связан с кейсом и потерялся бы молча. "
+                    "Построитель не вызывался."
+                )
+        return _merge(block for block in candidates if "project" in block)
+
     text = prereg.read_text(encoding="utf-8")
     for found in ANY_BLOCK.finditer(text):
         try:
             block = yaml.safe_load(found.group(1))
         except yaml.YAMLError:
             continue
-        if isinstance(block, dict) and any(key in block for key in PROTOCOL_KEYS):
+        if isinstance(block, dict) and any(key in block for key in keys):
             if "project" not in block:
                 raise OutOfOrder(
                     f"ОТКАЗ: в {prereg.name} есть машиночитаемый блок протокола "
-                    f"({sorted(set(block) & set(PROTOCOL_KEYS))}) без `project`. "
+                    f"({sorted(set(block) & set(keys))}) без `project`. "
                     "Такой блок не был бы связан с кейсом и потерялся бы молча. "
                     "Построитель не вызывался."
                 )
+    return _merge(yaml.safe_load(found.group(1)) for found in BLOCK.finditer(text))
 
+
+def _merge(blocks) -> dict:
     merged: dict = {}
-    for found in BLOCK.finditer(text):
-        block = yaml.safe_load(found.group(1))
+    for block in blocks:
         for key, value in block.items():
             if key in merged and merged[key] != value:
                 if isinstance(value, list):
@@ -348,7 +494,220 @@ ANALOGS = "analogs.md"
 """Второй этап поиска аналогов: решения на ТОМ ЖЕ наборе, после опечатывания."""
 
 ANALOG_SOURCES = ("github", "kaggle", "openml")
-ANALOG_FIELDS = ("date", "queries", "found", "taken", "rejected", "pitfalls")
+
+ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+VISIBLE = frozenset("LNPS")
+"""Старшая буква категории Unicode видимого знака: буква, цифра, пунктуация, символ."""
+
+DEFAULT_IGNORABLE = (
+    (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160),
+    (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E),
+    (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)  # fmt: skip
+"""Default_Ignorable_Code_Point из DerivedCoreProperties.txt Unicode: знаки, которые
+отображаются как ничто. Среди них заполнители категории Lo (U+3164, U+115F, U+1160,
+U+FFA0), формально входящие в L — восьмое ревью PR #2."""
+
+
+def _ignorable(char: str) -> bool:
+    code = ord(char)
+    return any(low <= code <= high for low, high in DEFAULT_IGNORABLE)
+
+
+def _visible(value: str) -> str:
+    """Текст — это хотя бы один видимый знак и ни одного управляющего.
+
+    Шестое ревью PR #2: `"\\0"` и `"\\u200b"` проходили как непустые строки;
+    седьмое — одиночные метки `U+FE0F`, `U+034F` (категория Mn). Перечень
+    невидимого всегда неполон, поэтому задан перечень ВИДИМОГО: хотя бы одна
+    буква, цифра, знак препинания или символ (категории L, N, P, S), не из
+    Default_Ignorable_Code_Point. Предел: U+2800 (пустой шаблон Брайля) по Unicode
+    видимый символ и проходит.
+    """
+    if any(unicodedata.category(char) == "Cc" for char in value):
+        raise ValueError("управляющий символ в тексте")
+    if not any(unicodedata.category(char)[0] in VISIBLE and not _ignorable(char) for char in value):
+        raise ValueError("в тексте нет видимого знака")
+    return value
+
+
+_Text = Annotated[
+    str,
+    StringConstraints(strict=True, min_length=1),
+    AfterValidator(_visible),
+]
+"""Непустой видимый текст. `true`, число, пробелы или невидимые знаки — не текст.
+
+Проверяется в том виде, в каком записан, без обрезки краёв. Одиннадцатое ревью
+PR #2: обрезка шла ДО `_visible`, и `"\\tTabPFN\\n"` проходил, хотя управляющий
+знак в тексте запрещён. Тот же корень, что у ссылки в десятом круге: строка
+молча исправлялась до проверки. Следствие: свёрнутый блок YAML `>` оставляет
+перевод строки в конце и отвергается — нужен `>-`."""
+
+_Asked = Annotated[list[_Text], Field(min_length=1)]
+
+
+HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+"""Часть имени хоста по RFC 1123: буквы, цифры, дефис не с краю, до 63 символов."""
+
+_HTTP_URL = TypeAdapter(HttpUrl)
+
+URL_ASCII = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%"
+)
+"""Знаки, допустимые в ссылке по RFC 3986, — только ASCII. Unicode — это уже IRI (RFC 3987):
+национальное имя пишется через IDNA (`xn--…`), путь — через percent-encoding. Девятое ревью
+PR #2: прежде не-ASCII буквы допускались и подменялись на `a` перед сверкой с грамматикой."""
+
+PERCENT_BROKEN = re.compile(r"%(?![0-9A-Fa-f]{2})")
+
+_UNRESERVED = r"[A-Za-z0-9\-._~]"
+_PCHAR = rf"(?:{_UNRESERVED}|%[0-9A-Fa-f]{{2}}|[!$&'()*+,;=:@])"
+HTTP_GRAMMAR = re.compile(
+    rf"(?i:https?)://[A-Za-z0-9.\-]+(?::[0-9]+)?(?:/{_PCHAR}*)*"
+    rf"(?:\?(?:{_PCHAR}|[/?])*)?(?:#(?:{_PCHAR}|[/?])*)?"
+)
+"""Ссылка http(s) по RFC 3986, Appendix A, без userinfo: scheme://host[:port][/path][?query]
+[#fragment]. Сверяется сырая строка, без подстановок."""
+
+
+def _web_link(value: str) -> str:
+    """Ссылка http(s): разбор стандартным разборщиком, имя хоста — по RFC 1123.
+
+    Разборщик pydantic отвергает негодный порт, схему и IPv4 и переводит
+    национальное имя в IDNA. Имя хоста он не проверяет — `a..b`, `-a.com`,
+    `a_b.com` проходят, — поэтому части имени сверяются с RFC 1123, а у старшей
+    части обязана быть буква: IP-адрес вместо имени ссылкой на аналог не считается.
+
+    Прежде проверка была самодельной — «схема и точка в хосте» — и четвёртое
+    ревью PR #2 провело через неё `https://a.b:badport/x` и `https://a..b/x`.
+    Восьмое — что он чинит и разделители (`https:kaggle.com`, `https:////…`) и
+    пустой userinfo (`https://@…`): поэтому сырая строка сверяется с грамматикой
+    RFC 3986 целиком. Шестое показало, что разборщик ЧИНИТ часть негодных ссылок молча
+    (`\\` в `/`, невидимый знак выбрасывает), а хранится исходная строка: поэтому
+    сырая строка проверяется до разбора — недопустимые знаки, `%` без двух цифр,
+    — и длина имени хоста (не больше 253 знаков) после.
+    Существует ли страница — не проверяется: это содержание, а не форма.
+    """
+    bad = [char for char in value if char not in URL_ASCII]
+    if bad:
+        raise ValueError(f"в ссылке недопустимые знаки {bad!r}: разборщик исправил бы их молча")
+    if PERCENT_BROKEN.search(value):
+        raise ValueError("`%` без двух шестнадцатеричных цифр (RFC 3986, 2.1)")
+    if not HTTP_GRAMMAR.fullmatch(value):
+        raise ValueError("ссылка вне грамматики RFC 3986 для http(s): scheme://host[:port]/…")
+    try:
+        url = _HTTP_URL.validate_python(value)
+    except ValidationError as exc:
+        raise ValueError(f"не ссылка http(s): {exc.errors()[0]['msg']}") from None
+    if url.username is not None or url.password is not None:
+        raise ValueError("учётные данные в ссылке")
+    if len(url.host or "") > 253:
+        raise ValueError("имя хоста длиннее 253 знаков (RFC 1035: не больше 255 октетов)")
+    labels = (url.host or "").split(".")
+    if (
+        len(labels) < 2
+        or not all(HOST_LABEL.fullmatch(label) for label in labels)
+        or labels[-1].isdigit()
+    ):
+        raise ValueError(f"имя хоста {url.host!r} не по RFC 1123")
+    return value
+
+
+_Link = Annotated[
+    str,
+    StringConstraints(strict=True, min_length=1),
+    AfterValidator(_web_link),
+]
+"""Ссылка проверяется в том виде, в каком записана. Десятое ревью PR #2: прежде
+она наследовала `_Text` с обрезкой краёв, и `\\u00A0https://…\\u3000` доходила
+до проверки ASCII уже без Unicode-пробелов — запись проходила на обоих этапах."""
+
+PERCENT = re.compile(r"%([0-9A-Fa-f]{2})")
+UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
+
+def _link_key(value: str) -> str:
+    """Тождество ссылок: синтаксическая нормализация RFC 3986 §6.2.2, без фрагмента.
+
+    Пятое ревью PR #2: `https://kaggle.com/x` и `https://Kaggle.COM/x` проходили
+    двумя аналогами — ссылка разбиралась, а повторы сверялись по исходной строке.
+
+    Разборщик сводит регистр схемы и хоста, порт по умолчанию, точки в пути и
+    IDNA; здесь добавлено остальное из §6.2.2 — регистр `%xx` и раскодирование
+    незарезервированных символов, — а фрагмент отброшен: он не часть ресурса.
+    НЕ сводится то, что стандарт тождеством не считает: `http` и `https`, слэш
+    на конце, `www.`. Одна ли это страница, знает сервер, а не форма записи.
+    """
+
+    def unescape(match: re.Match) -> str:
+        char = chr(int(match.group(1), 16))
+        return char if char in UNRESERVED else f"%{match.group(1).upper()}"
+
+    normalized = str(_HTTP_URL.validate_python(value)).split("#", 1)[0]
+    return PERCENT.sub(unescape, normalized)
+
+
+class _Form(BaseModel):
+    """Строгая форма: точные типы, лишние поля — ошибка (опечатка в имени тоже)."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+
+class _Queries(_Form):
+    github: _Asked
+    kaggle: _Asked
+    openml: _Asked
+
+
+class _Reference(_Form):
+    """Опорный результат вместе с условиями, в которых он получен."""
+
+    metric: _Text
+    value: StrictInt | Annotated[StrictFloat, Field(allow_inf_nan=False)]
+    split: Literal["random", "time", "group", "unknown"]
+    population: _Text
+
+
+class _Found(_Form):
+    url: _Link
+    reference_result: _Reference | None = None
+    """Может отсутствовать: не всякий аналог публикует результат."""
+
+
+class _Decision(_Form):
+    url: _Link
+    reason: _Text
+
+
+class _Analogs(_Form):
+    date: object
+    queries: _Queries
+    found: list[_Found]
+    taken: list[_Decision]
+    rejected: list[_Decision]
+    pitfalls: list[_Text]
+
+    @field_validator("date")
+    @classmethod
+    def _iso_date(cls, value: object) -> object:
+        """Дата ГГГГ-ММ-ДД. YAML читает её как `date`; строку — только этого вида.
+
+        `date.fromisoformat` принимает и '20260929', поэтому вид сверяется отдельно.
+        `datetime` — подкласс `date` и отвергается: нужна дата, а не момент.
+        """
+        if type(value) is datetime.date:
+            day = value
+        elif isinstance(value, str) and ISO_DATE.fullmatch(value):
+            day = datetime.date.fromisoformat(value)
+        else:
+            raise ValueError("не дата ГГГГ-ММ-ДД")
+        if day > datetime.date.today():
+            raise ValueError(f"дата поиска {day} позже сегодняшней")
+        return value
 
 
 def analogs_defects(block: object) -> list[str]:
@@ -363,55 +722,138 @@ def analogs_defects(block: object) -> list[str]:
     ЧЕГО ЭТО НЕ ДАЁТ. Проверяется форма записи, а не честность поиска. Запросы
     можно выдумать, найденное — не записать. Пустой список запросов, однако, не
     проходит: «ничего не найдено» без запросов неотличимо от «не искал».
+
+    ФОРМА — СХЕМОЙ, А НЕ ЗАПЛАТАМИ. Первая версия проверяла наличие полей и
+    читала `null` как пустой список; ревью PR #1 нашло это, и типы были
+    залатаны поле за полем. Повторное ревью PR #2 нашло следующие дыры того же
+    рода — `date: '20260929'` и `reference_result: {metric: true, value: false,
+    split: []}` без `population`. Заплата на каждое поле оставляет непроверенным
+    соседнее, поэтому форма задана строгой схемой: точные типы, «ничего» — это
+    `[]`, лишние и опечатанные поля — ошибка.
+
+    ГРАНИЦА ФОРМЫ. Проверяется: типы и обязательные поля; ссылка — http(s),
+    разобранная стандартным разборщиком, с именем хоста по RFC 1123, без учётных
+    данных; одна ссылка в разном написании — повтор (RFC 3986 §6.2.2); дата не
+    позже сегодняшней; запросы по
+    каждому источнику непусты; каждый найденный аналог имеет
+    ровно одно решение, и каждое решение — о найденном (третье ревью PR #2:
+    `url: 'x'` и решение при пустом `found` проходили). НЕ проверяется —
+    содержание: существует ли страница, относится ли аналог к задаче, правдивы
+    ли запросы и причины. `https://example.com` с причиной «проверен» форму
+    пройдёт; это предел, а не дыра.
     """
     if not isinstance(block, dict):
         return ["блока `analogs` нет"]
-    defects = [f"нет поля `{field}`" for field in ANALOG_FIELDS if field not in block]
-    if not block.get("date"):
-        defects.append("не записана дата поиска")
-
-    queries = block.get("queries")
-    queries = queries if isinstance(queries, dict) else {}
-    for source in ANALOG_SOURCES:
-        asked = queries.get(source)
-        if not (
-            isinstance(asked, list)
-            and asked
-            and all(isinstance(q, str) and q.strip() for q in asked)
-        ):
-            defects.append(f"по {source} не записано ни одного запроса")
-
-    found = block.get("found")
-    found = found if isinstance(found, list) else []
-    urls = []
-    for item in found:
-        url = item.get("url") if isinstance(item, dict) else None
-        if not url:
-            defects.append("найденный аналог без ссылки")
-            continue
-        urls.append(url)
-        reference = item.get("reference_result")
-        if reference is not None:
-            absent = [
-                k
-                for k in ("metric", "value", "split")
-                if not isinstance(reference, dict) or reference.get(k) in (None, "")
-            ]
-            if absent:
-                defects.append(f"у опорного результата {url} не названы {absent}")
-
-    decided = set()
-    for field in ("taken", "rejected"):
-        entries = block.get(field)
-        for entry in entries if isinstance(entries, list) else []:
-            if not (isinstance(entry, dict) and entry.get("url") and entry.get("reason")):
-                defects.append(f"запись в `{field}` без ссылки или причины")
-                continue
-            decided.add(entry["url"])
-    defects.extend(
-        f"аналог {url} найден, но не взят и не отвергнут" for url in urls if url not in decided
-    )
+    try:
+        record = _Analogs.model_validate(block)
+    except ValidationError as exc:
+        return [
+            f"`{'.'.join(str(part) for part in error['loc'])}`: {error['msg']}"
+            for error in exc.errors()
+        ]
+    found = [_link_key(item.url) for item in record.found]
+    decided = [_link_key(entry.url) for entry in (*record.taken, *record.rejected)]
+    defects = [f"аналог {url} найден дважды" for url in sorted(set(found)) if found.count(url) > 1]
+    defects += [
+        f"решение дважды об аналоге {url}" for url in sorted(set(decided)) if decided.count(url) > 1
+    ]
+    defects += [
+        f"аналог {url} найден, но не взят и не отвергнут" for url in found if url not in decided
+    ]
+    defects += [
+        f"решение об аналоге {url}, которого нет в `found`" for url in decided if url not in found
+    ]
     return defects
+
+
+_Share = Annotated[StrictFloat, Field(gt=0, lt=1, allow_inf_nan=False)]
+_NonNegative = (
+    Annotated[StrictInt, Field(ge=0)] | Annotated[StrictFloat, Field(ge=0, allow_inf_nan=False)]
+)
+
+
+class _Method(_Form):
+    """Метод сравнения: всё, что меняет его прогноз, названо до данных."""
+
+    name: _Text
+    version: _Text
+    settings: Annotated[dict[_Text, object], Field(min_length=1)]
+    """Настройки явно: пустой словарь значил бы «умолчания версии», а они меняются.
+    Имя параметра — видимый текст (одиннадцатое ревью: `{"": null}` проходил);
+    значение — любое: `null` и список бывают законными значениями."""
+    preprocessing: _Text
+
+
+class _Contender(_Method):
+    checkpoint: _Text
+    """Какие именно веса: у предобученной модели версия пакета их не называет."""
+
+
+class _Metric(_Form):
+    name: Literal["roc_auc", "average_precision", "brier", "log_loss"]
+    """Одна первичная метрика из тех, что проект считает. Направление разницы
+    следует из имени: у потерь — действующий минус претендент."""
+    definition: _Text
+
+
+class _Bootstrap(_Form):
+    confidence: _Share
+    method: _Text
+    unit: _Text
+    repeats: Annotated[StrictInt, Field(gt=0)]
+    seed: StrictInt
+
+
+class _Challenger(_Form):
+    """Спецификация претендента — поля правила «Претендент» в AGENTS.md."""
+
+    challenger: _Contender
+    incumbent: _Method
+    metric: _Metric
+    min_improvement: _NonNegative
+    tuning: Literal["none"]
+    """В кейсе подбора нет ни у кого; объявляется явно, а не подразумевается."""
+    split: _Text
+    bootstrap: _Bootstrap
+    window_predictions: _Text
+    """Как получены прогнозы по окнам — класс 19 журнала повторов."""
+    on_failure: _Text
+    """Что делается при нехватке памяти, пределе объёма, техническом отказе."""
+    measurement_order: _Text
+    license: _Text
+
+
+class _NoChallenger(_Form):
+    none: _Text
+    """Причина, по которой претендента нет."""
+
+
+def challenger_defects(block: object) -> list[str]:
+    """Чем объявление претендента не дотягивает до правила «Претендент».
+
+    ОБЯЗАТЕЛЬНО С `FROM_CASE` — в любом виде. Либо полная спецификация, либо
+    `none: <причина>`. Отсутствие блока не читается как «претендента нет»:
+    умолчание, совпадающее с честным ответом, неотличимо от невнимательности.
+
+    ГРАНИЦА ФОРМЫ. Проверяется: все поля правила на месте, типы точные, лишних
+    нет; настройки непусты; метрика — одна из считаемых проектом; доля
+    доверия в (0, 1); повторов больше нуля; минимальное улучшение не
+    отрицательно; подбор объявлен отсутствующим. НЕ проверяется — исполнение:
+    что сравнение прошло именно так, что прогнозы по окнам получены объявленным
+    способом, что лицензия прочитана. Это разбирается в вердикте; ревью
+    `cb6f25f` требует и проверки исполнения — здесь её нет, это предел.
+    """
+    if not isinstance(block, dict):
+        return ["блока `challenger` нет — объявите претендента или `none: <причина>`"]
+    schema = _NoChallenger if set(block) == {"none"} else _Challenger
+    try:
+        schema.model_validate(block)
+    except ValidationError as exc:
+        return [
+            f"`{'.'.join(str(part) for part in error['loc'])}`: {error['msg']}"
+            for error in exc.errors()
+        ]
+    return []
 
 
 def preflight(project: Path, prereg: Path) -> None:
@@ -473,6 +915,15 @@ def preflight(project: Path, prereg: Path) -> None:
             f"ОТКАЗ: в {prereg.name} нет годной записи об аналогах на других наборах — "
             f"{'; '.join(первый_этап)}. Первый этап поиска опечатывается вместе с "
             "пре-регистрацией. Построитель не вызывался."
+        )
+
+    претендент = challenger_defects(declared(prereg).get("challenger"))
+    if претендент:
+        raise OutOfOrder(
+            f"ОТКАЗ: в {prereg.name} нет годного объявления претендента — "
+            f"{'; '.join(претендент)}. Спецификация опечатывается вместе с "
+            "пре-регистрацией: после данных она стала бы подбором. "
+            "Построитель не вызывался."
         )
 
     if not (project / "manifest.yaml").is_file():
@@ -639,7 +1090,32 @@ def guarded(project: Path, prereg: Path, build: Callable[[], object]) -> object:
     return build()
 
 
-PROTOCOL_KEYS = ("controls", "promises", "spent_controls", "lost_bets", "predictions", "analogs")
+PROTOCOL_KEYS = (
+    "controls",
+    "promises",
+    "spent_controls",
+    "lost_bets",
+    "predictions",
+    "analogs",
+    "challenger",
+)
+
+FORWARD_KEYS = ("analogs", "challenger")
+"""Ключи, введённые с `FROM_CASE`: в документах старших кейсов блоком протокола не считаются.
+
+Независимое ревью PR #1: добавление `analogs` в `PROTOCOL_KEYS` действовало при
+разборе ДО исторического выхода, и пре-регистрация двадцатого кейса с блоком
+`analogs: {}` без `project` получала отказ, которого прежде не было. В настоящих
+документах 2–20 такого блока нет, но правило вводится вперёд, а не назад.
+"""
+
+
+def _protocol_keys(path: Path) -> tuple[str, ...]:
+    """Ключи протокола для документа: у пре-регистраций старше `FROM_CASE` — без новых."""
+    number = _case_number(path)
+    if number is not None and number < FROM_CASE:
+        return tuple(key for key in PROTOCOL_KEYS if key not in FORWARD_KEYS)
+    return PROTOCOL_KEYS
 
 
 def _form_identity(form_path: Path, control_roles: dict[str, str]) -> str:
