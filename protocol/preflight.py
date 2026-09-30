@@ -140,8 +140,12 @@ def _blocks(path: Path, keys: tuple[str, ...]) -> list[dict]:
     цитате (`> ```yaml`), блок-список и счёт оград при строчном ```yaml пропускали
     запись. Перечень неправильных оград неполон, поэтому задана одна ПРАВИЛЬНАЯ:
     строка ```язык с начала строки открывает блок, строка ``` закрывает; любая
-    другая строка с ``` или ~~~ — отказ. Блок другого языка, чьё тело читается
-    как запись протокола, — тоже отказ; блок YAML обязан быть словарём.
+    другая строка с ``` или ~~~ — отказ. Блок YAML обязан быть словарём.
+
+    Блок другого языка не смеет упоминать `project` и ключи протокола как слова.
+    Восьмое ревью PR #2: прежде такой блок РАЗБИРАЛСЯ и проверялся лишь на
+    словарь верхнего уровня — список, вложенный JSON, битый YAML, неизвестный
+    тег и `---` прятали запись. Проверка по тексту разбору не поддаётся.
     """
     text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
     if "\r" in text:
@@ -169,13 +173,12 @@ def _blocks(path: Path, keys: tuple[str, ...]) -> list[dict]:
                 raise _refuse_fence(path, start, "блок YAML не словарь")
             blocks.append(block)
         else:
-            try:
-                other = yaml.safe_load(content)
-            except yaml.YAMLError:
-                other = None
-            if isinstance(other, dict) and set(other) & {"project", *keys}:
+            named = sorted(
+                {word for word in ("project", *keys) if re.search(rf"\b{word}\b", content)}
+            )
+            if named:
                 kind = language or "без языка"
-                raise _refuse_fence(path, start, f"запись протокола в блоке «{kind}»")
+                raise _refuse_fence(path, start, f"ключи протокола {named} в блоке «{kind}»")
         language = None
     if language is not None:
         raise _refuse_fence(path, start, "блок не закрыт")
@@ -492,6 +495,22 @@ ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 VISIBLE = frozenset("LNPS")
 """Старшая буква категории Unicode видимого знака: буква, цифра, пунктуация, символ."""
 
+DEFAULT_IGNORABLE = (
+    (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160),
+    (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E),
+    (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)  # fmt: skip
+"""Default_Ignorable_Code_Point из DerivedCoreProperties.txt Unicode: знаки, которые
+отображаются как ничто. Среди них заполнители категории Lo (U+3164, U+115F, U+1160,
+U+FFA0), формально входящие в L — восьмое ревью PR #2."""
+
+
+def _ignorable(char: str) -> bool:
+    code = ord(char)
+    return any(low <= code <= high for low, high in DEFAULT_IGNORABLE)
+
 
 def _visible(value: str) -> str:
     """Текст — это хотя бы один видимый знак и ни одного управляющего.
@@ -499,11 +518,13 @@ def _visible(value: str) -> str:
     Шестое ревью PR #2: `"\\0"` и `"\\u200b"` проходили как непустые строки;
     седьмое — одиночные метки `U+FE0F`, `U+034F` (категория Mn). Перечень
     невидимого всегда неполон, поэтому задан перечень ВИДИМОГО: хотя бы одна
-    буква, цифра, знак препинания или символ (категории L, N, P, S).
+    буква, цифра, знак препинания или символ (категории L, N, P, S), не из
+    Default_Ignorable_Code_Point. Предел: U+2800 (пустой шаблон Брайля) по Unicode
+    видимый символ и проходит.
     """
     if any(unicodedata.category(char) == "Cc" for char in value):
         raise ValueError("управляющий символ в тексте")
-    if not any(unicodedata.category(char)[0] in VISIBLE for char in value):
+    if not any(unicodedata.category(char)[0] in VISIBLE and not _ignorable(char) for char in value):
         raise ValueError("в тексте нет видимого знака")
     return value
 
@@ -531,6 +552,15 @@ URL_ASCII = frozenset(
 
 PERCENT_BROKEN = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
+_UNRESERVED = r"[A-Za-z0-9\-._~]"
+_PCHAR = rf"(?:{_UNRESERVED}|%[0-9A-Fa-f]{{2}}|[!$&'()*+,;=:@])"
+HTTP_GRAMMAR = re.compile(
+    rf"(?i:https?)://[A-Za-z0-9.\-]+(?::[0-9]+)?(?:/{_PCHAR}*)*"
+    rf"(?:\?(?:{_PCHAR}|[/?])*)?(?:#(?:{_PCHAR}|[/?])*)?"
+)
+"""Ссылка http(s) по RFC 3986, Appendix A, без userinfo: scheme://host[:port][/path][?query]
+[#fragment]. Не-ASCII буквы и цифры (национальные имена и пути) подставляются перед сверкой."""
+
 
 def _web_link(value: str) -> str:
     """Ссылка http(s): разбор стандартным разборщиком, имя хоста — по RFC 1123.
@@ -542,7 +572,9 @@ def _web_link(value: str) -> str:
 
     Прежде проверка была самодельной — «схема и точка в хосте» — и четвёртое
     ревью PR #2 провело через неё `https://a.b:badport/x` и `https://a..b/x`.
-    Шестое показало, что разборщик ЧИНИТ часть негодных ссылок молча
+    Восьмое — что он чинит и разделители (`https:kaggle.com`, `https:////…`) и
+    пустой userinfo (`https://@…`): поэтому сырая строка сверяется с грамматикой
+    RFC 3986 целиком. Шестое показало, что разборщик ЧИНИТ часть негодных ссылок молча
     (`\\` в `/`, невидимый знак выбрасывает), а хранится исходная строка: поэтому
     сырая строка проверяется до разбора — недопустимые знаки, `%` без двух цифр,
     — и длина имени хоста (не больше 253 знаков) после.
@@ -557,6 +589,9 @@ def _web_link(value: str) -> str:
         raise ValueError(f"в ссылке недопустимые знаки {bad!r}: разборщик исправил бы их молча")
     if PERCENT_BROKEN.search(value):
         raise ValueError("`%` без двух шестнадцатеричных цифр (RFC 3986, 2.1)")
+    ascii_form = "".join(char if char.isascii() else "a" for char in value)
+    if not HTTP_GRAMMAR.fullmatch(ascii_form):
+        raise ValueError("ссылка вне грамматики RFC 3986 для http(s): scheme://host[:port]/…")
     try:
         url = _HTTP_URL.validate_python(value)
     except ValidationError as exc:

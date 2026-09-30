@@ -2126,3 +2126,66 @@ def test_other_code_blocks_are_allowed(tmp_path) -> None:
     )
 
     assert guarded(project, prereg, lambda: "построено") == "построено"
+
+
+@pytest.mark.parametrize(
+    ("label", "extra"),
+    [
+        ("список в json", "\n```json\n- project: проба\n  analogs: {}\n```\n"),
+        ("вложенный json", '\n```json\n{"record": {"project": "проба", "analogs": {}}}\n```\n'),
+        ("битый yml", "\n```yml\nproject: проба\nanalogs: [\n```\n"),
+        ("без языка", "\n```\nproject: проба\nanalogs: {}\n```\n"),
+        ("неизвестный тег", "\n```yml\n!Protocol\nproject: проба\n```\n"),
+        ("два документа", "\n```text\nproject: проба\n---\nanalogs: {}\n```\n"),
+    ],
+)
+def test_a_record_in_another_block_is_refused(tmp_path, label, extra) -> None:
+    """Восьмое ревью PR #2: блок другого языка проверялся разбором и лишь на
+    словарь верхнего уровня — список, вложенность, битый YAML, тег и `---`
+    прятали запись. Теперь блок другого языка не смеет упоминать ключи
+    протокола как слова — проверка по тексту, без разбора.
+    """
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(ANALOGS_BLOCK + extra, encoding="utf-8")
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, lambda: "построено")
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "https:kaggle.com/x",
+        "https:/kaggle.com/x",
+        "https:////kaggle.com/x",
+        "https://@kaggle.com/x",
+        "https://:@kaggle.com/x",
+        "https://kaggle.com:/x",
+        "https://kaggle.com/a[b]",
+        "https://kaggle.com/x#b#c",
+        "https://kaggle.com/x?foo[bar]",
+    ],
+)
+def test_a_link_off_the_rfc_3986_grammar_is_refused(link) -> None:
+    """Восьмое ревью PR #2: разборщик чинил разделители и пустой userinfo молча.
+
+    Сырая ссылка обязана целиком лежать в грамматике RFC 3986 (Appendix A)
+    для http(s): scheme://host[:port][/path][?query][#fragment], без userinfo.
+    """
+    from protocol.preflight import _web_link
+
+    with pytest.raises(ValueError):
+        _web_link(link)
+
+
+@pytest.mark.parametrize("filler", ["\\u3164", "\\u115F", "\\u1160", "\\uFFA0"])
+def test_a_default_ignorable_filler_is_not_text(tmp_path, filler) -> None:
+    """Невидимые заполнители категории Lo — по свойству Default_Ignorable_Code_Point."""
+    project, prereg = _ready(tmp_path)
+    (project / ANALOGS).write_text(
+        ANALOGS_BLOCK.replace('openml: ["delivery delay"]', f'openml: ["{filler}"]'),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, lambda: "построено")
