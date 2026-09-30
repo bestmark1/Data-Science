@@ -2503,3 +2503,59 @@ def test_a_settings_value_may_be_anything(tmp_path) -> None:
     )
 
     preflight(project, prereg)
+
+
+def _guarded_calls(project: Path, prereg: Path) -> int:
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    try:
+        guarded(project, prereg, build)
+    except OutOfOrder:
+        pass
+    return calls
+
+
+@pytest.mark.parametrize("variant", ["один LF", "все LF"])
+def test_a_lone_carriage_return_is_refused_as_written(tmp_path, variant) -> None:
+    """Двенадцатое ревью PR #2: `read_text` переводил одиночный CR в LF ДО
+    проверки, и обещанный отказ за одиночный возврат каретки не срабатывал."""
+    project = _project(tmp_path)
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS)
+    data = prereg.read_bytes()
+    data = data.replace(b"\n", b"\r", 1) if variant == "один LF" else data.replace(b"\n", b"\r")
+    prereg.write_bytes(data)
+
+    assert _guarded_calls(project, prereg) == 0, f"построитель вызван: {variant} заменён на CR"
+
+
+def test_windows_line_endings_pass(tmp_path) -> None:
+    project = _project(tmp_path)
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS)
+    prereg.write_bytes(prereg.read_bytes().replace(b"\n", b"\r\n"))
+
+    assert _guarded_calls(project, prereg) == 1
+
+
+FOLDED_LAST = "```yaml\nproject: проба\nchallenger:\n  none: {style}\n    первая фраза\n    вторая фраза\n```\n"
+FOLDED_MIDDLE = (
+    "```yaml\nproject: проба\nchallenger:\n  none: {style}\n    первая фраза\n"
+    "    вторая фраза\nnote: x\n```\n"
+)
+
+
+@pytest.mark.parametrize("where", ["последнее поле", "поле в середине"])
+@pytest.mark.parametrize("style, passes", [(">", False), (">-", True)])
+def test_a_folded_scalar_is_read_the_same_wherever_it_stands(tmp_path, where, style, passes) -> None:
+    """Двенадцатое ревью PR #2: сборка блока теряла последний перевод строки, и `>`
+    в конце блока проходил, а тот же `>` перед другим полем — нет. `>` оставляет
+    управляющий знак и отвергается везде; `>-` проходит везде."""
+    project = _project(tmp_path)
+    template = FOLDED_LAST if where == "последнее поле" else FOLDED_MIDDLE
+    block = template.format(style=style)
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS + "\n" + block, challenger=False)
+
+    assert _guarded_calls(project, prereg) == (1 if passes else 0), f"{style}, {where}"

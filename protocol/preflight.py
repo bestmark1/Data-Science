@@ -147,7 +147,9 @@ def _blocks(path: Path, keys: tuple[str, ...]) -> list[dict]:
     словарь верхнего уровня — список, вложенный JSON, битый YAML, неизвестный
     тег и `---` прятали запись. Проверка по тексту разбору не поддаётся.
     """
-    text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    # Байты, а не `read_text`: тот переводит и одиночный CR в LF, и проверка ниже
+    # его бы не увидела (двенадцатое ревью PR #2). Заменяется только CRLF.
+    text = path.read_bytes().decode("utf-8").replace("\r\n", "\n")
     if "\r" in text:
         number = text[: text.index("\r")].count("\n") + 1
         raise _refuse_fence(path, number, "одиночный возврат каретки")
@@ -166,7 +168,10 @@ def _blocks(path: Path, keys: tuple[str, ...]) -> list[dict]:
                 raise _refuse_fence(path, number, "ограда внутри блока")
             body.append(line)
             continue
-        content = "\n".join(body)
+        # Перевод строки перед закрывающей оградой — часть тела блока. Без него
+        # свёрнутый скаляр `>` в последнем поле терял управляющий знак и проходил,
+        # а тот же `>` в середине блока — нет (двенадцатое ревью PR #2).
+        content = "".join(line + "\n" for line in body)
         if language == "yaml":
             block = _load(path, start, content)
             if not isinstance(block, dict):
