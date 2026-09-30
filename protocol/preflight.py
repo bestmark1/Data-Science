@@ -606,7 +606,14 @@ def _web_link(value: str) -> str:
     return value
 
 
-_Link = Annotated[_Text, AfterValidator(_web_link)]
+_Link = Annotated[
+    str,
+    StringConstraints(strict=True, min_length=1),
+    AfterValidator(_web_link),
+]
+"""Ссылка проверяется в том виде, в каком записана. Десятое ревью PR #2: прежде
+она наследовала `_Text` с обрезкой краёв, и `\\u00A0https://…\\u3000` доходила
+до проверки ASCII уже без Unicode-пробелов — запись проходила на обоих этапах."""
 
 PERCENT = re.compile(r"%([0-9A-Fa-f]{2})")
 UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")

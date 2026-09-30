@@ -1792,6 +1792,39 @@ def test_decisions_answer_for_what_was_found(tmp_path, label, record) -> None:
     assert calls == 0, f"построитель вызван: {label}"
 
 
+SPACES = [chr(code) for code in range(0x110000) if chr(code).isspace()]
+"""Всё, что `str.strip` снимает с краёв: ASCII-пробелы и Unicode-пробелы."""
+
+
+@pytest.mark.parametrize("stage", ["пре-регистрация", "analogs.md"])
+@pytest.mark.parametrize("space", SPACES, ids=lambda char: f"U+{ord(char):04X}")
+def test_a_link_is_checked_as_written_not_after_trimming(tmp_path, stage, space) -> None:
+    """Десятое ревью PR #2: ссылка наследовала обрезку краёв у текста, и
+    `\\u00A0https://example.com/x\\u3000` доходила до проверки ASCII уже без
+    них — полная запись проходила на обоих этапах. Ссылка проверяется в том
+    виде, в каком записана."""
+    code = f"\\u{ord(space):04x}"
+    url = f'"{code}https://example.com/x{code}"'
+    record = _decisions(f"[{{url: {url}}}]", rejected=f"[{{url: {url}, reason: 'проверен'}}]")
+    project, prereg = _ready(tmp_path)
+    if stage == "analogs.md":
+        (project / ANALOGS).write_text(record, encoding="utf-8")
+    else:
+        text = prereg.read_text(encoding="utf-8")
+        assert ANALOGS_BLOCK in text
+        prereg.write_text(text.replace(ANALOGS_BLOCK, record), encoding="utf-8")
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, build)
+
+    assert calls == 0, f"построитель вызван: U+{ord(space):04X} по краям ссылки, {stage}"
+
+
 GOOD_LINKS = [
     "https://kaggle.com/x",
     "http://www.openml.org/t/1",
