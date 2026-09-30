@@ -531,10 +531,16 @@ def _visible(value: str) -> str:
 
 _Text = Annotated[
     str,
-    StringConstraints(strict=True, strip_whitespace=True, min_length=1),
+    StringConstraints(strict=True, min_length=1),
     AfterValidator(_visible),
 ]
-"""Непустой видимый текст. `true`, число, пробелы или невидимые знаки — не текст."""
+"""Непустой видимый текст. `true`, число, пробелы или невидимые знаки — не текст.
+
+Проверяется в том виде, в каком записан, без обрезки краёв. Одиннадцатое ревью
+PR #2: обрезка шла ДО `_visible`, и `"\\tTabPFN\\n"` проходил, хотя управляющий
+знак в тексте запрещён. Тот же корень, что у ссылки в десятом круге: строка
+молча исправлялась до проверки. Следствие: свёрнутый блок YAML `>` оставляет
+перевод строки в конце и отвергается — нужен `>-`."""
 
 _Asked = Annotated[list[_Text], Field(min_length=1)]
 
@@ -766,8 +772,10 @@ class _Method(_Form):
 
     name: _Text
     version: _Text
-    settings: Annotated[dict[str, object], Field(min_length=1)]
-    """Настройки явно: пустой словарь значил бы «умолчания версии», а они меняются."""
+    settings: Annotated[dict[_Text, object], Field(min_length=1)]
+    """Настройки явно: пустой словарь значил бы «умолчания версии», а они меняются.
+    Имя параметра — видимый текст (одиннадцатое ревью: `{"": null}` проходил);
+    значение — любое: `null` и список бывают законными значениями."""
     preprocessing: _Text
 
 

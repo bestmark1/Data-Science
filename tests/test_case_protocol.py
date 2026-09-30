@@ -2433,3 +2433,73 @@ def test_a_historical_case_is_not_refused_over_a_challenger_block(tmp_path) -> N
     )
 
     assert declared(prereg) == {"project": "проба"}
+
+
+CONTROLS_CC = [chr(code) for code in range(0x110000) if chr(code).isspace() and chr(code) < " "]
+CONTROLS_CC += ["\x85"]
+"""Управляющие знаки (Cc), которые `str.strip` снимает с краёв."""
+
+
+def _challenger_block(spec: dict) -> str:
+    import json
+
+    return f"\n```yaml\nproject: проба\nchallenger: {json.dumps(spec, ensure_ascii=True)}\n```\n"
+
+
+@pytest.mark.parametrize("field", ["analogs.queries", "challenger.none", "challenger.name"])
+@pytest.mark.parametrize("char", CONTROLS_CC, ids=lambda char: f"U+{ord(char):04X}")
+def test_text_is_checked_as_written_not_after_trimming(tmp_path, field, char) -> None:
+    """Одиннадцатое ревью PR #2: `_Text` обрезал края ДО проверки управляющих знаков,
+    и `"\\tTabPFN\\n"` проходил, хотя `_visible` его отвергает. Тот же корень, что у
+    ссылки в десятом: строка исправлялась молча до проверки."""
+    import json
+
+    value = f"{char}проба{char}"
+    project = _project(tmp_path)
+    if field == "analogs.queries":
+        prereg = _prereg(tmp_path, _digests(project) + CONTROLS)
+        text = prereg.read_text(encoding="utf-8")
+        prereg.write_text(
+            text.replace('openml: ["delivery delay"]', f"openml: [{json.dumps(value)}]"),
+            encoding="utf-8",
+        )
+    else:
+        spec = {"none": value} if field == "challenger.none" else _spec()
+        if field == "challenger.name":
+            spec["challenger"]["name"] = value
+        prereg = _prereg(
+            tmp_path, _digests(project) + CONTROLS + _challenger_block(spec), challenger=False
+        )
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    with pytest.raises(OutOfOrder):
+        guarded(project, prereg, build)
+
+    assert calls == 0, f"построитель вызван: U+{ord(char):04X} по краям {field}"
+
+
+@pytest.mark.parametrize("key", ["", "   ", "\t", "\u200b", "\tn_estimators"])
+@pytest.mark.parametrize("method", ["challenger", "incumbent"])
+def test_a_settings_name_must_be_visible_text(method, key) -> None:
+    """Одиннадцатое ревью PR #2: `settings: {"": null}` засчитывался объявленными
+    настройками — словарь непуст, а названного параметра в нём нет."""
+    spec = _spec()
+    spec[method]["settings"] = {key: 8}
+
+    assert challenger_defects(spec), f"{method}.settings с ключом {key!r} прошло"
+
+
+def test_a_settings_value_may_be_anything(tmp_path) -> None:
+    """Значение параметра — не текст: `null` и список бывают законными значениями."""
+    spec = _spec()
+    spec["challenger"]["settings"] = {"categorical_features": None, "ignore": []}
+    project = _project(tmp_path)
+    prereg = _prereg(
+        tmp_path, _digests(project) + CONTROLS + _challenger_block(spec), challenger=False
+    )
+
+    preflight(project, prereg)
