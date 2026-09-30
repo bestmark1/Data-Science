@@ -24,6 +24,7 @@ from typing import Annotated
 import numpy as np
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from sklearn.metrics import average_precision_score
 
 from dsx.label import LABEL
 from dsx.samples import Purpose, SampleLedger
@@ -141,6 +142,94 @@ def calibration_error(scores: np.ndarray, labels: np.ndarray, bins: int = BINS) 
     return float(total)
 
 
+def average_precision(scores: np.ndarray, labels: np.ndarray) -> float:
+    """PR-AUC как average precision — определение `sklearn`, не трапеция.
+
+    Точность, усреднённая по порогам с весом прироста полноты; равные оценки —
+    один порог. Трапеция по кривой точность–полнота даёт другое число и молча с
+    этим не приравнивается. Опорное значение — доля класса: столько даёт любое
+    ранжирование, не отличающее классы, поэтому число без доли не читается.
+    """
+    if labels.size == 0 or int(labels.sum()) == 0:
+        return float("nan")
+    return float(average_precision_score(labels, scores))
+
+
+def _probabilities(scores: np.ndarray) -> bool:
+    """Оценки — вероятности: конечные и в [0, 1]. Иначе Brier и log loss не определены."""
+    return bool(np.all(np.isfinite(scores)) and scores.min() >= 0.0 and scores.max() <= 1.0)
+
+
+def brier_score(scores: np.ndarray, labels: np.ndarray) -> float:
+    """Средний квадрат разницы вероятности и исхода: разрешающая способность и
+    калибровка сразу. `nan`, если оценки не вероятности."""
+    if scores.size == 0 or not _probabilities(scores):
+        return float("nan")
+    return float(np.mean((scores - labels) ** 2))
+
+
+def log_loss(scores: np.ndarray, labels: np.ndarray) -> float:
+    """Средний минус логарифм вероятности, отданной случившемуся исходу.
+
+    БЕЗ ПОДРЕЗКИ. Оценка ровно 0 или 1 при противоположном исходе даёт
+    бесконечность: модель поставила всё и проиграла. Подрезка до 1e-15 выдала бы
+    за число то, что числом не является, — это молчаливая починка. `nan`, если
+    оценки не вероятности.
+    """
+    if scores.size == 0 or not _probabilities(scores):
+        return float("nan")
+    given = np.where(labels == 1, scores, 1.0 - scores)
+    with np.errstate(divide="ignore"):
+        return float(-np.mean(np.log(given)))
+
+
+class Costs(BaseModel):
+    """Стоимость ошибок, объявленная для решения по оценке.
+
+    Умолчания нет: равные стоимости — такое же объявление, как любые другие, и
+    приниматься молча не может.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    false_positive: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+    """Цена действия там, где события не будет."""
+    false_negative: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+    """Цена бездействия там, где событие будет."""
+
+    @property
+    def threshold(self) -> float:
+        """Порог вероятности, выше которого действовать дешевле. Верен для
+        КАЛИБРОВАННЫХ вероятностей: при смещённой калибровке порог смещается тоже."""
+        return self.false_positive / (self.false_positive + self.false_negative)
+
+
+def net_benefit(scores: np.ndarray, labels: np.ndarray, threshold: float) -> float:
+    """Чистая польза решения «действовать при оценке ≥ порога» (decision curve).
+
+    В единицах верных срабатываний на строку: верные срабатывания минус ложные,
+    взвешенные ценой, заложенной в порог, — p/(1−p). «Не действовать никогда»
+    даёт ноль. `nan`, если оценки не вероятности: порог стоит на шкале вероятности.
+    """
+    if labels.size == 0 or not _probabilities(scores):
+        return float("nan")
+    act = scores >= threshold
+    true = int(np.sum(act & (labels == 1)))
+    false = int(np.sum(act & (labels == 0)))
+    return (true - false * threshold / (1.0 - threshold)) / labels.size
+
+
+@dataclass(frozen=True)
+class Unmeasured:
+    """Величина, которую на этой выборке честно посчитать нельзя, и почему."""
+
+    name: str
+    reason: str
+
+    def __str__(self) -> str:
+        return f"{self.name}: не определено — {self.reason}"
+
+
 @dataclass(frozen=True)
 class Comparison:
     """Сравнение модели с правилом по одной величине."""
@@ -192,6 +281,13 @@ class Verdict:
     rule: BaselineRule
     ranking: Comparison
     calibration: Comparison
+    prevalence: float = float("nan")
+    precision: Comparison | Unmeasured | None = None
+    brier: Comparison | Unmeasured | None = None
+    log_loss: Comparison | Unmeasured | None = None
+    costs: Costs | None = None
+    benefit: Comparison | Unmeasured | None = None
+    treat_all: float = float("nan")
 
     def statement(self) -> str:
         """Вывод словами. Осторожный там, где интервал ноль не исключает."""
@@ -221,9 +317,31 @@ class Verdict:
             "",
             f"- {self.ranking}",
             f"- {self.calibration}",
-            "",
-            self.statement(),
         ]
+        if self.precision is not None:
+            lines += [
+                f"- доля класса {self.prevalence:.4f} — столько PR-AUC даёт ранжирование, "
+                "не отличающее классы",
+                f"- {self.precision}",
+            ]
+        lines += [f"- {c}" for c in (self.brier, self.log_loss) if c is not None]
+        if self.costs is None:
+            lines.append(
+                "- стоимость ошибок не объявлена: порог решения и чистая польза не считались"
+            )
+        else:
+            threshold = self.costs.threshold
+            lines.append(
+                f"- стоимость ошибок: ложное срабатывание {self.costs.false_positive:g}, "
+                f"пропуск {self.costs.false_negative:g} — действовать при оценке "
+                f"≥ {threshold:.4f}; порог верен для калиброванных вероятностей"
+            )
+            lines.append(f"- {self.benefit}")
+            lines.append(
+                f"- чистая польза при том же пороге: действовать всегда {self.treat_all:+.4f}, "
+                "никогда 0"
+            )
+        lines += ["", self.statement()]
         return "\n".join(lines)
 
 
@@ -233,6 +351,7 @@ def measure_against_baseline(
     scores: pl.Series,
     rule: BaselineRule,
     decision: str = "итоговая оценка",
+    costs: Costs | None = None,
 ) -> Verdict:
     """Измерить на выборке, израсходовав её тем же действием.
 
@@ -280,7 +399,60 @@ def measure_against_baseline(
         calibration=Comparison(
             "ошибка калибровки", cal_model, cal_rule, cal_low, cal_high, lower_is_better=True
         ),
+        prevalence=float(labels.mean()) if labels.size else float("nan"),
+        precision=_compare(
+            "PR-AUC (average precision)", average_precision, model, baseline, labels
+        ),
+        brier=_compare("Brier", brier_score, model, baseline, labels, lower_is_better=True),
+        log_loss=_compare("log loss", log_loss, model, baseline, labels, lower_is_better=True),
+        costs=costs,
+        benefit=None
+        if costs is None
+        else _compare(
+            f"чистая польза при пороге {costs.threshold:.4f}",
+            lambda s, y: net_benefit(s, y, costs.threshold),
+            model,
+            baseline,
+            labels,
+        ),
+        treat_all=float("nan")
+        if costs is None
+        else net_benefit(np.ones(labels.size), labels, costs.threshold),
     )
+
+
+def _compare(
+    name: str,
+    metric,
+    model: np.ndarray,
+    baseline: np.ndarray,
+    labels: np.ndarray,
+    *,
+    lower_is_better: bool = False,
+) -> Comparison | Unmeasured:
+    """Сравнение по одной величине с парным bootstrap, либо честное «не определено».
+
+    Та же пересборка, что у разрешающей способности: то же зерно, те же строки
+    на каждом шаге у модели и у правила.
+    """
+    left, right = metric(model, labels), metric(baseline, labels)
+    for who, value, scores in (("модели", left, model), ("правила", right, baseline)):
+        if np.isfinite(value):
+            continue
+        if not _probabilities(scores):
+            return Unmeasured(name, f"оценки {who} не вероятности: вне [0, 1] или не конечны")
+        if np.isinf(value):
+            return Unmeasured(
+                name, f"у {who} бесконечно: оценка ровно 0 или 1 при противоположном исходе"
+            )
+        return Unmeasured(name, "на выборке нет обоих классов")
+    rng = np.random.default_rng(SEED)
+    differences = np.empty(BOOTSTRAP)
+    for i in range(BOOTSTRAP):
+        pick = rng.integers(0, labels.size, labels.size)
+        differences[i] = metric(model[pick], labels[pick]) - metric(baseline[pick], labels[pick])
+    low, high = _interval(differences)
+    return Comparison(name, left, right, low, high, lower_is_better=lower_is_better)
 
 
 @dataclass(frozen=True)

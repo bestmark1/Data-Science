@@ -17,11 +17,17 @@ from dsx.label import LABEL
 from dsx.measure import (
     BINS,
     BaselineRule,
+    Costs,
     RuleKind,
+    Unmeasured,
+    average_precision,
+    brier_score,
     calibration_error,
     discrimination,
+    log_loss,
     measure_against_baseline,
     measure_contrast,
+    net_benefit,
 )
 from dsx.policy import Blocked
 from dsx.samples import Extent, Purpose, SampleLedger
@@ -461,3 +467,154 @@ def test_declared_inputs_let_the_measurement_through() -> None:
 
     assert ledger.features == ("signal", "risk", "noise")
     assert verdict.rows > 0
+
+
+# --- DS-008: метрики при дисбалансе, порог по стоимости --------------------
+#
+# Каждая величина сверена с ответом, посчитанным вручную, а не с другой
+# библиотекой: прежде чем верить измерителю, проверь его на известном ответе.
+
+
+def test_brier_and_log_loss_on_a_known_answer() -> None:
+    """Ответ от ревью карты техник: y=[0,1], p=[0.25,0.75]."""
+    labels = np.array([0, 1])
+    scores = np.array([0.25, 0.75])
+
+    assert brier_score(scores, labels) == pytest.approx(0.0625, abs=1e-12)
+    assert log_loss(scores, labels) == pytest.approx(0.287682, abs=1e-6)
+
+
+def test_log_loss_of_a_confident_mistake_is_infinite_not_clipped() -> None:
+    """Оценка ровно 0 при случившемся исходе — бесконечность, а не 34.5 от подрезки."""
+    assert np.isinf(log_loss(np.array([0.0, 1.0]), np.array([1, 1])))
+    assert log_loss(np.array([0.0, 1.0]), np.array([0, 1])) == 0.0
+
+
+def test_probability_metrics_are_undefined_for_non_probabilities() -> None:
+    labels = np.array([0, 1])
+    for scores in (np.array([-0.5, 0.5]), np.array([0.2, 1.5]), np.array([np.nan, 0.5])):
+        assert np.isnan(brier_score(scores, labels))
+        assert np.isnan(log_loss(scores, labels))
+        assert np.isnan(net_benefit(scores, labels, 0.5))
+
+
+def test_average_precision_on_a_known_answer() -> None:
+    """По порогам сверху: 0.8 — точность 1, полнота 0.5; 0.4 — полнота не растёт;
+    0.35 — точность 2/3, полнота 1. AP = 0.5·1 + 0.5·2/3 = 0.8333."""
+    labels = np.array([0, 0, 1, 1])
+    scores = np.array([0.1, 0.4, 0.35, 0.8])
+
+    assert average_precision(scores, labels) == pytest.approx(0.5 + 0.5 * 2 / 3, abs=1e-12)
+
+
+def test_average_precision_of_a_constant_is_the_prevalence() -> None:
+    """Все оценки равны — один порог: точность равна доле класса, полнота 1."""
+    labels = np.array([1, 0, 0, 0, 1, 0, 0, 0, 0, 0])
+
+    assert average_precision(np.full(10, 0.3), labels) == pytest.approx(0.2, abs=1e-12)
+    assert np.isnan(average_precision(np.full(4, 0.3), np.zeros(4, dtype=int)))
+
+
+def test_net_benefit_on_a_known_answer() -> None:
+    """Порог 0.2 → цена ложного срабатывания в единицах верного p/(1−p) = 0.25.
+    Действуем на трёх строках: два верных, одно ложное. (2 − 1·0.25) / 5 = 0.35."""
+    labels = np.array([1, 1, 0, 0, 1])
+    scores = np.array([0.9, 0.5, 0.3, 0.1, 0.1])
+
+    assert net_benefit(scores, labels, 0.2) == pytest.approx((2 - 0.25) / 5, abs=1e-12)
+    assert net_benefit(np.zeros(5), labels, 0.2) == 0.0
+
+
+def test_costs_set_the_threshold_and_have_no_default() -> None:
+    from pydantic import ValidationError
+
+    assert Costs(false_positive=1, false_negative=4).threshold == pytest.approx(0.2)
+    for bad in ({"false_positive": 0, "false_negative": 1}, {"false_positive": 1}, {}):
+        with pytest.raises(ValidationError):
+            Costs(**bad)
+
+
+def test_the_verdict_matches_a_direct_count() -> None:
+    """Числа отчёта — те же, что прямой счёт по формулам на том же мире."""
+    frame = world()
+    verdict = measure_against_baseline(ledger_with(frame), "резерв", frame["risk"], CONSTANT)
+    labels = frame[LABEL].to_numpy().astype(float)
+    risk = frame["risk"].to_numpy()
+
+    assert verdict.prevalence == pytest.approx(labels.mean())
+    assert verdict.brier.model == pytest.approx(np.mean((risk - labels) ** 2))
+    assert verdict.brier.baseline == pytest.approx(np.mean((0.2 - labels) ** 2))
+    expected = -np.mean(labels * np.log(risk) + (1 - labels) * np.log(1 - risk))
+    assert verdict.log_loss.model == pytest.approx(expected)
+    assert verdict.precision.baseline == pytest.approx(labels.mean()), "константа = доля класса"
+
+
+def test_a_calibrated_model_beats_the_constant_on_every_probability_metric() -> None:
+    frame = world()
+    verdict = measure_against_baseline(
+        ledger_with(frame),
+        "резерв",
+        frame["risk"],
+        CONSTANT,
+        costs=Costs(false_positive=1, false_negative=3),
+    )
+
+    for comparison in (verdict.precision, verdict.brier, verdict.log_loss, verdict.benefit):
+        assert comparison.model_wins, str(comparison)
+
+
+def test_noise_does_not_win_on_precision() -> None:
+    """Отрицательный контроль: шумовая вероятность не превосходит постоянное правило по PR-AUC."""
+    frame = world()
+    noise = pl.Series(np.random.default_rng(3).random(frame.height))
+    verdict = measure_against_baseline(ledger_with(frame), "резерв", noise, CONSTANT)
+
+    assert not verdict.precision.model_wins
+
+
+def test_a_threshold_rule_makes_log_loss_undefined_not_a_win() -> None:
+    """Пороговое правило даёт 0 или 1: ошибившись, оно бесконечно неправо. Сравнение
+    по log loss от этого не выигрывается моделью — оно не определено."""
+    frame = world()
+    rule = BaselineRule(kind=RuleKind.THRESHOLD, feature="signal", threshold=1.2)
+
+    verdict = measure_against_baseline(ledger_with(frame), "резерв", frame["risk"], rule)
+
+    assert isinstance(verdict.log_loss, Unmeasured)
+    assert "бесконечно" in str(verdict.log_loss)
+    assert not isinstance(verdict.brier, Unmeasured)
+
+
+def test_raw_scores_leave_probability_metrics_undefined_and_say_so() -> None:
+    frame = world()
+    verdict = measure_against_baseline(ledger_with(frame), "резерв", frame["signal"], CONSTANT)
+
+    assert isinstance(verdict.brier, Unmeasured)
+    assert "не вероятности" in str(verdict.brier)
+    assert verdict.ranking.model_wins, "ранжирование от этого не страдает"
+
+
+def test_the_report_names_prevalence_and_missing_costs() -> None:
+    frame = world()
+    section = measure_against_baseline(
+        ledger_with(frame), "резерв", frame["risk"], CONSTANT
+    ).report_section()
+
+    assert "доля класса" in section and "PR-AUC (average precision)" in section
+    assert "стоимость ошибок не объявлена" in section
+    assert "Brier" in section and "log loss" in section
+
+
+def test_the_report_with_costs_shows_the_threshold_and_the_references() -> None:
+    frame = world()
+    section = measure_against_baseline(
+        ledger_with(frame),
+        "резерв",
+        frame["risk"],
+        CONSTANT,
+        costs=Costs(false_positive=1, false_negative=4),
+    ).report_section()
+
+    assert "≥ 0.2000" in section
+    assert "чистая польза при пороге 0.2000" in section
+    assert "действовать всегда" in section and "никогда 0" in section
