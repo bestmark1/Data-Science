@@ -2540,7 +2540,10 @@ def test_windows_line_endings_pass(tmp_path) -> None:
     assert _guarded_calls(project, prereg) == 1
 
 
-FOLDED_LAST = "```yaml\nproject: проба\nchallenger:\n  none: {style}\n    первая фраза\n    вторая фраза\n```\n"
+FOLDED_LAST = (
+    "```yaml\nproject: проба\nchallenger:\n  none: {style}\n    первая фраза\n"
+    "    вторая фраза\n```\n"
+)
 FOLDED_MIDDLE = (
     "```yaml\nproject: проба\nchallenger:\n  none: {style}\n    первая фраза\n"
     "    вторая фраза\nnote: x\n```\n"
@@ -2549,7 +2552,9 @@ FOLDED_MIDDLE = (
 
 @pytest.mark.parametrize("where", ["последнее поле", "поле в середине"])
 @pytest.mark.parametrize("style, passes", [(">", False), (">-", True)])
-def test_a_folded_scalar_is_read_the_same_wherever_it_stands(tmp_path, where, style, passes) -> None:
+def test_a_folded_scalar_is_read_the_same_wherever_it_stands(
+    tmp_path, where, style, passes
+) -> None:
     """Двенадцатое ревью PR #2: сборка блока теряла последний перевод строки, и `>`
     в конце блока проходил, а тот же `>` перед другим полем — нет. `>` оставляет
     управляющий знак и отвергается везде; `>-` проходит везде."""
