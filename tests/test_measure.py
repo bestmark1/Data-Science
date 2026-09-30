@@ -618,3 +618,83 @@ def test_the_report_with_costs_shows_the_threshold_and_the_references() -> None:
     assert "≥ 0.2000" in section
     assert "чистая польза при пороге 0.2000" in section
     assert "действовать всегда" in section and "никогда 0" in section
+
+
+# --- ревью DS-008: неопределённое объявляется, а не прячется ---------------
+
+
+def _tiny(labels, model, rule_value=0.2):
+    frame = pl.DataFrame({LABEL: labels, "signal": model, "risk": model, "noise": model})
+    rule = BaselineRule(kind=RuleKind.CONSTANT, constant=rule_value)
+    return measure_against_baseline(ledger_with(frame), "резерв", frame["risk"], rule)
+
+
+def test_a_bootstrap_with_undefined_resamples_is_declared_not_printed_as_nan() -> None:
+    """Ревью `0dad089`: y=[0,1] — в 100 из 400 пересборок нет положительного
+    класса, AP там не определён, а интервал печатался как [+nan; +nan]."""
+    verdict = _tiny([0, 1], [0.2, 0.8])
+
+    assert isinstance(verdict.precision, Unmeasured)
+    assert "из 400 пересборок" in str(verdict.precision)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_scores_leave_the_report_whole(bad) -> None:
+    """Ревью `0dad089`: NaN и бесконечность в оценках обрывали весь отчёт
+    исключением sklearn."""
+    verdict = _tiny([0, 1, 0, 1], [bad, 0.8, 0.3, 0.6])
+
+    for comparison in (verdict.precision, verdict.brier, verdict.log_loss):
+        assert isinstance(comparison, Unmeasured)
+        assert "не конечны" in str(comparison)
+    assert "## Измерение" in verdict.report_section()
+
+
+def test_no_observed_labels_leave_the_report_whole() -> None:
+    """Ревью `0dad089`: на `d19df7d` такой вызов давал отчёт, на `0dad089` — исключение."""
+    verdict = _tiny([None, None], [0.2, 0.8])
+
+    assert verdict.rows == 0
+    for comparison in (verdict.precision, verdict.brier, verdict.log_loss):
+        assert isinstance(comparison, Unmeasured)
+        assert "нет строк с наблюдаемым исходом" in str(comparison)
+    assert "## Измерение" in verdict.report_section()
+
+
+def test_average_precision_of_non_finite_scores_is_undefined() -> None:
+    assert np.isnan(average_precision(np.array([np.nan, 0.8]), np.array([0, 1])))
+
+
+def test_costs_do_not_depend_on_their_scale() -> None:
+    """Ревью `0dad089`: Costs(1e308, 1e308) давал порог 0.0 — сумма переполнялась."""
+    assert Costs(false_positive=2, false_negative=2).threshold == 0.5
+    assert Costs(false_positive=1e308, false_negative=1e308).threshold == 0.5
+    assert Costs(false_positive=1, false_negative=1e308).threshold > 0
+
+
+@pytest.mark.parametrize(("fp", "fn"), [(1e308, 1), (1e-300, 1e300), (1e300, 1e-300)])
+def test_costs_whose_threshold_is_not_representable_are_refused(fp, fn) -> None:
+    """Порог обязан лежать строго в (0, 1): 1.0 делил бы на ноль в чистой пользе,
+    0.0 делал бы ложное срабатывание бесплатным. Подрезки нет — отказ."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="непредставим"):
+        Costs(false_positive=fp, false_negative=fn)
+
+
+def test_net_benefit_refuses_a_threshold_outside_the_open_interval() -> None:
+    for threshold in (0.0, 1.0, -0.1, float("nan")):
+        with pytest.raises(ValueError):
+            net_benefit(np.array([0.5]), np.array([1]), threshold)
+
+
+def test_the_report_calls_prevalence_the_constant_not_every_random_ranking() -> None:
+    """Ревью `0dad089`, P3: у случайного ранжирования двух строк AP в среднем 0.75,
+    а доля класса 0.5; доля — точный AP ПОСТОЯННОЙ оценки."""
+    frame = world()
+    section = measure_against_baseline(
+        ledger_with(frame), "резерв", frame["risk"], CONSTANT
+    ).report_section()
+
+    assert "PR-AUC постоянной оценки" in section
+    assert "столько PR-AUC даёт ранжирование" not in section

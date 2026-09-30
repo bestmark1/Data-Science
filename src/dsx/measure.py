@@ -147,16 +147,20 @@ def average_precision(scores: np.ndarray, labels: np.ndarray) -> float:
 
     Точность, усреднённая по порогам с весом прироста полноты; равные оценки —
     один порог. Трапеция по кривой точность–полнота даёт другое число и молча с
-    этим не приравнивается. Опорное значение — доля класса: столько даёт любое
-    ранжирование, не отличающее классы, поэтому число без доли не читается.
+    этим не приравнивается. Опорное значение — доля класса: это точный AP
+    постоянной оценки и ориентир для случайного ранжирования (не его точное
+    значение: у двух строк с одним событием случайный порядок даёт в среднем
+    0.75 при доле 0.5). `nan`, если нет положительных или оценки не конечны.
     """
-    if labels.size == 0 or int(labels.sum()) == 0:
+    if labels.size == 0 or int(labels.sum()) == 0 or not np.all(np.isfinite(scores)):
         return float("nan")
     return float(average_precision_score(labels, scores))
 
 
 def _probabilities(scores: np.ndarray) -> bool:
     """Оценки — вероятности: конечные и в [0, 1]. Иначе Brier и log loss не определены."""
+    if scores.size == 0:
+        return False
     return bool(np.all(np.isfinite(scores)) and scores.min() >= 0.0 and scores.max() <= 1.0)
 
 
@@ -197,11 +201,24 @@ class Costs(BaseModel):
     false_negative: Annotated[float, Field(gt=0, allow_inf_nan=False)]
     """Цена бездействия там, где событие будет."""
 
+    @model_validator(mode="after")
+    def _threshold_is_representable(self) -> Costs:
+        threshold = self.threshold
+        if not 0.0 < threshold < 1.0:
+            raise ValueError(
+                f"порог {threshold!r} непредставим строго внутри (0, 1): стоимости "
+                "несоизмеримы в двойной точности. Подрезки нет — объявите соизмеримые"
+            )
+        return self
+
     @property
     def threshold(self) -> float:
         """Порог вероятности, выше которого действовать дешевле. Верен для
-        КАЛИБРОВАННЫХ вероятностей: при смещённой калибровке порог смещается тоже."""
-        return self.false_positive / (self.false_positive + self.false_negative)
+        КАЛИБРОВАННЫХ вероятностей: при смещённой калибровке порог смещается тоже.
+
+        Через отношение, а не сумму: сумма двух больших стоимостей переполнялась,
+        и Costs(1e308, 1e308) давал 0.0 вместо 0.5 (ревью `0dad089`)."""
+        return 1.0 / (1.0 + self.false_negative / self.false_positive)
 
 
 def net_benefit(scores: np.ndarray, labels: np.ndarray, threshold: float) -> float:
@@ -211,6 +228,8 @@ def net_benefit(scores: np.ndarray, labels: np.ndarray, threshold: float) -> flo
     взвешенные ценой, заложенной в порог, — p/(1−p). «Не действовать никогда»
     даёт ноль. `nan`, если оценки не вероятности: порог стоит на шкале вероятности.
     """
+    if not 0.0 < threshold < 1.0:
+        raise ValueError(f"порог {threshold!r} вне (0, 1): вес ложного срабатывания не определён")
     if labels.size == 0 or not _probabilities(scores):
         return float("nan")
     act = scores >= threshold
@@ -320,8 +339,8 @@ class Verdict:
         ]
         if self.precision is not None:
             lines += [
-                f"- доля класса {self.prevalence:.4f} — столько PR-AUC даёт ранжирование, "
-                "не отличающее классы",
+                f"- доля класса {self.prevalence:.4f} — PR-AUC постоянной оценки и ориентир "
+                "для случайного ранжирования",
                 f"- {self.precision}",
             ]
         lines += [f"- {c}" for c in (self.brier, self.log_loss) if c is not None]
@@ -435,6 +454,11 @@ def _compare(
     Та же пересборка, что у разрешающей способности: то же зерно, те же строки
     на каждом шаге у модели и у правила.
     """
+    if labels.size == 0:
+        return Unmeasured(name, "нет строк с наблюдаемым исходом")
+    for who, scores in (("модели", model), ("правила", baseline)):
+        if not np.all(np.isfinite(scores)):
+            return Unmeasured(name, f"оценки {who} не конечны: NaN или бесконечность")
     left, right = metric(model, labels), metric(baseline, labels)
     for who, value, scores in (("модели", left, model), ("правила", right, baseline)):
         if np.isfinite(value):
@@ -451,6 +475,15 @@ def _compare(
     for i in range(BOOTSTRAP):
         pick = rng.integers(0, labels.size, labels.size)
         differences[i] = metric(model[pick], labels[pick]) - metric(baseline[pick], labels[pick])
+    undefined = int(np.sum(~np.isfinite(differences)))
+    if undefined:
+        # Отбросить негодные пересборки молча значило бы построить интервал по
+        # другой, отобранной выборке (ревью `0dad089`: y=[0,1] — 100 из 400).
+        return Unmeasured(
+            name,
+            f"интервал не построен: в {undefined} из {BOOTSTRAP} пересборок величина "
+            "не определена (нет обоих классов)",
+        )
     low, high = _interval(differences)
     return Comparison(name, left, right, low, high, lower_is_better=lower_is_better)
 
