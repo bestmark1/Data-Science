@@ -24,7 +24,7 @@ analogs:
     kaggle: ["<запрос>"]
     openml: ["<запрос>"]
   found:                        # пусто, если ничего не нашлось
-    - url: <ссылка>
+    - url: <ссылка только в ASCII: https://xn--…/%D0%BF…>
       reference_result:         # если аналог публикует результат
         metric: <метрика>
         value: <число>
