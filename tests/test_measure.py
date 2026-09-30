@@ -758,3 +758,86 @@ def test_a_representable_threshold_is_not_lost_to_overflow(fp, fn, expected) -> 
 
     assert threshold == exact
     assert threshold == pytest.approx(expected, rel=1e-9)
+
+
+# --- третье ревью DS-008: порог точной дробью, типы входов -----------------
+
+
+def _exact_threshold(fp: float, fn: float) -> float:
+    from fractions import Fraction
+
+    return float(Fraction(fp) / (Fraction(fp) + Fraction(fn)))
+
+
+@pytest.mark.parametrize(("fp", "fn"), [(1.0, 1e-16), (1e16, 1.0), (1e308, 1e292)])
+def test_a_representable_threshold_near_one_is_kept(fp, fn) -> None:
+    """Ревью `e3c4788`: 1 + 1e-16 округлялось до 1, и порог 0.9999999999999999
+    отвергался как непредставимый."""
+    threshold = Costs(false_positive=fp, false_negative=fn).threshold
+
+    assert threshold == _exact_threshold(fp, fn)
+    assert 0 < threshold < 1
+
+
+def test_the_threshold_is_the_exact_fraction_rounded_once() -> None:
+    """Тысяча пар стоимостей на всём диапазоне double: порог равен точной дроби,
+    округлённой один раз, а отказ бывает только там, где она округляется в 0 или 1."""
+    from pydantic import ValidationError
+
+    rng = np.random.default_rng(7)
+    exponents = rng.uniform(-323, 308, size=(1000, 2))
+    mantissas = rng.uniform(1, 10, size=(1000, 2))
+    refused = 0
+    for (e1, e2), (m1, m2) in zip(exponents, mantissas, strict=True):
+        with np.errstate(over="ignore"):
+            fp, fn = float(m1 * 10.0**e1), float(m2 * 10.0**e2)
+        if not (0 < fp < np.inf and 0 < fn < np.inf):
+            continue
+        exact = _exact_threshold(fp, fn)
+        if 0 < exact < 1:
+            assert Costs(false_positive=fp, false_negative=fn).threshold == exact, (fp, fn)
+        else:
+            refused += 1
+            with pytest.raises(ValidationError, match="непредставим"):
+                Costs(false_positive=fp, false_negative=fn)
+    assert refused > 0, "проба не дошла до непредставимых порогов"
+
+
+@pytest.mark.parametrize("metric", METRICS)
+@pytest.mark.parametrize(
+    ("scores", "labels"),
+    [
+        (np.array([0.2 + 1j, 0.8 + 1j]), np.array([0, 1])),
+        (np.array([0.2, 0.8]), np.array([0 + 0j, 1 + 0j])),
+        (np.array(["0.2", "0.8"]), np.array([0, 1])),
+        (np.array([0.2, 0.8], dtype=object), np.array([0, 1])),
+    ],
+)
+def test_non_real_inputs_are_refused_not_truncated(metric, scores, labels) -> None:
+    """Ревью `e3c4788`: комплексные оценки проходили, мнимая часть отбрасывалась,
+    Brier выходил отрицательным и засчитывался победой."""
+    with pytest.raises(ValueError, match="вещественн"):
+        metric(scores, labels)
+
+
+def test_a_complex_model_does_not_win_a_comparison() -> None:
+    from dsx.measure import _compare
+
+    with pytest.raises(ValueError, match="вещественн"):
+        _compare(
+            "Brier",
+            brier_score,
+            np.array([0.2 + 1j, 0.8 + 1j]),
+            np.array([0.5, 0.5]),
+            np.array([0, 1]),
+        )
+
+
+def test_boolean_probabilities_and_labels_are_numbers() -> None:
+    """Ревью `e3c4788`: законные 0/1 в булевом виде роняли Brier TypeError."""
+    scores, labels = np.array([False, True]), np.array([False, True])
+
+    assert brier_score(scores, labels) == 0.0
+    assert log_loss(scores, labels) == 0.0
+    assert average_precision(scores, labels) == 1.0
+    assert net_benefit(scores, labels, 0.5) == 0.5

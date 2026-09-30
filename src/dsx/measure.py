@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from fractions import Fraction
 from typing import Annotated
 
 import numpy as np
@@ -142,20 +143,35 @@ def calibration_error(scores: np.ndarray, labels: np.ndarray, bins: int = BINS) 
     return float(total)
 
 
-def _require_aligned(scores: np.ndarray, labels: np.ndarray) -> None:
-    """Входы метрики: одномерные, одной длины, метки — ровно 0 или 1.
+REAL = frozenset("biuf")
+"""Вид dtype, допустимый во входах метрик: булев, целый, беззнаковый, вещественный."""
+
+
+def _require_aligned(scores: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Входы метрики, приведённые к счёту: оценки `float64`, метки `int64`.
+
+    Отказ, если массивы не одномерные, разной длины, не вещественного вида или
+    метка не 0 и не 1. Все метрики и `_compare` берут входы ТОЛЬКО отсюда —
+    одна точка вместо проверок по месту.
 
     Ревью `75a6f1c`: NaN-метка становилась отрицательным исходом, и log loss
     объявлял модель победителем; одна метка растягивалась на две оценки
-    (broadcasting), и чистая польза выходила 2.0. Неизвестный исход не бывает
-    отрицательным, а невыровненные массивы — ошибка вызова, а не данные.
+    (broadcasting), и чистая польза выходила 2.0. Ревью `e3c4788`: комплексные
+    оценки проходили, мнимая часть отбрасывалась при приведении, и Brier выходил
+    отрицательным победителем; булевы 0/1 роняли вычитание. Комплексное не
+    исправляется отбрасыванием части — отказ; булево — законное число.
     """
-    if np.ndim(scores) != 1 or np.ndim(labels) != 1:
+    scores, labels = np.asarray(scores), np.asarray(labels)
+    if scores.ndim != 1 or labels.ndim != 1:
         raise ValueError("оценки и метки обязаны быть одномерными")
-    if len(scores) != len(labels):
-        raise ValueError(f"оценок {len(scores)}, меток {len(labels)}: не выровнены")
+    if scores.shape != labels.shape:
+        raise ValueError(f"оценок {scores.size}, меток {labels.size}: не выровнены")
+    for what, array in (("оценки", scores), ("метки", labels)):
+        if array.dtype.kind not in REAL:
+            raise ValueError(f"{what} не вещественные: dtype {array.dtype}")
     if not np.all(np.isin(labels, (0, 1))):
         raise ValueError("метка не 0 и не 1: неизвестный исход не бывает отрицательным")
+    return scores.astype(np.float64), labels.astype(np.int64)
 
 
 def average_precision(scores: np.ndarray, labels: np.ndarray) -> float:
@@ -168,7 +184,7 @@ def average_precision(scores: np.ndarray, labels: np.ndarray) -> float:
     значение: у двух строк с одним событием случайный порядок даёт в среднем
     0.75 при доле 0.5). `nan`, если нет положительных или оценки не конечны.
     """
-    _require_aligned(scores, labels)
+    scores, labels = _require_aligned(scores, labels)
     if labels.size == 0 or int(labels.sum()) == 0 or not np.all(np.isfinite(scores)):
         return float("nan")
     return float(average_precision_score(labels, scores))
@@ -184,7 +200,7 @@ def _probabilities(scores: np.ndarray) -> bool:
 def brier_score(scores: np.ndarray, labels: np.ndarray) -> float:
     """Средний квадрат разницы вероятности и исхода: разрешающая способность и
     калибровка сразу. `nan`, если оценки не вероятности."""
-    _require_aligned(scores, labels)
+    scores, labels = _require_aligned(scores, labels)
     if scores.size == 0 or not _probabilities(scores):
         return float("nan")
     return float(np.mean((scores - labels) ** 2))
@@ -198,7 +214,7 @@ def log_loss(scores: np.ndarray, labels: np.ndarray) -> float:
     за число то, что числом не является, — это молчаливая починка. `nan`, если
     оценки не вероятности.
     """
-    _require_aligned(scores, labels)
+    scores, labels = _require_aligned(scores, labels)
     if scores.size == 0 or not _probabilities(scores):
         return float("nan")
     given = np.where(labels == 1, scores, 1.0 - scores)
@@ -235,15 +251,13 @@ class Costs(BaseModel):
         """Порог вероятности, выше которого действовать дешевле. Верен для
         КАЛИБРОВАННЫХ вероятностей: при смещённой калибровке порог смещается тоже.
 
-        Через отношение, а не сумму: сумма двух больших стоимостей переполнялась,
-        и Costs(1e308, 1e308) давал 0.0 вместо 0.5 (ревью `0dad089`). Отношение
-        берётся меньшего к большему: оно не больше 1 и не переполняется, а
-        Costs(1e-10, 1e308) даёт представимый 1e-318 (ревью `75a6f1c`)."""
-        fp, fn = self.false_positive, self.false_negative
-        if fp >= fn:
-            return 1.0 / (1.0 + fn / fp)
-        ratio = fp / fn
-        return ratio / (1.0 + ratio)
+        Точной дробью из двух `float`, округлённой один раз. Три круга ревью
+        находили край арифметики с плавающей точкой: сумма переполнялась
+        (`0dad089`), отношение переполнялось (`75a6f1c`), `1 + 1e-16` округлялось
+        до 1 и порог 0.9999999999999999 терялся (`e3c4788`). Точный счёт краёв не
+        имеет: непредставим только порог, который округляется в 0 или 1."""
+        fp, fn = Fraction(self.false_positive), Fraction(self.false_negative)
+        return float(fp / (fp + fn))
 
 
 def net_benefit(scores: np.ndarray, labels: np.ndarray, threshold: float) -> float:
@@ -255,7 +269,7 @@ def net_benefit(scores: np.ndarray, labels: np.ndarray, threshold: float) -> flo
     """
     if not 0.0 < threshold < 1.0:
         raise ValueError(f"порог {threshold!r} вне (0, 1): вес ложного срабатывания не определён")
-    _require_aligned(scores, labels)
+    scores, labels = _require_aligned(scores, labels)
     if labels.size == 0 or not _probabilities(scores):
         return float("nan")
     act = scores >= threshold
@@ -489,8 +503,8 @@ def _compare(
     Та же пересборка, что у разрешающей способности: то же зерно, те же строки
     на каждом шаге у модели и у правила.
     """
-    _require_aligned(model, labels)
-    _require_aligned(baseline, labels)
+    model, _ = _require_aligned(model, labels)
+    baseline, labels = _require_aligned(baseline, labels)
     if labels.size == 0:
         return Unmeasured(name, "нет строк с наблюдаемым исходом")
     for who, scores in (("модели", model), ("правила", baseline)):
