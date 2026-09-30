@@ -547,8 +547,9 @@ _HTTP_URL = TypeAdapter(HttpUrl)
 URL_ASCII = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;=%"
 )
-"""Знаки ASCII, допустимые в ссылке по RFC 3986. Кроме них — только не-ASCII буквы и цифры
-(национальные имена и пути); всё прочее разборщик заменил бы или закодировал молча."""
+"""Знаки, допустимые в ссылке по RFC 3986, — только ASCII. Unicode — это уже IRI (RFC 3987):
+национальное имя пишется через IDNA (`xn--…`), путь — через percent-encoding. Девятое ревью
+PR #2: прежде не-ASCII буквы допускались и подменялись на `a` перед сверкой с грамматикой."""
 
 PERCENT_BROKEN = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
@@ -559,7 +560,7 @@ HTTP_GRAMMAR = re.compile(
     rf"(?:\?(?:{_PCHAR}|[/?])*)?(?:#(?:{_PCHAR}|[/?])*)?"
 )
 """Ссылка http(s) по RFC 3986, Appendix A, без userinfo: scheme://host[:port][/path][?query]
-[#fragment]. Не-ASCII буквы и цифры (национальные имена и пути) подставляются перед сверкой."""
+[#fragment]. Сверяется сырая строка, без подстановок."""
 
 
 def _web_link(value: str) -> str:
@@ -580,17 +581,12 @@ def _web_link(value: str) -> str:
     — и длина имени хоста (не больше 253 знаков) после.
     Существует ли страница — не проверяется: это содержание, а не форма.
     """
-    bad = [
-        char
-        for char in value
-        if not (char in URL_ASCII or (not char.isascii() and unicodedata.category(char)[0] in "LN"))
-    ]
+    bad = [char for char in value if char not in URL_ASCII]
     if bad:
         raise ValueError(f"в ссылке недопустимые знаки {bad!r}: разборщик исправил бы их молча")
     if PERCENT_BROKEN.search(value):
         raise ValueError("`%` без двух шестнадцатеричных цифр (RFC 3986, 2.1)")
-    ascii_form = "".join(char if char.isascii() else "a" for char in value)
-    if not HTTP_GRAMMAR.fullmatch(ascii_form):
+    if not HTTP_GRAMMAR.fullmatch(value):
         raise ValueError("ссылка вне грамматики RFC 3986 для http(s): scheme://host[:port]/…")
     try:
         url = _HTTP_URL.validate_python(value)

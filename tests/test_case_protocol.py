@@ -1778,7 +1778,7 @@ GOOD_LINKS = [
     "https://github.com/a/b?x=1#y",
     "https://Kaggle.COM/x",
     "https://kaggle.com:443/x",
-    "https://пример.рф/x",
+    "https://xn--e1afmkfd.xn--p1ai/%D0%BF%D1%83%D1%82%D1%8C",
 ]
 BAD_LINKS = [
     "x",
@@ -1845,8 +1845,8 @@ SAME_LINK = [
     ("https://kaggle.com/x", "https://kaggle.com/a/../x"),
     ("https://kaggle.com/~x", "https://kaggle.com/%7Ex"),
     ("https://kaggle.com/a%3ab", "https://kaggle.com/a%3Ab"),
-    ("https://kaggle.com/x", "https://kaggle.com/x#обзор"),
-    ("https://пример.рф/x", "https://xn--e1afmkfd.xn--p1ai/x"),
+    ("https://kaggle.com/x", "https://kaggle.com/x#review"),
+    ("https://kaggle.com/%d0%bf", "https://kaggle.com/%D0%BF"),
 ]
 DIFFERENT_LINK = [
     ("https://kaggle.com/x", "https://kaggle.com/y"),
@@ -2076,10 +2076,32 @@ def test_a_link_with_a_mark_the_parser_would_encode_is_refused() -> None:
         _web_link("https://kaggle.com/a️b")
 
 
-def test_a_link_in_cyrillic_is_accepted() -> None:
+@pytest.mark.parametrize(
+    "link",
+    [
+        "https://пример.рф/путь",
+        "https://kaggle.com/é",
+        "https://kaggle.com/²",
+        "https://kaggle.com/x?é=1",
+        "https://kaggle.com/x#é",
+        "https://kaggle.com/\u3164",
+    ],
+)
+def test_a_link_outside_ascii_is_refused(link) -> None:
+    """Девятое ревью PR #2: не-ASCII знаки подменялись на `a` перед сверкой с
+    грамматикой, а граница обещает RFC 3986 — там URI только из ASCII; Unicode —
+    это IRI (RFC 3987). Национальное имя — через IDNA, путь — через percent-encoding.
+    """
     from protocol.preflight import _web_link
 
-    assert _web_link("https://пример.рф/путь/к-аналогу")
+    with pytest.raises(ValueError):
+        _web_link(link)
+
+
+def test_a_link_in_cyrillic_is_accepted_when_encoded() -> None:
+    from protocol.preflight import _web_link
+
+    assert _web_link("https://xn--e1afmkfd.xn--p1ai/%D0%BF%D1%83%D1%82%D1%8C")
 
 
 QUOTED_BLOCK = "\n> ```yaml\n> project: проба\n> analogs: {}\n> ```\n"
