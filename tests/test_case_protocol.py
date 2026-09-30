@@ -29,6 +29,7 @@ from protocol.preflight import (  # noqa: E402
     SEALED,
     _control_roles,
     _form_identity,
+    challenger_defects,
     control_states,
     declared,
     fired_against_the_control_run,
@@ -74,10 +75,29 @@ analogs:
 проверяли свой шаг, а не отказ по аналогам."""
 
 
-def _prereg(tmp_path: Path, body: str, number: int = FROM_CASE, *, analogs=True) -> Path:
+NO_CHALLENGER_BLOCK = """
+```yaml
+project: проба
+challenger:
+  none: "кейс проверяет инструмент, новых методов не сравнивает"
+```
+"""
+"""Годное объявление «претендента нет» с причиной. Добавляется фикстурами по
+умолчанию, как и аналоги, чтобы тесты других шагов проверяли свой шаг."""
+
+
+def _prereg(
+    tmp_path: Path, body: str, number: int = FROM_CASE, *, analogs=True, challenger=None
+) -> Path:
+    """`challenger` по умолчанию следует `analogs`: тесты, выключающие добавки,
+    проверяют документ в точности как написан."""
     path = tmp_path / f"prereg-case-{number}.md"
+    if challenger is None:
+        challenger = analogs
     if analogs and "project: проба" in body:
         body += ANALOGS_BLOCK
+    if challenger and "project: проба" in body:
+        body += NO_CHALLENGER_BLOCK
     path.write_text(body, encoding="utf-8")
     return path
 
@@ -2211,3 +2231,172 @@ def test_a_default_ignorable_filler_is_not_text(tmp_path, filler) -> None:
 
     with pytest.raises(OutOfOrder):
         guarded(project, prereg, lambda: "построено")
+
+
+# --- Претендент: спецификация опечатывается с пре-регистрацией -------------------
+
+
+def _spec() -> dict:
+    """Годная полная спецификация претендента; тесты портят её по одному полю."""
+    return {
+        "challenger": {
+            "name": "TabPFN",
+            "version": "2.6",
+            "checkpoint": "tabpfn-v2.6-classifier",
+            "settings": {"n_estimators": 8},
+            "preprocessing": "те же признаки, категории как коды",
+        },
+        "incumbent": {
+            "name": "LightGBM",
+            "version": "4.5",
+            "settings": {"num_leaves": 31},
+            "preprocessing": "те же признаки",
+        },
+        "metric": {"name": "average_precision", "definition": "sklearn average_precision_score"},
+        "min_improvement": 0.01,
+        "tuning": "none",
+        "split": "окна split_by_windows и резерв формуляра",
+        "bootstrap": {
+            "confidence": 0.95,
+            "method": "перцентильный, парный",
+            "unit": "строка",
+            "repeats": 400,
+            "seed": 20260101,
+        },
+        "window_predictions": "модель окна обучена на его обучающей части",
+        "on_failure": "отказ записывается проигрышем претендента, другая версия не берётся",
+        "measurement_order": "одно итоговое измерение обоих на резерве, одним checkout",
+        "license": "некоммерческое использование, решение владельца 30 сентября 2026",
+    }
+
+
+def test_a_full_challenger_spec_and_an_explicit_none_pass() -> None:
+    assert challenger_defects(_spec()) == []
+    assert challenger_defects({"none": "новых методов не сравниваем"}) == []
+
+
+def test_the_builder_is_not_called_without_a_challenger_declaration(tmp_path) -> None:
+    """Отсутствие блока не читается как «претендента нет»: это умолчание."""
+    project = _project(tmp_path)
+    prereg = _prereg(tmp_path, _digests(project) + CONTROLS, challenger=False)
+    calls = 0
+
+    def build():
+        nonlocal calls
+        calls += 1
+
+    with pytest.raises(OutOfOrder) as отказ:
+        guarded(project, prereg, build)
+
+    assert calls == 0, "построитель вызван без объявления претендента"
+    assert "объявления претендента" in str(отказ.value)
+
+
+def test_a_full_challenger_spec_passes_the_whole_path(tmp_path) -> None:
+    import yaml
+
+    project = _project(tmp_path)
+    block = yaml.safe_dump({"project": "проба", "challenger": _spec()}, allow_unicode=True)
+    prereg = _prereg(
+        tmp_path, _digests(project) + CONTROLS + f"\n```yaml\n{block}```\n", challenger=False
+    )
+
+    preflight(project, prereg)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("challenger",),
+        ("challenger", "checkpoint"),
+        ("challenger", "settings"),
+        ("challenger", "preprocessing"),
+        ("challenger", "version"),
+        ("incumbent",),
+        ("incumbent", "settings"),
+        ("metric",),
+        ("metric", "definition"),
+        ("min_improvement",),
+        ("tuning",),
+        ("split",),
+        ("bootstrap",),
+        ("bootstrap", "confidence"),
+        ("bootstrap", "unit"),
+        ("bootstrap", "repeats"),
+        ("bootstrap", "seed"),
+        ("window_predictions",),
+        ("on_failure",),
+        ("measurement_order",),
+        ("license",),
+    ],
+)
+def test_every_field_of_the_rule_is_required(path) -> None:
+    spec = _spec()
+    target = spec
+    for key in path[:-1]:
+        target = target[key]
+    del target[path[-1]]
+
+    defects = challenger_defects(spec)
+
+    assert any(".".join(path) in defect for defect in defects), defects
+
+
+@pytest.mark.parametrize(
+    "path, value",
+    [
+        (("challenger", "settings"), {}),  # «умолчания версии» — не объявление
+        (("challenger", "version"), 2.6),  # YAML без кавычек: версия стала числом
+        (("challenger", "name"), "   "),
+        (("metric", "name"), "accuracy"),  # проект её не считает
+        (("min_improvement",), -0.01),
+        (("min_improvement",), float("nan")),
+        (("min_improvement",), True),
+        (("tuning",), "optuna"),  # подбора в кейсе нет
+        (("bootstrap", "confidence"), 1.0),
+        (("bootstrap", "confidence"), 95),
+        (("bootstrap", "repeats"), 0),
+        (("bootstrap", "repeats"), True),
+        (("bootstrap", "seed"), "20260101"),
+        (("license",), ""),
+    ],
+)
+def test_a_malformed_field_is_refused(path, value) -> None:
+    spec = _spec()
+    target = spec
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+    assert challenger_defects(spec), f"{'.'.join(path)} = {value!r} прошло"
+
+
+def test_an_extra_or_misspelled_field_is_refused() -> None:
+    spec = _spec()
+    spec["min_improvment"] = spec.pop("min_improvement")
+
+    defects = challenger_defects(spec)
+
+    assert any("min_improvment" in defect for defect in defects)
+    assert any("min_improvement" in defect for defect in defects)
+
+
+def test_none_needs_a_reason_and_cannot_be_mixed_with_a_spec() -> None:
+    assert challenger_defects({"none": ""})
+    assert challenger_defects({"none": None})
+    assert challenger_defects({"none": "причина", **_spec()})
+    assert challenger_defects(None)
+    assert challenger_defects([])
+
+
+def test_a_historical_case_is_not_refused_over_a_challenger_block(tmp_path) -> None:
+    """Правило вводится вперёд: блок `challenger` без `project` в документе 2–20 не
+    считается блоком протокола, как и `analogs`."""
+    prereg = _prereg(
+        tmp_path,
+        "```yaml\nproject: проба\n```\n\n```yaml\nchallenger: {}\n```\n",
+        number=20,
+        analogs=False,
+    )
+
+    assert declared(prereg) == {"project": "проба"}

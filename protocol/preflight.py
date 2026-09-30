@@ -748,6 +748,94 @@ def analogs_defects(block: object) -> list[str]:
     return defects
 
 
+_Share = Annotated[StrictFloat, Field(gt=0, lt=1, allow_inf_nan=False)]
+_NonNegative = (
+    Annotated[StrictInt, Field(ge=0)] | Annotated[StrictFloat, Field(ge=0, allow_inf_nan=False)]
+)
+
+
+class _Method(_Form):
+    """Метод сравнения: всё, что меняет его прогноз, названо до данных."""
+
+    name: _Text
+    version: _Text
+    settings: Annotated[dict[str, object], Field(min_length=1)]
+    """Настройки явно: пустой словарь значил бы «умолчания версии», а они меняются."""
+    preprocessing: _Text
+
+
+class _Contender(_Method):
+    checkpoint: _Text
+    """Какие именно веса: у предобученной модели версия пакета их не называет."""
+
+
+class _Metric(_Form):
+    name: Literal["roc_auc", "average_precision", "brier", "log_loss"]
+    """Одна первичная метрика из тех, что проект считает. Направление разницы
+    следует из имени: у потерь — действующий минус претендент."""
+    definition: _Text
+
+
+class _Bootstrap(_Form):
+    confidence: _Share
+    method: _Text
+    unit: _Text
+    repeats: Annotated[StrictInt, Field(gt=0)]
+    seed: StrictInt
+
+
+class _Challenger(_Form):
+    """Спецификация претендента — поля правила «Претендент» в AGENTS.md."""
+
+    challenger: _Contender
+    incumbent: _Method
+    metric: _Metric
+    min_improvement: _NonNegative
+    tuning: Literal["none"]
+    """В кейсе подбора нет ни у кого; объявляется явно, а не подразумевается."""
+    split: _Text
+    bootstrap: _Bootstrap
+    window_predictions: _Text
+    """Как получены прогнозы по окнам — класс 19 журнала повторов."""
+    on_failure: _Text
+    """Что делается при нехватке памяти, пределе объёма, техническом отказе."""
+    measurement_order: _Text
+    license: _Text
+
+
+class _NoChallenger(_Form):
+    none: _Text
+    """Причина, по которой претендента нет."""
+
+
+def challenger_defects(block: object) -> list[str]:
+    """Чем объявление претендента не дотягивает до правила «Претендент».
+
+    ОБЯЗАТЕЛЬНО С `FROM_CASE` — в любом виде. Либо полная спецификация, либо
+    `none: <причина>`. Отсутствие блока не читается как «претендента нет»:
+    умолчание, совпадающее с честным ответом, неотличимо от невнимательности.
+
+    ГРАНИЦА ФОРМЫ. Проверяется: все поля правила на месте, типы точные, лишних
+    нет; настройки непусты; метрика — одна из считаемых проектом; доля
+    доверия в (0, 1); повторов больше нуля; минимальное улучшение не
+    отрицательно; подбор объявлен отсутствующим. НЕ проверяется — исполнение:
+    что сравнение прошло именно так, что прогнозы по окнам получены объявленным
+    способом, что лицензия прочитана. Это разбирается в вердикте; ревью
+    `cb6f25f` требует и проверки исполнения — здесь её нет, это предел.
+    """
+    if not isinstance(block, dict):
+        return ["блока `challenger` нет — объявите претендента или `none: <причина>`"]
+    schema = _NoChallenger if set(block) == {"none"} else _Challenger
+    try:
+        schema.model_validate(block)
+    except ValidationError as exc:
+        return [
+            f"`{'.'.join(str(part) for part in error['loc'])}`: {error['msg']}"
+            for error in exc.errors()
+        ]
+    return []
+
+
 def preflight(project: Path, prereg: Path) -> None:
     """Проверить порядок. Возбуждает OutOfOrder, называя недостающий шаг."""
     if not prereg.is_file():
@@ -807,6 +895,15 @@ def preflight(project: Path, prereg: Path) -> None:
             f"ОТКАЗ: в {prereg.name} нет годной записи об аналогах на других наборах — "
             f"{'; '.join(первый_этап)}. Первый этап поиска опечатывается вместе с "
             "пре-регистрацией. Построитель не вызывался."
+        )
+
+    претендент = challenger_defects(declared(prereg).get("challenger"))
+    if претендент:
+        raise OutOfOrder(
+            f"ОТКАЗ: в {prereg.name} нет годного объявления претендента — "
+            f"{'; '.join(претендент)}. Спецификация опечатывается вместе с "
+            "пре-регистрацией: после данных она стала бы подбором. "
+            "Построитель не вызывался."
         )
 
     if not (project / "manifest.yaml").is_file():
@@ -973,9 +1070,17 @@ def guarded(project: Path, prereg: Path, build: Callable[[], object]) -> object:
     return build()
 
 
-PROTOCOL_KEYS = ("controls", "promises", "spent_controls", "lost_bets", "predictions", "analogs")
+PROTOCOL_KEYS = (
+    "controls",
+    "promises",
+    "spent_controls",
+    "lost_bets",
+    "predictions",
+    "analogs",
+    "challenger",
+)
 
-FORWARD_KEYS = ("analogs",)
+FORWARD_KEYS = ("analogs", "challenger")
 """Ключи, введённые с `FROM_CASE`: в документах старших кейсов блоком протокола не считаются.
 
 Независимое ревью PR #1: добавление `analogs` в `PROTOCOL_KEYS` действовало при
