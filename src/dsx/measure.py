@@ -142,6 +142,22 @@ def calibration_error(scores: np.ndarray, labels: np.ndarray, bins: int = BINS) 
     return float(total)
 
 
+def _require_aligned(scores: np.ndarray, labels: np.ndarray) -> None:
+    """Входы метрики: одномерные, одной длины, метки — ровно 0 или 1.
+
+    Ревью `75a6f1c`: NaN-метка становилась отрицательным исходом, и log loss
+    объявлял модель победителем; одна метка растягивалась на две оценки
+    (broadcasting), и чистая польза выходила 2.0. Неизвестный исход не бывает
+    отрицательным, а невыровненные массивы — ошибка вызова, а не данные.
+    """
+    if np.ndim(scores) != 1 or np.ndim(labels) != 1:
+        raise ValueError("оценки и метки обязаны быть одномерными")
+    if len(scores) != len(labels):
+        raise ValueError(f"оценок {len(scores)}, меток {len(labels)}: не выровнены")
+    if not np.all(np.isin(labels, (0, 1))):
+        raise ValueError("метка не 0 и не 1: неизвестный исход не бывает отрицательным")
+
+
 def average_precision(scores: np.ndarray, labels: np.ndarray) -> float:
     """PR-AUC как average precision — определение `sklearn`, не трапеция.
 
@@ -152,6 +168,7 @@ def average_precision(scores: np.ndarray, labels: np.ndarray) -> float:
     значение: у двух строк с одним событием случайный порядок даёт в среднем
     0.75 при доле 0.5). `nan`, если нет положительных или оценки не конечны.
     """
+    _require_aligned(scores, labels)
     if labels.size == 0 or int(labels.sum()) == 0 or not np.all(np.isfinite(scores)):
         return float("nan")
     return float(average_precision_score(labels, scores))
@@ -167,6 +184,7 @@ def _probabilities(scores: np.ndarray) -> bool:
 def brier_score(scores: np.ndarray, labels: np.ndarray) -> float:
     """Средний квадрат разницы вероятности и исхода: разрешающая способность и
     калибровка сразу. `nan`, если оценки не вероятности."""
+    _require_aligned(scores, labels)
     if scores.size == 0 or not _probabilities(scores):
         return float("nan")
     return float(np.mean((scores - labels) ** 2))
@@ -180,6 +198,7 @@ def log_loss(scores: np.ndarray, labels: np.ndarray) -> float:
     за число то, что числом не является, — это молчаливая починка. `nan`, если
     оценки не вероятности.
     """
+    _require_aligned(scores, labels)
     if scores.size == 0 or not _probabilities(scores):
         return float("nan")
     given = np.where(labels == 1, scores, 1.0 - scores)
@@ -217,8 +236,14 @@ class Costs(BaseModel):
         КАЛИБРОВАННЫХ вероятностей: при смещённой калибровке порог смещается тоже.
 
         Через отношение, а не сумму: сумма двух больших стоимостей переполнялась,
-        и Costs(1e308, 1e308) давал 0.0 вместо 0.5 (ревью `0dad089`)."""
-        return 1.0 / (1.0 + self.false_negative / self.false_positive)
+        и Costs(1e308, 1e308) давал 0.0 вместо 0.5 (ревью `0dad089`). Отношение
+        берётся меньшего к большему: оно не больше 1 и не переполняется, а
+        Costs(1e-10, 1e308) даёт представимый 1e-318 (ревью `75a6f1c`)."""
+        fp, fn = self.false_positive, self.false_negative
+        if fp >= fn:
+            return 1.0 / (1.0 + fn / fp)
+        ratio = fp / fn
+        return ratio / (1.0 + ratio)
 
 
 def net_benefit(scores: np.ndarray, labels: np.ndarray, threshold: float) -> float:
@@ -230,6 +255,7 @@ def net_benefit(scores: np.ndarray, labels: np.ndarray, threshold: float) -> flo
     """
     if not 0.0 < threshold < 1.0:
         raise ValueError(f"порог {threshold!r} вне (0, 1): вес ложного срабатывания не определён")
+    _require_aligned(scores, labels)
     if labels.size == 0 or not _probabilities(scores):
         return float("nan")
     act = scores >= threshold
@@ -389,7 +415,16 @@ def measure_against_baseline(
         )
 
     observable = frame[LABEL].is_not_null().to_numpy()
-    labels = frame[LABEL].fill_null(0).to_numpy().astype(np.int64)[observable]
+    # Сырые метки проверяются ДО приведения к целому: NaN для polars не пусто, а
+    # приведение делало из него число, которое считалось наблюдаемой строкой
+    # (ревью `75a6f1c`).
+    raw = frame[LABEL].to_numpy()[observable]
+    if not np.all(np.isin(raw, (0, 1))):
+        raise ValueError(
+            "в колонке исхода метка не 0 и не 1 (NaN — не пусто): неизвестный исход "
+            "не бывает отрицательным"
+        )
+    labels = raw.astype(np.int64)
     model = scores.to_numpy().astype(np.float64)[observable]
     baseline = rule.score(frame).to_numpy().astype(np.float64)[observable]
 
@@ -454,6 +489,8 @@ def _compare(
     Та же пересборка, что у разрешающей способности: то же зерно, те же строки
     на каждом шаге у модели и у правила.
     """
+    _require_aligned(model, labels)
+    _require_aligned(baseline, labels)
     if labels.size == 0:
         return Unmeasured(name, "нет строк с наблюдаемым исходом")
     for who, scores in (("модели", model), ("правила", baseline)):

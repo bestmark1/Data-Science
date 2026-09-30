@@ -698,3 +698,63 @@ def test_the_report_calls_prevalence_the_constant_not_every_random_ranking() -> 
 
     assert "PR-AUC постоянной оценки" in section
     assert "столько PR-AUC даёт ранжирование" not in section
+
+
+# --- второе ревью DS-008: входы метрик проверяются до счёта ----------------
+
+METRICS = [average_precision, brier_score, log_loss, lambda s, y: net_benefit(s, y, 0.5)]
+
+
+@pytest.mark.parametrize("metric", METRICS)
+@pytest.mark.parametrize(
+    "labels", [[np.nan, np.nan], [np.inf, 1.0], [2.0, 1.0], [-1.0, 0.0], [0.5, 1.0]]
+)
+def test_a_label_that_is_not_zero_or_one_is_refused(metric, labels) -> None:
+    """Ревью `75a6f1c`: NaN-метка становилась отрицательным исходом, и log loss
+    объявлял модель победителем. Неизвестный исход — не отрицательный класс."""
+    with pytest.raises(ValueError, match="метк"):
+        metric(np.array([0.2, 0.8]), np.array(labels))
+
+
+@pytest.mark.parametrize("metric", METRICS)
+@pytest.mark.parametrize(
+    ("scores", "labels"),
+    [([0.9, 0.9], [1]), ([0.9], [1, 0]), ([[0.9, 0.1]], [[1, 0]])],
+)
+def test_misaligned_or_nested_inputs_are_refused_not_broadcast(metric, scores, labels) -> None:
+    """Ревью `75a6f1c`: одна метка растягивалась на две оценки, и чистая польза
+    выходила 2.0 — два верных срабатывания на одну строку."""
+    with pytest.raises(ValueError, match="выровнен|одномерн"):
+        metric(np.array(scores), np.array(labels))
+
+
+def test_nan_labels_in_the_sample_are_refused_before_the_cast() -> None:
+    """Ревью `75a6f1c`: NaN в колонке исхода — не пусто для polars; приведение к
+    целому давало мусорное число, которое считалось наблюдаемой строкой."""
+    frame = pl.DataFrame(
+        {
+            LABEL: [np.nan, 1.0, np.nan, 0.0],
+            "signal": [0.0] * 4,
+            "risk": [0.0] * 4,
+            "noise": [0.0] * 4,
+        }
+    )
+    with pytest.raises(ValueError, match="метк"):
+        measure_against_baseline(ledger_with(frame), "резерв", frame["risk"], CONSTANT)
+
+
+@pytest.mark.parametrize(
+    ("fp", "fn", "expected"),
+    [(1e-10, 1e308, 1e-318), (5e-324, 1.0, 5e-324), (1.0, 1e-10, 1 / (1 + 1e-10))],
+)
+def test_a_representable_threshold_is_not_lost_to_overflow(fp, fn, expected) -> None:
+    """Ревью `75a6f1c`: C_fn/C_fp переполнялось, и представимый порог ~1e-318
+    отвергался как непредставимый. Считается устойчивой ветвью, сверено с Decimal."""
+    from decimal import Decimal, getcontext
+
+    getcontext().prec = 50
+    exact = float(Decimal(fp) / (Decimal(fp) + Decimal(fn)))
+    threshold = Costs(false_positive=fp, false_negative=fn).threshold
+
+    assert threshold == exact
+    assert threshold == pytest.approx(expected, rel=1e-9)
