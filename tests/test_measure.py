@@ -1006,3 +1006,70 @@ def test_reports_on_ordinary_data_did_not_change() -> None:
         "ошибка калибровки: модель 0.0165, правило 0.0760, разница -0.0595 "
         "[-0.0688; -0.0378] — модель лучше"
     )
+
+
+# --- пятое ревью DS-008: граница polars → numpy ------------------------------
+
+
+def _frame_with(labels: pl.Series, scores: pl.Series) -> pl.DataFrame:
+    zeros = [0.0] * labels.len()
+    return pl.DataFrame({LABEL: labels, "signal": zeros, "risk": scores, "noise": zeros})
+
+
+def test_nullable_big_integers_are_checked_before_to_numpy() -> None:
+    """Ревью `3bfbb95`: nullable Int64 при `to_numpy()` переходил в float64, и
+    2**53 и 2**53 + 1 совпадали ДО проверки — AP 0.5 вместо 1."""
+    labels = pl.Series([0, 1] * 40 + [None], dtype=pl.Int64)
+    scores = pl.Series([2**53, 2**53 + 1] * 40 + [None], dtype=pl.Int64)
+    frame = _frame_with(labels, scores)
+
+    with pytest.raises(ValueError, match="точност"):
+        measure_against_baseline(ledger_with(frame), "резерв", frame["risk"], CONSTANT)
+
+
+def test_a_python_list_is_refused_not_coerced() -> None:
+    """Ревью `3bfbb95`: список [2**53, 2**53 + 1, 0.5] приводился к float64 целиком,
+    и первые две оценки совпадали до проверки."""
+    with pytest.raises(ValueError, match="np.ndarray"):
+        average_precision([2**53, 2**53 + 1, 0.5], np.array([0, 1, 0]))
+
+
+def test_boolean_scores_with_a_null_on_an_unobserved_row_pass() -> None:
+    """Ревью `3bfbb95`: nullable Boolean превращался в object и отчёт падал, хотя
+    строка с null не имела наблюдаемого исхода и должна была исключаться."""
+    labels = pl.Series([0, 1] * 40 + [None], dtype=pl.Int8)
+    scores = pl.Series([False, True] * 40 + [None], dtype=pl.Boolean)
+    frame = _frame_with(labels, scores)
+
+    verdict = measure_against_baseline(ledger_with(frame), "резерв", frame["risk"], CONSTANT)
+
+    assert verdict.rows == 80
+    assert verdict.brier.model == 0.0
+
+
+def test_a_null_score_on_an_observed_row_is_unknown_not_dropped() -> None:
+    """Оценка null при наблюдаемом исходе — неизвестное: сравнение не определено."""
+    labels = pl.Series([0, 1] * 40, dtype=pl.Int8)
+    scores = pl.Series([0.2, 0.8] * 39 + [0.2, None], dtype=pl.Float64)
+    frame = _frame_with(labels, scores)
+
+    verdict = measure_against_baseline(ledger_with(frame), "резерв", frame["risk"], CONSTANT)
+
+    assert isinstance(verdict.brier, Unmeasured) and "не конечны" in str(verdict.brier)
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        pl.Series([0, 1] * 40, dtype=pl.Duration("ns")),
+        pl.Series([0, 1] * 40, dtype=pl.Datetime("ns")),
+        pl.Series(["0", "1"] * 40),
+    ],
+    ids=["duration", "datetime", "string"],
+)
+def test_a_label_column_of_the_wrong_type_is_refused(labels) -> None:
+    """Ревью `3bfbb95`: Duration [0, 1] проходил `isin` и становился меткой."""
+    frame = _frame_with(labels, pl.Series([0.0, 1.0] * 40))
+
+    with pytest.raises(ValueError, match="метки"):
+        measure_against_baseline(ledger_with(frame), "резерв", frame["risk"], CONSTANT)

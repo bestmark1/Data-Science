@@ -163,7 +163,15 @@ def _exact_real(what: str, value: object) -> np.ndarray:
     """
     if isinstance(value, np.ma.MaskedArray):
         raise ValueError(f"{what}: маскированный массив — неизвестные значения скрыты маской")
-    array = np.asarray(value)
+    if not isinstance(value, np.ndarray):
+        # Последовательность Python приводится к ОБЩЕМУ типу до проверки:
+        # [2**53, 2**53 + 1, 0.5] становился float64 целиком, и первые две оценки
+        # совпадали (ревью `3bfbb95`). Принимается только готовый массив.
+        raise ValueError(
+            f"{what}: ожидается np.ndarray, получено {type(value).__name__} — "
+            "последовательность приводилась бы к общему типу с потерей"
+        )
+    array = value
     if array.dtype.kind not in REAL:
         raise ValueError(f"{what} не вещественные: dtype {array.dtype}")
     converted = array.astype(np.float64)
@@ -441,23 +449,45 @@ class Verdict:
         return "\n".join(lines)
 
 
+def _series_exact(what: str, series: pl.Series) -> np.ndarray:
+    """Столбец polars в `float64` без потерь; null — NaN, то есть неизвестное.
+
+    Проверка идёт на ГРАНИЦЕ polars → numpy, по dtype polars: `to_numpy()` сам
+    меняет значения — nullable Int64 переводит в float64, склеивая 2**53 и
+    2**53 + 1, nullable Boolean превращает в object, Duration отдаёт как
+    timedelta, который проходил `isin((0, 1))` (ревью `3bfbb95`). Значения без
+    null уходят в numpy в своём dtype и проверяются на точность; затем перевод в
+    float64 уже ничего не меняет.
+    """
+    dtype = series.dtype
+    # pl.Null — столбец, где все значения пусты: законно, это «исход не наблюдался».
+    if not (dtype.is_integer() or dtype.is_float() or dtype in (pl.Boolean, pl.Null)):
+        raise ValueError(f"{what} не вещественные: тип {dtype}")
+    _exact_real(what, series.drop_nulls().to_numpy())
+    return series.cast(pl.Float64).to_numpy()
+
+
 def _observed(frame: pl.DataFrame, *scores: pl.Series) -> tuple[np.ndarray, ...]:
     """Метки и оценки строк с наблюдаемым исходом — проверенные ДО приведения.
 
     Единственный путь входов для измерения против правила, сравнения постановок
     и устойчивости по окнам. Прежде каждая функция приводила сама:
     `fill_null(0).astype(int64)` делал из NaN-метки число, `.astype(float64)`
-    округлял Decimal и принимал строки (класс 20 журнала повторов).
+    округлял Decimal и принимал строки (класс 20 журнала повторов). Строки без
+    наблюдаемого исхода отбрасываются ещё в polars — до перевода, который мог бы
+    испортить их оценки (nullable Boolean → object).
     """
-    observable = frame[LABEL].is_not_null().to_numpy()
-    raw = frame[LABEL].to_numpy()[observable]
-    if not np.all(np.isin(raw, (0, 1))):
+    observable = frame[LABEL].is_not_null()
+    labels = _series_exact("метки", frame[LABEL].filter(observable))
+    if not np.all(np.isin(labels, (0, 1))):
         raise ValueError(
             "в колонке исхода метка не 0 и не 1 (NaN — не пусто): неизвестный исход "
             "не бывает отрицательным"
         )
-    labels = _exact_real("метки", raw).astype(np.int64)
-    return (labels, *(_exact_real("оценки", s.to_numpy())[observable] for s in scores))
+    return (
+        labels.astype(np.int64),
+        *(_series_exact("оценки", s.filter(observable)) for s in scores),
+    )
 
 
 def measure_against_baseline(
