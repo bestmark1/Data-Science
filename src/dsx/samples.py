@@ -235,8 +235,10 @@ class SampleLedger:
             return [f"{window!r} не зарегистрирована как окно: начало и состав оценки неизвестны"]
         if type(fit) is not Fit:
             return ["прогнозы без записи обучения, выданной журналом: происхождение неизвестно"]
-        issuer = self._windows.get(fit.window)
-        if issuer is None or issuer.fit is not fit or fit.window not in self._issued:
+        # Сначала тождество с ВЫДАННЫМИ записями, не трогая полей чужой: её
+        # `window` служил ключом поиска, и непригодное значение роняло
+        # `TypeError` (ревью `648a185`). Поля читаются только у своей записи.
+        if not any(fit is self._windows[name].fit for name in self._issued):
             return ["запись обучения выдана не этим журналом: происхождение не проверяется"]
 
         target = self._windows[window]

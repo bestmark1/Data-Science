@@ -214,3 +214,58 @@ def test_an_empty_training_part_is_refused_when_handed_out() -> None:
     )
     with pytest.raises(ValueError, match="пуста"):
         sl.training("пустое", "обучение")
+
+
+@pytest.mark.parametrize("broken", ["короткие", "строки"])
+def test_bad_scores_in_the_last_window_spend_no_window(broken) -> None:
+    """Ревью `648a185`: длина и значения проверялись после `checkout(SELECTION)` —
+    ошибка последнего окна тратила все предыдущие. Обычная ошибка данных, без
+    враждебного кода: все окна проверяются до расходования первого."""
+    sl = _ledger()
+    predictions = {
+        w: Prediction(fit=sl.training(w, f"обучение на {w}"), scores=_scores(sl, w)) for w in STARTS
+    }
+    bad = _scores(sl, "w2").head(1) if broken == "короткие" else pl.Series("risk", [".5"] * ROWS)
+    predictions["w2"] = Prediction(fit=predictions["w2"].fit, scores=bad)
+
+    with pytest.raises(ValueError):
+        stability_across_windows(sl, predictions, CONSTANT)
+    assert not any(sl.is_spent(w) for w in STARTS)
+    assert not sl.selections("w0") and not sl.selections("w2")
+
+
+@pytest.mark.parametrize("window", [[], {}, pl.Series([1])])
+def test_a_forged_fit_with_odd_fields_is_refused_not_crashed(window) -> None:
+    """Ревью `648a185`: поле `window` чужой записи служило ключом поиска до сверки
+    тождества — непригодное значение роняло `TypeError`. Сначала тождество."""
+    sl = _ledger()
+    forged = Fit(
+        window=window,
+        frame=pl.DataFrame(),
+        rows=1,
+        units=frozenset({"x"}),
+        labels_known_until=dt.datetime(2000, 1, 1),
+    )
+    with pytest.raises(ValueError, match="не этим журналом"):
+        _measure(sl, {"w0": forged})
+
+
+def test_a_forged_fit_is_refused_without_hashing_its_fields() -> None:
+    touched: list[str] = []
+
+    class LoudName(str):
+        def __hash__(self):
+            touched.append("__hash__")
+            return super().__hash__()
+
+    sl = _ledger()
+    forged = Fit(
+        window=LoudName("w0"),
+        frame=pl.DataFrame(),
+        rows=1,
+        units=frozenset({"x"}),
+        labels_known_until=dt.datetime(2000, 1, 1),
+    )
+    with pytest.raises(ValueError, match="не этим журналом"):
+        _measure(sl, {"w0": forged})
+    assert touched == []

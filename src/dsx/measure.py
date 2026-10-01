@@ -1011,9 +1011,12 @@ def stability_across_windows(
     повторов). Проверяется состав и время, а не число моделей: одна модель,
     обученная до самого раннего окна, проходит во всех.
 
-    Все окна проверяются до расходования первого: отказ не тратит выборки.
-    Расходует окна как выборки выбора: смотреть пооконные метрики и решать по
-    ним — это выбор, а не аудит.
+    Входы всех окон — происхождение, длина, значения, оценки правила —
+    проверяются до расходования первого: ошибка входов окна не тратит ни одной
+    выборки (ревью `648a185`: ошибка последнего окна тратила предыдущие).
+    Для проверки окна читаются как аудит — чтение ради проверок, которое их не
+    расходует. Затем окна расходуются как выборки выбора: смотреть пооконные
+    метрики и решать по ним — это выбор, а не аудит.
     """
     for window, prediction in predictions.items():
         if type(prediction) is not Prediction:
@@ -1026,20 +1029,25 @@ def stability_across_windows(
         if defects:
             raise ValueError(f"окно {window!r}: прогнозы не принимаются — " + "; ".join(defects))
 
-    per_window: dict[str, Comparison | Unmeasured] = {}
-    provenance: dict[str, str] = {}
+    prepared: dict[str, tuple[np.ndarray, ...]] = {}
     for window, prediction in predictions.items():
         scores = prediction.scores
-        frame = _require_frame(ledger.checkout(window, Purpose.SELECTION, decision))
+        frame = _require_frame(
+            ledger.checkout(window, Purpose.AUDIT, f"проверка входов: {decision}")
+        )
         if scores.len() != frame.height:
             raise ValueError(
                 f"в окне {window!r} предсказаний {scores.len():,}, а строк "
                 f"{frame.height:,}: оценки не выровнены"
             )
+        prepared[window] = _observed(frame, scores, rule.score(frame))
 
-        labels, model, baseline = _observed(frame, scores, rule.score(frame))
+    per_window: dict[str, Comparison | Unmeasured] = {}
+    provenance: dict[str, str] = {}
+    for window, (labels, model, baseline) in prepared.items():
+        ledger.select(window, decision)
         per_window[window] = _compare(
             "разрешающая способность", discrimination, model, baseline, labels
         )
-        provenance[window] = str(prediction.fit)
+        provenance[window] = str(predictions[window].fit)
     return Stability(per_window=per_window, provenance=provenance)
