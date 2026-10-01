@@ -18,6 +18,7 @@ from dsx.measure import (
     BINS,
     BaselineRule,
     Costs,
+    Prediction,
     RuleKind,
     Unmeasured,
     average_precision,
@@ -31,7 +32,7 @@ from dsx.measure import (
     stability_across_windows,
 )
 from dsx.policy import Blocked
-from dsx.samples import Extent, Purpose, SampleLedger
+from dsx.samples import Extent, Purpose, SampleLedger, Training
 
 ROWS = 4000
 
@@ -266,25 +267,57 @@ def test_segment_section_names_the_ordering_rule() -> None:
 # --- устойчивость по окнам (N7, P5) ----------------------------------------
 
 
-def _windowed_ledger(flip: bool) -> tuple[SampleLedger, dict[str, pl.Series]]:
+def _window_start(index: int) -> dt.datetime:
+    return dt.datetime(2024, 1 + 2 * index, 1)
+
+
+def _register_window(
+    sl: SampleLedger,
+    name: str,
+    index: int,
+    frame: pl.DataFrame,
+    units: frozenset[str],
+    training: Training | None = None,
+) -> None:
+    """Окно с честной обучающей частью: свои строки, метки известны за день до начала."""
+    start = _window_start(index)
+    sl.register_window(
+        name,
+        start=start,
+        extent=Extent(units=units, since=start, until=start + dt.timedelta(days=30)),
+        evaluation=units,
+        frame=frame,
+        training=training
+        or Training(
+            frame=pl.DataFrame({LABEL: [0, 1]}),
+            rows=2,
+            units=frozenset({f"{name}-обучение-0", f"{name}-обучение-1"}),
+            labels_known_until=start - dt.timedelta(days=1),
+        ),
+    )
+
+
+def _predictions(sl: SampleLedger, scores: dict[str, pl.Series]) -> dict[str, Prediction]:
+    """Своя модель на каждое окно — обучающая часть этого окна, выданная журналом."""
+    return {
+        name: Prediction(fit=sl.training(name, f"обучение на {name}"), scores=series)
+        for name, series in scores.items()
+    }
+
+
+def _windowed_ledger(flip: bool) -> tuple[SampleLedger, dict[str, Prediction]]:
     """Три окна. При flip знак превосходства в третьем меняется на обратный."""
     sl = SampleLedger()
     sl.declare_features(["signal", "risk", "noise"])
     scores: dict[str, pl.Series] = {}
     for index, name in enumerate(("w0", "w1", "w2")):
         frame = world(seed=index + 1)
-        sl.register(
-            name,
-            Extent(
-                units=frozenset(f"{name}-{i}" for i in range(frame.height)),
-                since=dt.datetime(2024, 1, 1),
-                until=dt.datetime(2024, 6, 1),
-            ),
-            frame=frame,
+        _register_window(
+            sl, name, index, frame, frozenset(f"{name}-{i}" for i in range(frame.height))
         )
         useful = frame["risk"]
         scores[name] = (1 - useful) if (flip and name == "w2") else useful
-    return sl, scores
+    return sl, _predictions(sl, scores)
 
 
 def test_steady_sign_across_windows() -> None:
@@ -937,15 +970,9 @@ def test_log_loss_keeps_small_positive_losses() -> None:
 def _windows(frames: dict[str, pl.DataFrame]) -> SampleLedger:
     sl = SampleLedger()
     sl.declare_features(["signal", "risk", "noise"])
-    for name, frame in frames.items():
-        sl.register(
-            name,
-            Extent(
-                units=frozenset(f"{name}{i}" for i in range(frame.height)),
-                since=dt.datetime(2024, 1, 1),
-                until=dt.datetime(2024, 6, 1),
-            ),
-            frame=frame,
+    for index, (name, frame) in enumerate(frames.items()):
+        _register_window(
+            sl, name, index, frame, frozenset(f"{name}{i}" for i in range(frame.height))
         )
     return sl
 
@@ -982,7 +1009,9 @@ def test_old_paths_refuse_nan_labels_before_the_cast(where) -> None:
         if where == "contrast":
             measure_contrast(ledger_with(frame), "резерв", frame["risk"], frame["noise"], "a", "b")
         else:
-            stability_across_windows(_windows({"w0": frame}), {"w0": frame["risk"]}, CONSTANT)
+            stability_across_windows(
+                sl := _windows({"w0": frame}), _predictions(sl, {"w0": frame["risk"]}), CONSTANT
+            )
 
 
 @pytest.mark.parametrize("where", ["contrast", "stability"])
@@ -994,7 +1023,9 @@ def test_old_paths_check_scores_before_converting_them(where) -> None:
         if where == "contrast":
             measure_contrast(ledger_with(frame), "резерв", bad, frame["noise"], "a", "b")
         else:
-            stability_across_windows(_windows({"w0": frame}), {"w0": bad}, CONSTANT)
+            stability_across_windows(
+                sl := _windows({"w0": frame}), _predictions(sl, {"w0": bad}), CONSTANT
+            )
 
 
 def test_a_window_without_both_classes_is_named_not_counted_as_steady() -> None:
@@ -1002,10 +1033,9 @@ def test_a_window_without_both_classes_is_named_not_counted_as_steady() -> None:
     вывод называет его."""
     world_frame = world()
     one_class = _small([0] * 50, list(np.linspace(0.1, 0.9, 50)))
+    sl = _windows({"w0": world_frame, "w1": one_class})
     stability = stability_across_windows(
-        _windows({"w0": world_frame, "w1": one_class}),
-        {"w0": world_frame["risk"], "w1": one_class["risk"]},
-        CONSTANT,
+        sl, _predictions(sl, {"w0": world_frame["risk"], "w1": one_class["risk"]}), CONSTANT
     )
 
     assert isinstance(stability.per_window["w1"], Unmeasured)
@@ -1347,7 +1377,9 @@ def test_a_series_subclass_is_refused_before_its_methods_run(series, where) -> N
         elif where == "contrast":
             measure_contrast(ledger_with(frame), "резерв", scores, frame["noise"], "a", "b")
         else:
-            stability_across_windows(_windows({"w0": frame}), {"w0": scores}, CONSTANT)
+            stability_across_windows(
+                sl := _windows({"w0": frame}), _predictions(sl, {"w0": scores}), CONSTANT
+            )
     assert _TOUCHED == []
 
 
@@ -1386,7 +1418,7 @@ def test_a_frame_subclass_is_refused_right_after_checkout(where) -> None:
         elif where == "contrast":
             measure_contrast(ledger, name, scores, plain["noise"], "a", "b")
         else:
-            stability_across_windows(ledger, {name: scores}, CONSTANT)
+            stability_across_windows(ledger, _predictions(ledger, {name: scores}), CONSTANT)
     assert _TOUCHED == []
 
 

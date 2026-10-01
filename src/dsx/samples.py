@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated
 
@@ -85,6 +86,52 @@ class Access(BaseModel):
         return f"{self.sample} / {self.purpose.value}: {self.decision}"
 
 
+@dataclass(frozen=True)
+class Training:
+    """Обучающая часть окна, как её передаёт журналу прогон.
+
+    Журнал не знает схемы данных, поэтому единицы решения и момент знания меток
+    считает прогон, у которого схема есть.
+    """
+
+    frame: object
+    rows: int
+    units: frozenset[str]
+    labels_known_until: dt.datetime
+    """Момент, к которому известны ВСЕ метки обучающих строк."""
+
+
+@dataclass(frozen=True, eq=False)
+class Fit:
+    """Запись обучения: обучающая часть окна, выданная журналом.
+
+    Класс 19 журнала повторов: N7 принимал прогнозы по окнам как объявление их
+    происхождения, и в кейсах 3–5 мерил ранние окна моделью, обученной на их же
+    строках. Запись выдаёт только `SampleLedger.training`, тем же действием,
+    что и кадр для обучения; измерение по окнам сверяет её с каждым окном.
+    Сравнение — по тождеству: запись, которую журнал не выдавал, не принимается.
+    """
+
+    window: str
+    frame: object
+    rows: int
+    units: frozenset[str]
+    labels_known_until: dt.datetime
+
+    def __str__(self) -> str:
+        return (
+            f"обучающая часть окна {self.window}: {self.rows:,} строк, "
+            f"метки известны до {self.labels_known_until:%Y-%m-%d %H:%M}"
+        )
+
+
+@dataclass(frozen=True)
+class _Window:
+    start: dt.datetime
+    evaluation: frozenset[str]
+    fit: Fit | None
+
+
 class SampleLedger:
     """Учёт обращений к выборкам (P1, P2, P7) и того, чем питалась модель (P11)."""
 
@@ -94,6 +141,8 @@ class SampleLedger:
         self._extents: dict[str, Extent] = {}
         self._frames: dict[str, object] = {}
         self._features: tuple[str, ...] | None = None
+        self._windows: dict[str, _Window] = {}
+        self._issued: set[str] = set()
         self._overrides = ledger or OverrideLedger()
 
     # --- регистрация ------------------------------------------------------
@@ -117,6 +166,93 @@ class SampleLedger:
 
     def extent(self, sample: str) -> Extent | None:
         return self._extents.get(sample)
+
+    def register_window(
+        self,
+        name: str,
+        *,
+        start: dt.datetime,
+        extent: Extent | None,
+        evaluation: frozenset[str],
+        frame: object,
+        training: Training | None,
+    ) -> None:
+        """Объявить оценочное окно: общий состав, оценочную часть и обучающую.
+
+        Общий состав (обучение и оценка вместе) по-прежнему служит независимости
+        итогового измерения. Оценочная часть и начало окна нужны измерению по
+        окнам: прогнозы окна принимаются, только если модель училась не на его
+        строках и не на метках, известных после его начала (DS-010).
+
+        Обучающая часть переходит к журналу, как резерв: получить её можно только
+        через `training`, который записывает обращение и выдаёт запись обучения.
+        `training=None` — обучающая часть пуста.
+        """
+        self.register(name, extent, frame)
+        fit = (
+            None
+            if training is None
+            else Fit(
+                window=name,
+                frame=training.frame,
+                rows=training.rows,
+                units=training.units,
+                labels_known_until=training.labels_known_until,
+            )
+        )
+        self._windows[name] = _Window(start=start, evaluation=evaluation, fit=fit)
+
+    def training(self, window: str, decision: str) -> Fit:
+        """Выдать обучающую часть окна, записав обучение тем же действием.
+
+        Единственный способ получить кадр для обучения и запись, без которой
+        измерение по окнам прогнозы не примет. Прежде обучающая часть лежала
+        публичным полем `Part.train`, а `fit(...)` было объявлением, которое
+        ничего не связывало: кейсы 3–5 учились на последнем окне и мерили все.
+        """
+        self._require_known(window)
+        if window not in self._windows:
+            raise Blocked("P2", f"{window!r} не зарегистрирована как окно: обучающей части нет")
+        fit = self._windows[window].fit
+        if fit is None:
+            raise ValueError(
+                f"обучающая часть окна {window!r} пуста: учить нечему, и момент, к "
+                "которому известны метки, не определён"
+            )
+        self.fit(window, decision)
+        self._issued.add(window)
+        return fit
+
+    def provenance_defects(self, window: str, fit: object) -> list[str]:
+        """Почему прогнозы окна, полученные по записи `fit`, не принимаются.
+
+        Проверяется состав и время, а не число моделей. Пустой список — запись
+        выдана этим журналом, строки обучения не пересекают оценочную часть окна
+        и все метки обучения известны строго до его начала — так же строго, как
+        `split_by_windows` отбирает обучение окна.
+        """
+        if window not in self._windows:
+            return [f"{window!r} не зарегистрирована как окно: начало и состав оценки неизвестны"]
+        if type(fit) is not Fit:
+            return ["прогнозы без записи обучения, выданной журналом: происхождение неизвестно"]
+        issuer = self._windows.get(fit.window)
+        if issuer is None or issuer.fit is not fit or fit.window not in self._issued:
+            return ["запись обучения выдана не этим журналом: происхождение не проверяется"]
+
+        target = self._windows[window]
+        defects = []
+        shared = fit.units & target.evaluation
+        if shared:
+            defects.append(
+                f"модель училась на {len(shared):,} из {len(target.evaluation):,} оценочных "
+                f"единиц решения окна ({fit})"
+            )
+        if fit.labels_known_until >= target.start:
+            defects.append(
+                f"модель училась на метках, известных до {fit.labels_known_until:%Y-%m-%d %H:%M}, "
+                f"а окно начинается {target.start:%Y-%m-%d %H:%M}: метки из будущего окна"
+            )
+        return defects
 
     # --- чем питалась модель (P11) ---------------------------------------
 

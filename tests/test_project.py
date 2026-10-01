@@ -140,6 +140,35 @@ def test_run_produces_split_reserve_and_report(tmp_path: Path) -> None:
     assert (tmp_path / "report.md").exists()
 
 
+def test_training_parts_move_to_the_ledger() -> None:
+    """DS-010: обучающая часть окна, как резерв, уходит в журнал и выдаётся только
+    вместе с записью обучения; число строк остаётся для отчёта."""
+    result = run(form(), BY_ID["clean-baseline"].build().main)
+
+    assert all(part.train is None for part in result.split.parts)
+    for part in result.split.parts:
+        fit = result.samples.training(part.name, f"обучение на {part.name}")
+        assert fit.rows == fit.frame.height == result.split.train_rows[part.name]
+        assert fit.labels_known_until < part.window.start
+        assert result.samples.provenance_defects(part.name, fit) == []
+    assert "обучение  2,068" in result.summary()
+
+
+def test_the_last_window_training_is_refused_for_the_first_window() -> None:
+    """Класс 19 на настоящем сплите: обучение последнего окна содержит оценочные
+    строки первого, и их метки известны после его начала."""
+    result = run(form(), BY_ID["clean-baseline"].build().main)
+    first, last = result.split.parts[0].name, result.split.parts[-1].name
+
+    defects = result.samples.provenance_defects(
+        first, result.samples.training(last, "одна модель на последнем окне")
+    )
+
+    assert len(defects) == 2
+    assert "165 из 303 оценочных" in defects[0]
+    assert "метки из будущего окна" in defects[1]
+
+
 def test_clean_world_raises_no_blocking_signals() -> None:
     result = run(form(), BY_ID["clean-baseline"].build().main)
 

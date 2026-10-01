@@ -1,0 +1,216 @@
+"""DS-010: происхождение прогнозов в измерении по окнам (класс 19 журнала повторов).
+
+Кейсы 3–5 мерили ранние окна моделью, обученной на обучающей части последнего,
+и N7 объявил знак устойчивым. Проверяется состав и время, а не число моделей.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+
+import numpy as np
+import polars as pl
+import pytest
+
+from dsx.label import LABEL
+from dsx.measure import BaselineRule, Prediction, RuleKind, stability_across_windows
+from dsx.samples import Extent, Fit, SampleLedger, Training
+
+CONSTANT = BaselineRule(kind=RuleKind.CONSTANT, constant=0.3)
+STARTS = {
+    "w0": dt.datetime(2024, 1, 1),
+    "w1": dt.datetime(2024, 3, 1),
+    "w2": dt.datetime(2024, 5, 1),
+}
+ROWS = 200
+
+
+def _evaluation(name: str) -> frozenset[str]:
+    return frozenset(f"{name}-{i}" for i in range(ROWS))
+
+
+def _frame(seed: int) -> pl.DataFrame:
+    rng = np.random.default_rng(seed)
+    risk = rng.uniform(0.05, 0.95, ROWS)
+    return pl.DataFrame(
+        {LABEL: (rng.uniform(size=ROWS) < risk).astype(int), "signal": risk, "risk": risk}
+    )
+
+
+def _training(units: frozenset[str], known_until: dt.datetime) -> Training:
+    return Training(
+        frame=pl.DataFrame({LABEL: [0, 1]}),
+        rows=len(units),
+        units=units,
+        labels_known_until=known_until,
+    )
+
+
+def _ledger(trainings: dict[str, Training | None] | None = None) -> SampleLedger:
+    """Три окна с расширяющимся обучением, как строит `split_by_windows`.
+
+    Обучение окна — строки, чьи метки известны до его начала: у w1 и w2 в него
+    входят оценочные строки ранних окон, и их метки известны уже после начала
+    этих окон.
+    """
+    honest = {
+        "w0": _training(frozenset({"история-0", "история-1"}), STARTS["w0"] - dt.timedelta(days=1)),
+        "w1": _training(
+            frozenset({"история-0", "история-1"}) | _evaluation("w0"),
+            STARTS["w1"] - dt.timedelta(days=1),
+        ),
+        "w2": _training(
+            frozenset({"история-0", "история-1"}) | _evaluation("w0") | _evaluation("w1"),
+            STARTS["w2"] - dt.timedelta(days=1),
+        ),
+    }
+    honest.update(trainings or {})
+    sl = SampleLedger()
+    sl.declare_features(["signal", "risk"])
+    for index, (name, start) in enumerate(STARTS.items()):
+        units = _evaluation(name)
+        sl.register_window(
+            name,
+            start=start,
+            extent=Extent(units=units, since=start, until=start + dt.timedelta(days=50)),
+            evaluation=units,
+            frame=_frame(index + 1),
+            training=honest[name],
+        )
+    return sl
+
+
+def _scores(sl: SampleLedger, name: str) -> pl.Series:
+    return sl._frames[name]["risk"]  # noqa: SLF001 — тестовые оценки: сам риск
+
+
+def _measure(sl: SampleLedger, fits: dict[str, Fit]):
+    return stability_across_windows(
+        sl, {w: Prediction(fit=f, scores=_scores(sl, w)) for w, f in fits.items()}, CONSTANT
+    )
+
+
+def test_a_model_per_window_trained_on_its_own_part_passes() -> None:
+    sl = _ledger()
+    result = _measure(sl, {w: sl.training(w, f"обучение на {w}") for w in STARTS})
+
+    assert set(result.per_window) == set(STARTS)
+    assert "обучающая часть окна w1" in result.report_section()
+
+
+def test_one_model_trained_before_the_earliest_window_passes_everywhere() -> None:
+    """Число моделей не проверяется: честная общая модель проходит."""
+    sl = _ledger()
+    earliest = sl.training("w0", "одна модель на самом раннем окне")
+    result = _measure(sl, dict.fromkeys(STARTS, earliest))
+
+    assert set(result.per_window) == set(STARTS)
+    assert set(result.provenance.values()) == {str(earliest)}
+
+
+def test_one_model_trained_on_the_last_window_is_refused_before_spending() -> None:
+    """Кейсы 3–5: модель с последнего окна мерила все. Отказ называет окно, число
+    общих строк и даты; ни одно окно не израсходовано."""
+    sl = _ledger()
+    last = sl.training("w2", "одна модель на последнем окне")
+
+    with pytest.raises(ValueError) as refused:
+        _measure(sl, dict.fromkeys(STARTS, last))
+
+    message = str(refused.value)
+    assert "окно 'w0'" in message
+    assert f"{ROWS:,} из {ROWS:,} оценочных" in message
+    assert "метки из будущего окна" in message
+    assert not any(sl.is_spent(w) for w in STARTS)
+
+
+def test_future_labels_without_shared_rows_are_refused() -> None:
+    """Строки не пересекаются, но метки обучения известны после начала окна."""
+    later = _training(frozenset({"чужие-0", "чужие-1"}), STARTS["w1"] - dt.timedelta(days=1))
+    sl = _ledger({"w1": later})
+    fit = sl.training("w1", "модель на обучении w1")
+
+    assert sl.provenance_defects("w1", fit) == []
+    defects = sl.provenance_defects("w0", fit)
+    assert len(defects) == 1 and "метки из будущего окна" in defects[0]
+    with pytest.raises(ValueError, match="метки из будущего"):
+        _measure(sl, {"w0": fit})
+
+
+def test_labels_known_exactly_at_the_start_are_refused() -> None:
+    """Строго, как `split_by_windows`: обучение окна — метки, известные ДО начала."""
+    edge = _training(frozenset({"граница"}), STARTS["w0"])
+    sl = _ledger({"w0": edge})
+
+    with pytest.raises(ValueError, match="метки из будущего"):
+        _measure(sl, {"w0": sl.training("w0", "обучение на w0")})
+
+
+def test_scores_without_a_fit_are_refused() -> None:
+    sl = _ledger()
+    with pytest.raises(ValueError, match="ожидается Prediction"):
+        stability_across_windows(sl, {"w0": _scores(sl, "w0")}, CONSTANT)
+    assert not sl.is_spent("w0")
+
+
+def test_a_fit_the_ledger_did_not_issue_is_refused() -> None:
+    sl = _ledger()
+    forged = Fit(
+        window="w0",
+        frame=pl.DataFrame(),
+        rows=1,
+        units=frozenset({"x"}),
+        labels_known_until=dt.datetime(2000, 1, 1),
+    )
+    foreign = _ledger().training("w0", "обучение в другом журнале")
+
+    for fit in (forged, foreign):
+        with pytest.raises(ValueError, match="не этим журналом"):
+            _measure(sl, {"w0": fit})
+
+
+def test_a_fit_not_yet_handed_out_is_refused() -> None:
+    """Запись, взятая из журнала мимо `training`, обращения не записала."""
+    sl = _ledger()
+    hidden = sl._windows["w0"].fit  # noqa: SLF001 — обход, который должен не пройти
+
+    with pytest.raises(ValueError, match="не этим журналом"):
+        _measure(sl, {"w0": hidden})
+
+
+def test_subclasses_of_prediction_and_fit_are_refused() -> None:
+    class LoudPrediction(Prediction):
+        pass
+
+    class LoudFit(Fit):
+        pass
+
+    sl = _ledger()
+    fit = sl.training("w0", "обучение на w0")
+    with pytest.raises(ValueError, match="ожидается Prediction"):
+        stability_across_windows(
+            sl, {"w0": LoudPrediction(fit=fit, scores=_scores(sl, "w0"))}, CONSTANT
+        )
+    loud = LoudFit(
+        window="w0",
+        frame=fit.frame,
+        rows=fit.rows,
+        units=fit.units,
+        labels_known_until=fit.labels_known_until,
+    )
+    with pytest.raises(ValueError, match="без записи обучения"):
+        _measure(sl, {"w0": loud})
+
+
+def test_an_empty_training_part_is_refused_when_handed_out() -> None:
+    sl = _ledger()
+    sl.register_window(
+        "пустое",
+        start=dt.datetime(2023, 1, 1),
+        extent=None,
+        evaluation=frozenset({"п-0"}),
+        frame=_frame(9),
+        training=None,
+    )
+    with pytest.raises(ValueError, match="пуста"):
+        sl.training("пустое", "обучение")

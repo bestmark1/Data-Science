@@ -35,6 +35,8 @@ from dsx.split import (
     purge_overlapping_train,
     reserved_extent,
     split_by_windows,
+    training_of,
+    units_of,
 )
 from dsx.task import require_supported
 from dsx.windows import unverified
@@ -102,7 +104,8 @@ class Result:
         lines = [f"решений: {self.world.main.height:,}"]
         for part in self.split.parts:
             lines.append(
-                f"  {part.name}: обучение {part.train.height:6,}  оценка {part.evaluate.height:5,}"
+                f"  {part.name}: обучение {self.split.train_rows[part.name]:6,}  "
+                f"оценка {part.evaluate.height:5,}"
             )
         immature = self.split.reserved_immature
         lines.append(
@@ -201,10 +204,22 @@ def run(
     )
 
     samples = SampleLedger(overrides)
+    split.shared_objects = entity_overlap(split.parts, world)
     for part in split.parts:
         # Оценочная часть окна отдаётся журналу: смотреть пооконные метрики и
-        # решать по ним — это выбор, и он обязан расходовать выборку.
-        samples.register(part.name, extent_of(part, world), frame=part.evaluate)
+        # решать по ним — это выбор, и он обязан расходовать выборку. Обучающая
+        # часть — тоже, и снимается с результата, как резерв: публичное поле
+        # позволяло учить модель последнего окна и мерить ею все (класс 19).
+        samples.register_window(
+            part.name,
+            start=part.window.start,
+            extent=extent_of(part, world),
+            evaluation=units_of(part.evaluate, world),
+            frame=part.evaluate,
+            training=training_of(part, world),
+        )
+        split.train_rows[part.name] = part.train.height if part.train is not None else 0
+        part.train = None
 
     # Резерв передаётся журналу ВМЕСТЕ С ДАННЫМИ и снимается с результата
     # сплита. После этого получить его можно только через checkout, который
@@ -246,5 +261,8 @@ def run(
 
 
 def objects_across_splits(result: Result) -> dict[str, int]:
-    """Объекты по обе стороны сплита. Для долгоживущих это норма, не находка."""
-    return entity_overlap(result.split.parts, result.world)
+    """Объекты по обе стороны сплита. Для долгоживущих это норма, не находка.
+
+    Посчитаны в прогоне до передачи обучающих частей журналу.
+    """
+    return dict(result.split.shared_objects)
