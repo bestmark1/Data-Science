@@ -1177,6 +1177,54 @@ def test_a_subarray_dtype_is_refused() -> None:
         brier_score(scores, np.array([0, 1] * 40))
 
 
+class _ClipOnCast(np.ndarray):
+    """Подкласс, исправляющий значения в собственном `astype`."""
+
+    def astype(self, dtype, *args, **kwargs):
+        return np.clip(self.view(np.ndarray), 0, 1).astype(dtype, *args, **kwargs)
+
+
+class _RewriteOnFinalize(np.ndarray):
+    """Подкласс, переписывающий источник в хуке при приведении float32 → float64."""
+
+    def __array_finalize__(self, source):
+        if source is not None and self.dtype == np.float64 and source.dtype == np.float32:
+            source[...] = np.round(1 - source)
+
+
+@pytest.mark.parametrize("metric", METRICS)
+@pytest.mark.parametrize("where", ["scores", "labels"])
+@pytest.mark.parametrize("subclass", [_ClipOnCast, _RewriteOnFinalize, np.memmap, np.recarray])
+def test_an_ndarray_subclass_is_refused_before_its_code_runs(metric, where, subclass) -> None:
+    """Ревью `7dc1568`: `isinstance` пропускал подклассы, и приведение вызывало их
+    `astype` и `__array_finalize__`. Оценки [-0.1, 1.1] обрезались до [0, 1] —
+    Brier 0 вместо отказа; хук переписывал исходные [0.8, 0.2] в [0, 1]. Принимается
+    ровно `np.ndarray`: безвредный подкласс неотличим от вредного, пока не исполнен."""
+    values = np.tile(np.array([0.8, 0.2], dtype=np.float32), 40)
+    labels = np.tile([0, 1], 40)
+    before = values.copy()
+    array = values.view(subclass)
+    scores, labels = (array, labels) if where == "scores" else (values, labels.view(subclass))
+
+    with pytest.raises(ValueError, match="подкласс"):
+        metric(scores, labels)
+    assert np.array_equal(values, before)
+
+
+def test_an_ndarray_subclass_is_refused_in_a_comparison() -> None:
+    from dsx.measure import _compare
+
+    scores = np.tile([-0.1, 1.1], 40).view(_ClipOnCast)
+    with pytest.raises(ValueError, match="подкласс"):
+        _compare("Brier", brier_score, scores, np.full(80, 0.5), np.tile([0, 1], 40))
+
+
+def test_a_plain_view_of_a_subclass_is_measured() -> None:
+    """Отказ не отнимает данных: вызывающий получает обычный массив явно."""
+    scores = np.array([0.0, 1.0]).view(np.memmap).view(np.ndarray)
+    assert brier_score(scores, np.array([0, 1])) == 0.0
+
+
 def test_dtype_metadata_does_not_change_the_numbers() -> None:
     scores = np.array([0.0, 1.0], dtype=np.dtype(np.float64, metadata={"источник": "x"}))
     assert brier_score(scores, np.array([0, 1])) == 0.0

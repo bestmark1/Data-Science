@@ -189,6 +189,15 @@ def _exact_real(what: str, value: object) -> np.ndarray:
             f"{what}: ожидается np.ndarray, получено {type(value).__name__} — "
             "последовательность приводилась бы к общему типу с потерей"
         )
+    if type(value) is not np.ndarray:
+        # Десятое ревью (`7dc1568`): `isinstance` пропускал подклассы, а приведение
+        # исполняет их код — свой `astype` обрезал оценки [-0.1, 1.1] до [0, 1],
+        # `__array_finalize__` переписывал источник. Безвредный подкласс неотличим
+        # от вредного, пока его код не исполнен: допускается ровно `np.ndarray`.
+        raise ValueError(
+            f"{what}: подкласс np.ndarray {type(value).__name__} — его методы могли бы "
+            "изменить значения при приведении; передайте обычный np.ndarray"
+        )
     array = value
     if array.dtype.fields is not None or array.dtype.subdtype is not None:
         # Девятое ревью (`e955c8b`): у структурного dtype с основой float64 вид `f`
