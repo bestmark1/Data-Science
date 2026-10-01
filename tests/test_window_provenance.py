@@ -14,6 +14,7 @@ import pytest
 
 from dsx.label import LABEL
 from dsx.measure import BaselineRule, Prediction, RuleKind, stability_across_windows
+from dsx.policy import Blocked
 from dsx.samples import Extent, Fit, SampleLedger, Training
 
 CONSTANT = BaselineRule(kind=RuleKind.CONSTANT, constant=0.3)
@@ -269,3 +270,53 @@ def test_a_forged_fit_is_refused_without_hashing_its_fields() -> None:
     with pytest.raises(ValueError, match="не этим журналом"):
         _measure(sl, {"w0": forged})
     assert touched == []
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("rows", []),
+        ("rows", 0),
+        ("rows", True),
+        ("units", frozenset()),
+        ("units", frozenset({1})),
+        ("units", {"a"}),
+        ("labels_known_until", "2024-01-01"),
+        ("labels_known_until", dt.datetime(2023, 1, 1, tzinfo=dt.UTC)),
+    ],
+)
+def test_training_metadata_is_checked_at_registration(field, value) -> None:
+    """Ревью `ab5d402`: `rows=[]` проходил регистрацию и ронял форматирование
+    происхождения ПОСЛЕ расходования всех окон. Данные обучающей части
+    проверяются, когда журнал их принимает."""
+    fields = {
+        "frame": pl.DataFrame({LABEL: [0, 1]}),
+        "rows": 2,
+        "units": frozenset({"a", "b"}),
+        "labels_known_until": dt.datetime(2023, 1, 1),
+    }
+    fields[field] = value
+    with pytest.raises(ValueError, match="обучающая часть окна"):
+        _ledger({"w2": Training(**fields)})
+
+
+def test_a_window_already_measured_spends_no_other_window() -> None:
+    """Ревью `ab5d402`: P7 известен заранее, а отказ по второму окну наступал
+    после расходования первого. Допустимость выбора проверяется до расхода."""
+    sl = _ledger()
+    fits = {w: sl.training(w, f"обучение на {w}") for w in ("w0", "w1")}
+    sl.measure("w1", "итоговое измерение на w1")
+
+    with pytest.raises(Blocked, match="P7"):
+        _measure(sl, fits)
+    assert not sl.selections("w0") and not sl.selections("w1")
+
+
+def test_an_override_of_p7_still_lets_the_windows_be_spent() -> None:
+    sl = _ledger()
+    fits = {w: sl.training(w, f"обучение на {w}") for w in ("w0", "w1")}
+    sl.measure("w1", "итоговое измерение на w1")
+    sl._overrides.override("P7", reason="проверка механизма", author="тест")  # noqa: SLF001
+
+    _measure(sl, fits)
+    assert sl.selections("w0") and sl.selections("w1")

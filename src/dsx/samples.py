@@ -132,6 +132,37 @@ class _Window:
     fit: Fit | None
 
 
+def _require_window_metadata(
+    name: str, start: object, evaluation: object, training: object
+) -> None:
+    """Проверить то, что журнал принимает об окне, когда он это принимает.
+
+    Ревью `ab5d402`: `Training(rows=[])` проходил регистрацию, и текст
+    происхождения падал ПОСЛЕ расходования всех окон. Типы — ровно свои: время
+    — `datetime` с той же привязкой к поясу, что начало окна, иначе сравнение
+    упало бы при проверке происхождения.
+    """
+    if type(start) is not dt.datetime:
+        raise ValueError(f"окно {name!r}: начало — не datetime")
+    if type(evaluation) is not frozenset or any(type(u) is not str for u in evaluation):
+        raise ValueError(f"окно {name!r}: оценочный состав — не frozenset строк")
+    if training is None:
+        return
+    where = f"обучающая часть окна {name!r}"
+    if type(training) is not Training:
+        raise ValueError(f"{where}: ожидается Training")
+    if type(training.rows) is not int or training.rows < 1:
+        raise ValueError(f"{where}: число строк — не целое больше нуля; пустая часть — None")
+    units = training.units
+    if type(units) is not frozenset or not units or any(type(u) is not str for u in units):
+        raise ValueError(f"{where}: единицы решения — не непустой frozenset строк")
+    known = training.labels_known_until
+    if type(known) is not dt.datetime:
+        raise ValueError(f"{where}: момент знания меток — не datetime")
+    if (known.tzinfo is None) != (start.tzinfo is None):
+        raise ValueError(f"{where}: момент знания меток и начало окна по-разному привязаны к поясу")
+
+
 class SampleLedger:
     """Учёт обращений к выборкам (P1, P2, P7) и того, чем питалась модель (P11)."""
 
@@ -188,6 +219,7 @@ class SampleLedger:
         через `training`, который записывает обращение и выдаёт запись обучения.
         `training=None` — обучающая часть пуста.
         """
+        _require_window_metadata(name, start, evaluation, training)
         self.register(name, extent, frame)
         fit = (
             None
@@ -354,6 +386,17 @@ class SampleLedger:
         После итогового измерения любой новый выбор требует свежей выборки:
         протокол, изменённый после просмотра метрик, обесценивает измерение (P7).
         """
+        self.require_selectable(sample)
+        self._accesses.append(Access(sample=sample, purpose=Purpose.SELECTION, decision=decision))
+
+    def require_selectable(self, sample: str) -> None:
+        """Отказать, если выбор по выборке запрещён, — ничего не записывая.
+
+        Нужен тому, кто расходует несколько выборок разом: ревью `ab5d402`
+        показало, что отказ P7 по второму окну наступал после расходования
+        первого, хотя был известен заранее. Обход P7 действует так же, как в
+        `select`: `enforce` ничего не записывает.
+        """
         self._require_known(sample)
         if self.was_measured(sample):
             self._overrides.enforce(
@@ -361,7 +404,6 @@ class SampleLedger:
                 f"на выборке {sample!r} уже проведено итоговое измерение; "
                 "решение, принятое после просмотра метрик, требует свежей выборки",
             )
-        self._accesses.append(Access(sample=sample, purpose=Purpose.SELECTION, decision=decision))
 
     def measure(self, sample: str, decision: str = "итоговая оценка") -> None:
         """Зафиксировать итоговое измерение.
