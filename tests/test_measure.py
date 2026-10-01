@@ -1136,6 +1136,52 @@ def test_an_integer_alias_passes_a_comparison() -> None:
     assert not isinstance(result, Unmeasured) and result.model == 0.0
 
 
+def _structured(values: list, base, field: str) -> np.ndarray:
+    """Структурный массив поверх числовой основы: вид и размер — как у основы."""
+    layout = [(field, np.dtype(base).newbyteorder(">"))]
+    array = np.zeros(len(values), dtype=np.dtype((base, layout)))
+    array[field] = values
+    return array
+
+
+@pytest.mark.parametrize("metric", METRICS)
+@pytest.mark.parametrize("where", ["scores", "labels"])
+def test_a_structured_array_is_refused_not_stripped(metric, where) -> None:
+    """Ревью `e955c8b`: структурный dtype с основой float64 имеет вид `f` и размер 8,
+    как float64. Приведение снимало поля и считало по основе: оценки поля [0, 1, ...]
+    давали Brier 0.5 вместо 0. Выбор поля — действие вызывающего, не измерения."""
+    values = [0, 1] * 40
+    if where == "scores":
+        scores = _structured([float(v) for v in values], np.float64, "score")
+        labels = np.array(values)
+    else:
+        scores, labels = np.array(values, dtype=np.float64), _structured(values, np.int64, "label")
+    assert (scores.dtype.kind, scores.dtype.itemsize) in {("f", 8), ("i", 8)}
+
+    with pytest.raises(ValueError, match="структурный"):
+        metric(scores, labels)
+
+
+def test_a_structured_array_is_refused_in_a_comparison() -> None:
+    from dsx.measure import _compare
+
+    scores = _structured([0.0, 1.0] * 40, np.float64, "score")
+    with pytest.raises(ValueError, match="структурный"):
+        _compare("Brier", brier_score, scores, np.full(80, 0.5), np.array([0, 1] * 40))
+
+
+def test_a_subarray_dtype_is_refused() -> None:
+    """Подмассивный dtype numpy разворачивает в лишнее измерение — отказ по форме."""
+    scores = np.zeros(80, dtype=np.dtype((np.float64, (1,))))
+    with pytest.raises(ValueError):
+        brier_score(scores, np.array([0, 1] * 40))
+
+
+def test_dtype_metadata_does_not_change_the_numbers() -> None:
+    scores = np.array([0.0, 1.0], dtype=np.dtype(np.float64, metadata={"источник": "x"}))
+    assert brier_score(scores, np.array([0, 1])) == 0.0
+
+
 @pytest.mark.parametrize("dtype", ["float16", "float32", ">f8", "<i4", "bool", "uint8"])
 def test_listed_numpy_types_still_pass(dtype) -> None:
     scores = np.array([0, 1]).astype(dtype)
