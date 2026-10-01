@@ -504,10 +504,16 @@ class Verdict:
             f"- {self.ranking}",
             f"- {self.calibration}",
         ]
+        # Доля класса и польза «всегда» не определены только при n = 0: метки уже
+        # проверены на 0 и 1. Ревью `22eebc0`: отчёт печатал их как `nan`, а
+        # «никогда 0» — как измеренный ноль.
+        undefined = "не определено — нет строк с наблюдаемым исходом"
         if self.precision is not None:
             lines += [
                 f"- доля класса {self.prevalence:.4f} — PR-AUC постоянной оценки и ориентир "
-                "для случайного ранжирования",
+                "для случайного ранжирования"
+                if np.isfinite(self.prevalence)
+                else f"- доля класса: {undefined}",
                 f"- {self.precision}",
             ]
         lines += [f"- {c}" for c in (self.brier, self.log_loss) if c is not None]
@@ -526,6 +532,8 @@ class Verdict:
             lines.append(
                 f"- чистая польза при том же пороге: действовать всегда {self.treat_all:+.4f}, "
                 "никогда 0"
+                if np.isfinite(self.treat_all)
+                else f"- чистая польза стратегий «всегда» и «никогда»: {undefined}"
             )
         lines += ["", self.statement()]
         return "\n".join(lines)

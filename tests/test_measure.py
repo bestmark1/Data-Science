@@ -606,6 +606,27 @@ def test_the_report_names_prevalence_and_missing_costs() -> None:
     assert "Brier" in section and "log loss" in section
 
 
+@pytest.mark.parametrize("costs", [None, Costs(false_positive=1, false_negative=3)])
+def test_a_report_without_observed_outcomes_prints_no_nan(costs) -> None:
+    """Ревью `22eebc0`: столбец исхода целиком `pl.Null` законен, а после отбора
+    наблюдаемых строк n = 0 — отчёт печатал «доля класса nan» и «действовать
+    всегда +nan, никогда 0»: неопределённое выглядело измеренным, а «никогда»
+    при n = 0 — измеренным нулём."""
+    frame = _frame_with(pl.Series([None, None], dtype=pl.Null), pl.Series("risk", [0.25, 0.75]))
+    section = measure_against_baseline(
+        ledger_with(frame), "резерв", frame["risk"], CONSTANT, costs=costs
+    ).report_section()
+
+    assert "nan" not in section.lower()
+    assert "доля класса: не определено — нет строк с наблюдаемым исходом" in section
+    if costs is not None:
+        assert (
+            "чистая польза стратегий «всегда» и «никогда»: не определено — "
+            "нет строк с наблюдаемым исходом"
+        ) in section
+        assert "никогда 0" not in section
+
+
 def test_the_report_with_costs_shows_the_threshold_and_the_references() -> None:
     frame = world()
     section = measure_against_baseline(
