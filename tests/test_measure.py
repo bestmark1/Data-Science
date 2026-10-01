@@ -1219,6 +1219,124 @@ def test_an_ndarray_subclass_is_refused_in_a_comparison() -> None:
         _compare("Brier", brier_score, scores, np.full(80, 0.5), np.tile([0, 1], 40))
 
 
+_TOUCHED: list[str] = []
+"""Журнал обращений к коду входного объекта: отказ обязан наступить без них."""
+
+
+class _ChangesOnClass(np.ndarray):
+    """Подменённый `__class__`: `isinstance` читает его, когда тип не совпал."""
+
+    @property
+    def __class__(self):
+        _TOUCHED.append("__class__")
+        self.view(np.ndarray)[...] = 0
+        return np.ndarray
+
+
+class _SpyMeta(type):
+    """Метакласс, исполняющий код при любом обращении к атрибуту класса."""
+
+    def __getattribute__(cls, name):
+        _TOUCHED.append(name)
+        return super().__getattribute__(name)
+
+
+class _SpyArray(np.ndarray, metaclass=_SpyMeta):
+    pass
+
+
+class _SpyObject(metaclass=_SpyMeta):
+    pass
+
+
+def _hostile(kind: str, raw: np.ndarray) -> object:
+    return {
+        "class": lambda: raw.view(_ChangesOnClass),
+        "meta-array": lambda: raw.view(_SpyArray),
+        "meta-object": lambda: _SpyObject(),
+    }[kind]()
+
+
+@pytest.mark.parametrize("metric", METRICS)
+@pytest.mark.parametrize("where", ["scores", "labels"])
+@pytest.mark.parametrize("kind", ["class", "meta-array", "meta-object"])
+def test_a_hostile_input_is_refused_without_running_its_code(metric, where, kind) -> None:
+    """Ревью `c53a247`: `isinstance` стоял до точной проверки и читал подменённый
+    `__class__` — его getter обнулял исходные [0.8, 0.2] до отказа; имя типа в
+    сообщении вызывало `__getattribute__` метакласса. Тип берётся `type()` первым
+    действием, имя — дескриптором самого `type`."""
+    raw = np.array([0.8, 0.2] * 40) if where == "scores" else np.array([0, 1] * 40)
+    before = raw.copy()
+    hostile = _hostile(kind, raw)
+    _TOUCHED.clear()
+    scores = hostile if where == "scores" else np.array([0.8, 0.2] * 40)
+    labels = hostile if where == "labels" else np.array([0, 1] * 40)
+
+    with pytest.raises(ValueError):
+        metric(scores, labels)
+    assert _TOUCHED == [] and np.array_equal(raw, before)
+
+
+@pytest.mark.parametrize("where", ["model", "baseline", "labels"])
+def test_a_hostile_input_is_refused_in_a_comparison(where) -> None:
+    from dsx.measure import _compare
+
+    inputs = {"model": np.array([0.8, 0.2] * 40), "baseline": np.full(80, 0.5)}
+    inputs["labels"] = np.array([0, 1] * 40)
+    raw = inputs[where]
+    before = raw.copy()
+    inputs[where] = raw.view(_ChangesOnClass)
+    _TOUCHED.clear()
+
+    with pytest.raises(ValueError):
+        _compare("Brier", brier_score, inputs["model"], inputs["baseline"], inputs["labels"])
+    assert _TOUCHED == [] and np.array_equal(raw, before)
+
+
+class _SeriesClipOnFilter(pl.Series):
+    def filter(self, *args, **kwargs):
+        return super().filter(*args, **kwargs).clip(0, 1)
+
+
+class _SeriesClipOnCast(pl.Series):
+    def cast(self, *args, **kwargs):
+        return super().cast(*args, **kwargs).clip(0, 1)
+
+
+class _SeriesSpiesOnLength(pl.Series):
+    def len(self):
+        _TOUCHED.append("len")
+        return super().len()
+
+
+@pytest.mark.parametrize("series", [_SeriesClipOnFilter, _SeriesClipOnCast, _SeriesSpiesOnLength])
+@pytest.mark.parametrize("where", ["baseline", "contrast", "stability"])
+def test_a_series_subclass_is_refused_before_its_methods_run(series, where) -> None:
+    """Ревью `c53a247`: подкласс `pl.Series` переопределял `filter` или `cast`,
+    оценки [-0.1, 1.1] становились [0, 1] и уходили в numpy обычным массивом —
+    «модель лучше» вместо «вне [0, 1]»; `filter`, отдающий 1 − оценки, менял знак
+    N7. Допускается ровно `pl.Series`, и проверка идёт до `len` и `filter`."""
+    scores = series("risk", [-0.1, 1.1] * 40)
+    frame = _frame_with(pl.Series([0, 1] * 40), pl.Series("risk", [-0.1, 1.1] * 40))
+    _TOUCHED.clear()
+
+    with pytest.raises(ValueError, match="pl.Series"):
+        if where == "baseline":
+            measure_against_baseline(ledger_with(frame), "резерв", scores, CONSTANT)
+        elif where == "contrast":
+            measure_contrast(ledger_with(frame), "резерв", scores, frame["noise"], "a", "b")
+        else:
+            stability_across_windows(_windows({"w0": frame}), {"w0": scores}, CONSTANT)
+    assert _TOUCHED == []
+
+
+def test_a_series_subclass_is_refused_at_the_numpy_boundary() -> None:
+    from dsx.measure import _series_exact
+
+    with pytest.raises(ValueError, match="pl.Series"):
+        _series_exact("оценки", _SeriesClipOnCast("risk", [-0.1, 1.1]))
+
+
 def test_a_plain_view_of_a_subclass_is_measured() -> None:
     """Отказ не отнимает данных: вызывающий получает обычный массив явно."""
     scores = np.array([0.0, 1.0]).view(np.memmap).view(np.ndarray)

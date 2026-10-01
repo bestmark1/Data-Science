@@ -169,6 +169,30 @@ EXACT_INTEGER = 2**53
 """Целые по модулю до 2**53 переходят в float64 без потерь."""
 
 
+def _type_name(kind: type) -> str:
+    """Имя класса без обращения к его метаклассу.
+
+    `kind.__name__` вызывает `__getattribute__` метакласса, и в ревью `c53a247`
+    он обнулял оценки, пока ядро печатало сообщение отказа. Дескриптор берётся у
+    самого `type`: он читает имя из структуры класса.
+    """
+    return type.__dict__["__name__"].__get__(kind, type)
+
+
+def _require_series(what: str, series: object) -> pl.Series:
+    """Ровно `pl.Series` — до первого вызова его методов, включая `len` и `filter`.
+
+    Ревью `c53a247`: подкласс переопределял `filter` или `cast`, оценки
+    [-0.1, 1.1] становились [0, 1] и уходили в numpy обычным массивом.
+    """
+    if type(series) is not pl.Series:
+        raise ValueError(
+            f"{what}: ожидается ровно pl.Series, получено {_type_name(type(series))} — "
+            "методы подкласса могли бы изменить значения до проверки"
+        )
+    return series
+
+
 def _exact_real(what: str, value: object) -> np.ndarray:
     """Массив `float64`, полученный из исходного БЕЗ ПОТЕРЬ, — или отказ.
 
@@ -179,24 +203,28 @@ def _exact_real(what: str, value: object) -> np.ndarray:
     отбрасывало мнимую часть (`e3c4788`), Decimal выше 1 округлялся до 1
     (`cdf9638`). Приведение здесь только такое, которое ничего не меняет.
     """
-    if isinstance(value, np.ma.MaskedArray):
-        raise ValueError(f"{what}: маскированный массив — неизвестные значения скрыты маской")
-    if not isinstance(value, np.ndarray):
+    kind = type(value)
+    if kind is not np.ndarray:
+        # Тип берётся `type()` ПЕРВЫМ действием: `isinstance` читает `__class__`
+        # объекта, и подменённый getter обнулял оценки до отказа (ревью
+        # `c53a247`). `issubclass` сверяет классы, не трогая объект.
+        if issubclass(kind, np.ma.MaskedArray):
+            raise ValueError(f"{what}: маскированный массив — неизвестные значения скрыты маской")
+        if issubclass(kind, np.ndarray):
+            # Ревью `7dc1568`: приведение исполняло `astype` и `__array_finalize__`
+            # подкласса — оценки [-0.1, 1.1] обрезались до [0, 1]. Подкласс можно
+            # было бы снять `np.asarray` без вызова его кода; отказ — выбранная
+            # политика: ядро принимает ровно `np.ndarray`, снимает вызывающий.
+            raise ValueError(
+                f"{what}: подкласс np.ndarray {_type_name(kind)} — передайте обычный "
+                "np.ndarray, например np.asarray(...)"
+            )
         # Последовательность Python приводится к ОБЩЕМУ типу до проверки:
         # [2**53, 2**53 + 1, 0.5] становился float64 целиком, и первые две оценки
         # совпадали (ревью `3bfbb95`). Принимается только готовый массив.
         raise ValueError(
-            f"{what}: ожидается np.ndarray, получено {type(value).__name__} — "
+            f"{what}: ожидается np.ndarray, получено {_type_name(kind)} — "
             "последовательность приводилась бы к общему типу с потерей"
-        )
-    if type(value) is not np.ndarray:
-        # Десятое ревью (`7dc1568`): `isinstance` пропускал подклассы, а приведение
-        # исполняет их код — свой `astype` обрезал оценки [-0.1, 1.1] до [0, 1],
-        # `__array_finalize__` переписывал источник. Безвредный подкласс неотличим
-        # от вредного, пока его код не исполнен: допускается ровно `np.ndarray`.
-        raise ValueError(
-            f"{what}: подкласс np.ndarray {type(value).__name__} — его методы могли бы "
-            "изменить значения при приведении; передайте обычный np.ndarray"
         )
     array = value
     if array.dtype.fields is not None or array.dtype.subdtype is not None:
@@ -514,7 +542,7 @@ def _series_exact(what: str, series: pl.Series) -> np.ndarray:
     null уходят в numpy в своём dtype и проверяются на точность; затем перевод в
     float64 уже ничего не меняет.
     """
-    dtype = series.dtype
+    dtype = _require_series(what, series).dtype
     if dtype not in SERIES_TYPES:
         raise ValueError(
             f"{what} не вещественные в поддерживаемом виде: тип {dtype} не поддерживается — "
@@ -534,6 +562,12 @@ def _observed(frame: pl.DataFrame, *scores: pl.Series) -> tuple[np.ndarray, ...]
     наблюдаемого исхода отбрасываются ещё в polars — до перевода, который мог бы
     испортить их оценки (nullable Boolean → object).
     """
+    if type(frame) is not pl.DataFrame:
+        raise ValueError(
+            f"выборка: ожидается ровно pl.DataFrame, получено {_type_name(type(frame))}"
+        )
+    for series in scores:
+        _require_series("оценки", series)
     observable = frame[LABEL].is_not_null()
     labels = _series_exact("метки", frame[LABEL].filter(observable))
     if not np.all(np.isin(labels, (0, 1))):
@@ -561,6 +595,7 @@ def measure_against_baseline(
     измерение не может обойти учёт. Повторный заход блокируется — посмотреть
     метрику, подкрутить порог и посмотреть снова здесь невозможно.
     """
+    _require_series("оценки", scores)
     frame = ledger.checkout(sample, Purpose.MEASUREMENT, decision)
     ledger.require_features()
     assert isinstance(frame, pl.DataFrame)
@@ -736,6 +771,8 @@ def measure_contrast(
     ЖЕ набору строк. Непарный дал бы интервал шире истинного, сложив в него
     разброс выборки, который у обеих постановок общий и потому сокращается.
     """
+    _require_series(f"оценки {left_name!r}", left_scores)
+    _require_series(f"оценки {right_name!r}", right_scores)
     frame = ledger.checkout(sample, Purpose.MEASUREMENT, decision)
     ledger.require_features()
     assert isinstance(frame, pl.DataFrame)
@@ -932,6 +969,8 @@ def stability_across_windows(
     ним — это выбор, а не аудит.
     """
     per_window: dict[str, Comparison | Unmeasured] = {}
+    for window, scores in scores_by_window.items():
+        _require_series(f"оценки окна {window!r}", scores)
     for window, scores in scores_by_window.items():
         frame = ledger.checkout(window, Purpose.SELECTION, decision)
         assert isinstance(frame, pl.DataFrame)
