@@ -1088,3 +1088,26 @@ def test_a_type_outside_the_listed_ones_is_refused_before_to_numpy(dtype, column
 
     with pytest.raises(ValueError, match="не поддерживается"):
         measure_against_baseline(ledger_with(frame), "резерв", frame["risk"], CONSTANT)
+
+
+@pytest.mark.skipif(np.finfo(np.longdouble).nmant <= 52, reason="longdouble = float64 здесь")
+@pytest.mark.parametrize("metric", METRICS)
+def test_an_extended_float_is_refused_not_rounded(metric) -> None:
+    """Седьмое ревью DS-008: категория `f` пропускала longdouble; 1 + 2**-63 в
+    float64 становилось 1, и оценка выше 1 проходила как вероятность."""
+    above_one = np.longdouble(1) + np.longdouble(2) ** -63
+    assert above_one > 1
+    with pytest.raises(ValueError, match="не поддерживается"):
+        metric(np.array([0, above_one], dtype=np.longdouble), np.array([0, 1]))
+
+
+def test_a_longdouble_is_refused_everywhere_even_when_it_equals_float64() -> None:
+    """Перечень, а не точность платформы: longdouble отвергается всегда."""
+    with pytest.raises(ValueError, match="не поддерживается"):
+        brier_score(np.array([0.2, 0.8], dtype=np.longdouble), np.array([0, 1]))
+
+
+@pytest.mark.parametrize("dtype", ["float16", "float32", ">f8", "<i4", "bool", "uint8"])
+def test_listed_numpy_types_still_pass(dtype) -> None:
+    scores = np.array([0, 1]).astype(dtype)
+    assert brier_score(scores, np.array([0, 1])) == 0.0

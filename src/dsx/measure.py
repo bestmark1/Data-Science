@@ -143,8 +143,21 @@ def calibration_error(scores: np.ndarray, labels: np.ndarray, bins: int = BINS) 
     return float(total)
 
 
-REAL = frozenset("biuf")
-"""Вид dtype, допустимый во входах метрик: булев, целый, беззнаковый, вещественный."""
+NUMPY_TYPES = frozenset(
+    {
+        np.bool_,
+        np.int8, np.int16, np.int32, np.int64,
+        np.uint8, np.uint16, np.uint32, np.uint64,
+        np.float16, np.float32, np.float64,
+    }
+)  # fmt: skip
+"""Скалярные типы numpy во входах метрик — ПЕРЕЧНЕМ, а не категорией dtype.
+
+Седьмое ревью DS-008: категория `f` пропускала longdouble; там, где он точнее
+float64, 1 + 2**-63 при переводе становилось 1, и оценка выше 1 проходила как
+вероятность. Сверяется `dtype.type`, поэтому порядок байтов не мешает:
+`>f8` — тот же float64. longdouble отвергается всегда, даже там, где он равен
+float64: перечень не зависит от платформы."""
 
 
 EXACT_INTEGER = 2**53
@@ -172,8 +185,10 @@ def _exact_real(what: str, value: object) -> np.ndarray:
             "последовательность приводилась бы к общему типу с потерей"
         )
     array = value
-    if array.dtype.kind not in REAL:
-        raise ValueError(f"{what} не вещественные: dtype {array.dtype}")
+    if array.dtype.type not in NUMPY_TYPES:
+        raise ValueError(
+            f"{what} не вещественные в поддерживаемом виде: dtype {array.dtype} не поддерживается"
+        )
     converted = array.astype(np.float64)
     if array.dtype.kind in "iu" and array.size:
         beyond = (array > EXACT_INTEGER) | (array < -EXACT_INTEGER)
