@@ -313,6 +313,10 @@ class Unmeasured:
     name: str
     reason: str
 
+    decisive = False
+    """Неопределённое ничего не показывает: ни победы, ни поражения."""
+    model_wins = False
+
     def __str__(self) -> str:
         return f"{self.name}: не определено — {self.reason}"
 
@@ -366,8 +370,8 @@ class Verdict:
     sample: str
     rows: int
     rule: BaselineRule
-    ranking: Comparison
-    calibration: Comparison
+    ranking: Comparison | Unmeasured
+    calibration: Comparison | Unmeasured
     prevalence: float = float("nan")
     precision: Comparison | Unmeasured | None = None
     brier: Comparison | Unmeasured | None = None
@@ -378,6 +382,11 @@ class Verdict:
 
     def statement(self) -> str:
         """Вывод словами. Осторожный там, где интервал ноль не исключает."""
+        if isinstance(self.ranking, Unmeasured):
+            return (
+                f"превосходство модели над правилом «{self.rule}» не показано: "
+                f"разрешающая способность не определена — {self.ranking.reason}"
+            )
         if not self.ranking.decisive:
             return (
                 f"превосходство модели над правилом «{self.rule}» не показано: "
@@ -432,6 +441,25 @@ class Verdict:
         return "\n".join(lines)
 
 
+def _observed(frame: pl.DataFrame, *scores: pl.Series) -> tuple[np.ndarray, ...]:
+    """Метки и оценки строк с наблюдаемым исходом — проверенные ДО приведения.
+
+    Единственный путь входов для измерения против правила, сравнения постановок
+    и устойчивости по окнам. Прежде каждая функция приводила сама:
+    `fill_null(0).astype(int64)` делал из NaN-метки число, `.astype(float64)`
+    округлял Decimal и принимал строки (класс 20 журнала повторов).
+    """
+    observable = frame[LABEL].is_not_null().to_numpy()
+    raw = frame[LABEL].to_numpy()[observable]
+    if not np.all(np.isin(raw, (0, 1))):
+        raise ValueError(
+            "в колонке исхода метка не 0 и не 1 (NaN — не пусто): неизвестный исход "
+            "не бывает отрицательным"
+        )
+    labels = _exact_real("метки", raw).astype(np.int64)
+    return (labels, *(_exact_real("оценки", s.to_numpy())[observable] for s in scores))
+
+
 def measure_against_baseline(
     ledger: SampleLedger,
     sample: str,
@@ -456,46 +484,15 @@ def measure_against_baseline(
             "оценки не выровнены по единице решения"
         )
 
-    observable = frame[LABEL].is_not_null().to_numpy()
-    # Сырые метки проверяются ДО приведения к целому: NaN для polars не пусто, а
-    # приведение делало из него число, которое считалось наблюдаемой строкой
-    # (ревью `75a6f1c`).
-    raw = frame[LABEL].to_numpy()[observable]
-    if not np.all(np.isin(raw, (0, 1))):
-        raise ValueError(
-            "в колонке исхода метка не 0 и не 1 (NaN — не пусто): неизвестный исход "
-            "не бывает отрицательным"
-        )
-    labels = raw.astype(np.int64)
-    # Оценки проверяются ДО приведения: прежнее `.astype(np.float64)` округляло
-    # Decimal выше 1 до 1 и принимало строки (ревью `cdf9638`).
-    model = _exact_real("оценки", scores.to_numpy())[observable]
-    baseline = rule.score(frame).to_numpy().astype(np.float64)[observable]
+    labels, model, baseline = _observed(frame, scores, rule.score(frame))
 
-    rank_model, rank_rule = discrimination(model, labels), discrimination(baseline, labels)
-    cal_model, cal_rule = calibration_error(model, labels), calibration_error(baseline, labels)
-
-    rng = np.random.default_rng(SEED)
-    rank_diff = np.empty(BOOTSTRAP)
-    cal_diff = np.empty(BOOTSTRAP)
-    for i in range(BOOTSTRAP):
-        pick = rng.integers(0, labels.size, labels.size)
-        rank_diff[i] = discrimination(model[pick], labels[pick]) - discrimination(
-            baseline[pick], labels[pick]
-        )
-        cal_diff[i] = calibration_error(model[pick], labels[pick]) - calibration_error(
-            baseline[pick], labels[pick]
-        )
-
-    rank_low, rank_high = _interval(rank_diff)
-    cal_low, cal_high = _interval(cal_diff)
     return Verdict(
         sample=sample,
-        rows=int(observable.sum()),
+        rows=int(labels.size),
         rule=rule,
-        ranking=Comparison("разрешающая способность", rank_model, rank_rule, rank_low, rank_high),
-        calibration=Comparison(
-            "ошибка калибровки", cal_model, cal_rule, cal_low, cal_high, lower_is_better=True
+        ranking=_compare("разрешающая способность", discrimination, model, baseline, labels),
+        calibration=_compare(
+            "ошибка калибровки", calibration_error, model, baseline, labels, lower_is_better=True
         ),
         prevalence=float(labels.mean()) if labels.size else float("nan"),
         precision=_compare(
@@ -527,29 +524,33 @@ def _compare(
     labels: np.ndarray,
     *,
     lower_is_better: bool = False,
+    who: tuple[str, str] = ("модели", "правила"),
 ) -> Comparison | Unmeasured:
     """Сравнение по одной величине с парным bootstrap, либо честное «не определено».
 
-    Та же пересборка, что у разрешающей способности: то же зерно, те же строки
-    на каждом шаге у модели и у правила.
+    Одна пересборка для всех величин: то же зерно, те же строки на каждом шаге у
+    обеих сторон. Неопределённое объявляется с причиной: нет строк, неконечные
+    оценки, бесконечная или неопределённая величина, негодные пересборки.
     """
     model, _ = _require_aligned(model, labels)
     baseline, labels = _require_aligned(baseline, labels)
     if labels.size == 0:
         return Unmeasured(name, "нет строк с наблюдаемым исходом")
-    for who, scores in (("модели", model), ("правила", baseline)):
+    for side, scores in zip(who, (model, baseline), strict=True):
         if not np.all(np.isfinite(scores)):
-            return Unmeasured(name, f"оценки {who} не конечны: NaN или бесконечность")
+            return Unmeasured(name, f"оценки {side} не конечны: NaN или бесконечность")
     left, right = metric(model, labels), metric(baseline, labels)
-    for who, value, scores in (("модели", left, model), ("правила", right, baseline)):
+    for side, value, scores in zip(who, (left, right), (model, baseline), strict=True):
         if np.isfinite(value):
             continue
-        if not _probabilities(scores):
-            return Unmeasured(name, f"оценки {who} не вероятности: вне [0, 1] или не конечны")
         if np.isinf(value):
             return Unmeasured(
-                name, f"у {who} бесконечно: оценка ровно 0 или 1 при противоположном исходе"
+                name, f"у {side} бесконечно: оценка ровно 0 или 1 при противоположном исходе"
             )
+        if np.unique(labels).size < 2 and metric in (discrimination, average_precision):
+            return Unmeasured(name, "на выборке нет обоих классов")
+        if not _probabilities(scores):
+            return Unmeasured(name, f"оценки {side} не вероятности: вне [0, 1]")
         return Unmeasured(name, "на выборке нет обоих классов")
     rng = np.random.default_rng(SEED)
     differences = np.empty(BOOTSTRAP)
@@ -592,6 +593,8 @@ class Contrast:
     right: float
     low: float
     high: float
+    reason: str | None = None
+    """Почему сравнение не определено; `None` — определено."""
 
     @property
     def difference(self) -> float:
@@ -599,9 +602,11 @@ class Contrast:
 
     @property
     def decisive(self) -> bool:
-        return self.low > 0 or self.high < 0
+        return self.reason is None and (self.low > 0 or self.high < 0)
 
     def __str__(self) -> str:
+        if self.reason is not None:
+            return f"разрешающая способность: не определено — {self.reason}"
         verdict = (
             f"{self.left_name if self.difference > 0 else self.right_name} различает лучше"
             if self.decisive
@@ -655,29 +660,37 @@ def measure_contrast(
                 f"в выборке {frame.height:,}: оценки не выровнены по единице решения"
             )
 
-    observable = frame[LABEL].is_not_null().to_numpy()
-    labels = frame[LABEL].fill_null(0).to_numpy().astype(np.int64)[observable]
-    left = left_scores.to_numpy().astype(np.float64)[observable]
-    right = right_scores.to_numpy().astype(np.float64)[observable]
-
-    rng = np.random.default_rng(SEED)
-    differences = np.empty(BOOTSTRAP)
-    for i in range(BOOTSTRAP):
-        pick = rng.integers(0, labels.size, labels.size)
-        differences[i] = discrimination(left[pick], labels[pick]) - discrimination(
-            right[pick], labels[pick]
+    labels, left, right = _observed(frame, left_scores, right_scores)
+    result = _compare(
+        "разрешающая способность",
+        discrimination,
+        left,
+        right,
+        labels,
+        who=(f"постановки «{left_name}»", f"постановки «{right_name}»"),
+    )
+    nan = float("nan")
+    if isinstance(result, Unmeasured):
+        return Contrast(
+            sample,
+            int(labels.size),
+            left_name,
+            right_name,
+            nan,
+            nan,
+            nan,
+            nan,
+            reason=result.reason,
         )
-
-    low, high = _interval(differences)
     return Contrast(
         sample=sample,
-        rows=int(observable.sum()),
+        rows=int(labels.size),
         left_name=left_name,
         right_name=right_name,
-        left=discrimination(left, labels),
-        right=discrimination(right, labels),
-        low=low,
-        high=high,
+        left=result.model,
+        right=result.baseline,
+        low=result.low,
+        high=result.high,
     )
 
 
@@ -777,7 +790,7 @@ def segment_section(segments: list[Segment], show: int = 10) -> str:
 class Stability:
     """Знак превосходства по окнам: держится ли вывод во времени."""
 
-    per_window: dict[str, Comparison]
+    per_window: dict[str, Comparison | Unmeasured]
 
     @property
     def signs(self) -> set[bool]:
@@ -790,17 +803,23 @@ class Stability:
 
     def statement(self) -> str:
         decisive = [name for name, c in self.per_window.items() if c.decisive]
+        undefined = sorted(n for n, c in self.per_window.items() if isinstance(c, Unmeasured))
+        note = (
+            f" Окна, где сравнение не определено и знак не проверен: {', '.join(undefined)}."
+            if undefined
+            else ""
+        )
         if not decisive:
             return (
                 "ни в одном окне превосходство не показано: вывод о пользе модели "
-                "не опирается ни на что"
+                "не опирается ни на что" + note
             )
         if not self.steady:
             return (
                 f"знак превосходства МЕНЯЕТСЯ между окнами ({', '.join(decisive)}): "
-                "вывод держится не на модели, а на выборе окна"
+                "вывод держится не на модели, а на выборе окна" + note
             )
-        return f"знак превосходства одинаков во всех различимых окнах: {', '.join(decisive)}"
+        return f"знак превосходства одинаков во всех различимых окнах: {', '.join(decisive)}" + note
 
     def report_section(self) -> str:
         lines = ["## Устойчивость по окнам", ""]
@@ -825,7 +844,7 @@ def stability_across_windows(
     Расходует окна как выборки выбора: смотреть пооконные метрики и решать по
     ним — это выбор, а не аудит.
     """
-    per_window: dict[str, Comparison] = {}
+    per_window: dict[str, Comparison | Unmeasured] = {}
     for window, scores in scores_by_window.items():
         frame = ledger.checkout(window, Purpose.SELECTION, decision)
         assert isinstance(frame, pl.DataFrame)
@@ -835,24 +854,8 @@ def stability_across_windows(
                 f"{frame.height:,}: оценки не выровнены"
             )
 
-        observable = frame[LABEL].is_not_null().to_numpy()
-        labels = frame[LABEL].fill_null(0).to_numpy().astype(np.int64)[observable]
-        model = scores.to_numpy().astype(np.float64)[observable]
-        baseline = rule.score(frame).to_numpy().astype(np.float64)[observable]
-
-        rng = np.random.default_rng(SEED)
-        differences = np.empty(BOOTSTRAP)
-        for i in range(BOOTSTRAP):
-            pick = rng.integers(0, labels.size, labels.size)
-            differences[i] = discrimination(model[pick], labels[pick]) - discrimination(
-                baseline[pick], labels[pick]
-            )
-        low, high = _interval(differences)
-        per_window[window] = Comparison(
-            "разрешающая способность",
-            discrimination(model, labels),
-            discrimination(baseline, labels),
-            low,
-            high,
+        labels, model, baseline = _observed(frame, scores, rule.score(frame))
+        per_window[window] = _compare(
+            "разрешающая способность", discrimination, model, baseline, labels
         )
     return Stability(per_window=per_window)

@@ -28,6 +28,7 @@ from dsx.measure import (
     measure_against_baseline,
     measure_contrast,
     net_benefit,
+    stability_across_windows,
 )
 from dsx.policy import Blocked
 from dsx.samples import Extent, Purpose, SampleLedger
@@ -907,3 +908,101 @@ def test_log_loss_keeps_small_positive_losses() -> None:
     assert log_loss(np.array([1e-20]), np.array([0])) == exact
     assert np.isinf(log_loss(np.array([1.0]), np.array([0])))
     assert np.isinf(log_loss(np.array([0.0]), np.array([1])))
+
+
+# --- прежний код измерения на том же принципе: N7, сравнение постановок ----
+
+
+def _windows(frames: dict[str, pl.DataFrame]) -> SampleLedger:
+    sl = SampleLedger()
+    sl.declare_features(["signal", "risk", "noise"])
+    for name, frame in frames.items():
+        sl.register(
+            name,
+            Extent(
+                units=frozenset(f"{name}{i}" for i in range(frame.height)),
+                since=dt.datetime(2024, 1, 1),
+                until=dt.datetime(2024, 6, 1),
+            ),
+            frame=frame,
+        )
+    return sl
+
+
+def _small(labels, scores) -> pl.DataFrame:
+    return pl.DataFrame({LABEL: labels, "signal": scores, "risk": scores, "noise": scores})
+
+
+def test_ranking_with_undefined_resamples_is_declared_in_the_verdict() -> None:
+    """Тот же класс, что у новых метрик: ROC AUC на пересборке без обоих классов
+    прежде печатался `[+nan; +nan]` и читался как «включает ноль»."""
+    verdict = _tiny([0, 1], [0.2, 0.8])
+
+    assert isinstance(verdict.ranking, Unmeasured)
+    assert "из 400 пересборок" in str(verdict.ranking)
+    assert "не определена" in verdict.statement()
+
+
+def test_contrast_declares_what_it_cannot_measure() -> None:
+    frame = _small([0, 1], [0.2, 0.8])
+    contrast = measure_contrast(
+        ledger_with(frame), "резерв", frame["risk"], frame["noise"], "одна", "другая"
+    )
+
+    assert not contrast.decisive
+    assert "не определено" in str(contrast) and "пересборок" in str(contrast)
+
+
+@pytest.mark.parametrize("where", ["contrast", "stability"])
+def test_old_paths_refuse_nan_labels_before_the_cast(where) -> None:
+    """Прежде `fill_null(0).astype(int64)` делал из NaN-метки число."""
+    frame = _small([np.nan, 1.0, 0.0, 1.0], [0.1, 0.9, 0.2, 0.8])
+    with pytest.raises(ValueError, match="метк"):
+        if where == "contrast":
+            measure_contrast(ledger_with(frame), "резерв", frame["risk"], frame["noise"], "a", "b")
+        else:
+            stability_across_windows(_windows({"w0": frame}), {"w0": frame["risk"]}, CONSTANT)
+
+
+@pytest.mark.parametrize("where", ["contrast", "stability"])
+def test_old_paths_check_scores_before_converting_them(where) -> None:
+    """Прежде `.astype(float64)` принимал строки и округлял Decimal."""
+    frame = _small([0, 1] * 40, [0.2, 0.8] * 40)
+    bad = pl.Series(["0.2", "0.8"] * 40)
+    with pytest.raises(ValueError, match="вещественн"):
+        if where == "contrast":
+            measure_contrast(ledger_with(frame), "резерв", bad, frame["noise"], "a", "b")
+        else:
+            stability_across_windows(_windows({"w0": frame}), {"w0": bad}, CONSTANT)
+
+
+def test_a_window_without_both_classes_is_named_not_counted_as_steady() -> None:
+    """N7: окно, где сравнение не определено, не входит в «различимые» молча —
+    вывод называет его."""
+    world_frame = world()
+    one_class = _small([0] * 50, list(np.linspace(0.1, 0.9, 50)))
+    stability = stability_across_windows(
+        _windows({"w0": world_frame, "w1": one_class}),
+        {"w0": world_frame["risk"], "w1": one_class["risk"]},
+        CONSTANT,
+    )
+
+    assert isinstance(stability.per_window["w1"], Unmeasured)
+    assert "не определено и знак не проверен: w1" in stability.statement()
+    assert stability.per_window["w0"].decisive
+
+
+def test_reports_on_ordinary_data_did_not_change() -> None:
+    """Перевод прежнего кода на общий путь не меняет чисел: та же пересборка,
+    то же зерно. Значения записаны с прогона до перевода (`3bfbb95`)."""
+    frame = world()
+    verdict = measure_against_baseline(ledger_with(frame), "резерв", frame["risk"], CONSTANT)
+
+    assert str(verdict.ranking) == (
+        "разрешающая способность: модель 0.7341, правило 0.5000, разница +0.2341 "
+        "[+0.2191; +0.2511] — модель лучше"
+    )
+    assert str(verdict.calibration) == (
+        "ошибка калибровки: модель 0.0165, правило 0.0760, разница -0.0595 "
+        "[-0.0688; -0.0378] — модель лучше"
+    )
