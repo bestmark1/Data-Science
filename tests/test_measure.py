@@ -1101,10 +1101,39 @@ def test_an_extended_float_is_refused_not_rounded(metric) -> None:
         metric(np.array([0, above_one], dtype=np.longdouble), np.array([0, 1]))
 
 
-def test_a_longdouble_is_refused_everywhere_even_when_it_equals_float64() -> None:
-    """Перечень, а не точность платформы: longdouble отвергается всегда."""
-    with pytest.raises(ValueError, match="не поддерживается"):
-        brier_score(np.array([0.2, 0.8], dtype=np.longdouble), np.array([0, 1]))
+def test_a_longdouble_is_judged_by_its_representation() -> None:
+    """Восьмое ревью DS-008: перечень сверял тождество типа, а один и тот же
+    8-байтовый тип в numpy носит два имени. Судится представление: longdouble шире
+    8 байт — отказ; где он 8-байтовый, он и есть float64, перевод ничего не теряет."""
+    scores = np.array([0.0, 1.0], dtype=np.longdouble)
+    if np.dtype(np.longdouble).itemsize > 8:
+        with pytest.raises(ValueError, match="не поддерживается"):
+            brier_score(scores, np.array([0, 1]))
+    else:
+        assert brier_score(scores, np.array([0, 1])) == 0.0
+
+
+@pytest.mark.parametrize("metric", METRICS)
+@pytest.mark.parametrize("dtype", [np.longlong, np.ulonglong, np.intc, np.uintc, np.short])
+@pytest.mark.parametrize("where", ["scores", "labels"])
+def test_integer_aliases_are_the_same_numbers(metric, dtype, where) -> None:
+    """Ревью `6b808ae`: longlong и ulonglong — те же 8 байт, что int64 и uint64, но
+    другие объекты типа; перечень по тождеству их отвергал."""
+    scores = np.array([0, 1], dtype=dtype if where == "scores" else np.float64)
+    labels = np.array([0, 1], dtype=dtype if where == "labels" else np.int64)
+
+    assert np.isfinite(metric(scores, labels))
+
+
+def test_an_integer_alias_passes_a_comparison() -> None:
+    from dsx.measure import _compare
+
+    labels = np.array([0, 1] * 40, dtype=np.ulonglong)
+    result = _compare(
+        "Brier", brier_score, np.array([0, 1] * 40, dtype=np.longlong), np.full(80, 0.5), labels
+    )
+
+    assert not isinstance(result, Unmeasured) and result.model == 0.0
 
 
 @pytest.mark.parametrize("dtype", ["float16", "float32", ">f8", "<i4", "bool", "uint8"])

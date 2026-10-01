@@ -143,21 +143,24 @@ def calibration_error(scores: np.ndarray, labels: np.ndarray, bins: int = BINS) 
     return float(total)
 
 
-NUMPY_TYPES = frozenset(
+NUMPY_FORMS = frozenset(
     {
-        np.bool_,
-        np.int8, np.int16, np.int32, np.int64,
-        np.uint8, np.uint16, np.uint32, np.uint64,
-        np.float16, np.float32, np.float64,
+        ("b", 1),
+        ("i", 1), ("i", 2), ("i", 4), ("i", 8),
+        ("u", 1), ("u", 2), ("u", 4), ("u", 8),
+        ("f", 2), ("f", 4), ("f", 8),
     }
 )  # fmt: skip
-"""Скалярные типы numpy во входах метрик — ПЕРЕЧНЕМ, а не категорией dtype.
+"""Представления numpy во входах метрик — ПЕРЕЧНЕМ пар (вид, размер в байтах).
 
 Седьмое ревью DS-008: категория `f` пропускала longdouble; там, где он точнее
 float64, 1 + 2**-63 при переводе становилось 1, и оценка выше 1 проходила как
-вероятность. Сверяется `dtype.type`, поэтому порядок байтов не мешает:
-`>f8` — тот же float64. longdouble отвергается всегда, даже там, где он равен
-float64: перечень не зависит от платформы."""
+вероятность. Восьмое ревью (`6b808ae`): перечень скалярных ТИПОВ сверялся по
+тождеству и отвергал `np.longlong` и `np.ulonglong` — те же восемь байт, что
+int64 и uint64, но другой класс. Значение определяет представление, а не имя
+класса: сверяется пара `(dtype.kind, dtype.itemsize)`. Порядок байтов в неё не
+входит: `>f8` — тот же float64. longdouble больше восьми байт отвергается;
+восьмибайтовый (macOS arm64) совпадает с float64 и переводится без потерь."""
 
 
 EXACT_INTEGER = 2**53
@@ -185,7 +188,7 @@ def _exact_real(what: str, value: object) -> np.ndarray:
             "последовательность приводилась бы к общему типу с потерей"
         )
     array = value
-    if array.dtype.type not in NUMPY_TYPES:
+    if (array.dtype.kind, array.dtype.itemsize) not in NUMPY_FORMS:
         raise ValueError(
             f"{what} не вещественные в поддерживаемом виде: dtype {array.dtype} не поддерживается"
         )
