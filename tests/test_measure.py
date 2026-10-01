@@ -841,3 +841,69 @@ def test_boolean_probabilities_and_labels_are_numbers() -> None:
     assert log_loss(scores, labels) == 0.0
     assert average_precision(scores, labels) == 1.0
     assert net_benefit(scores, labels, 0.5) == 0.5
+
+
+# --- четвёртое ревью DS-008: проверяется исходное, приводится без потерь ---
+
+
+@pytest.mark.parametrize("metric", METRICS)
+@pytest.mark.parametrize("masked", ["scores", "labels"])
+def test_a_mask_is_refused_not_dropped(metric, masked) -> None:
+    """Ревью `cdf9638`: `np.asarray` снимал маску, и все замаскированные метки
+    считались известными — Brier объявлял модель победителем."""
+    scores = np.array([0.2, 0.8])
+    labels = np.array([0, 1])
+    if masked == "scores":
+        scores = np.ma.masked_array(scores, mask=[True, True])
+    else:
+        labels = np.ma.masked_array(labels, mask=[True, True])
+
+    with pytest.raises(ValueError, match="маск"):
+        metric(scores, labels)
+
+
+def test_large_integer_scores_keep_their_order_or_are_refused() -> None:
+    """Ревью `cdf9638`: 2**53 и 2**53 + 1 в float64 совпадали, AP падал с 1 до 0.5."""
+    labels = np.array([0, 1])
+    with pytest.raises(ValueError, match="точност"):
+        average_precision(np.array([2**53, 2**53 + 1], dtype=np.int64), labels)
+    exact = np.array([2**60, 2**61], dtype=np.int64)  # представимы в float64 точно
+    assert average_precision(exact, labels) == 1.0
+    assert average_precision(np.array([3, 7], dtype=np.uint64), labels) == 1.0
+
+
+@pytest.mark.parametrize(
+    "scores",
+    [
+        pl.Series(
+            [
+                __import__("decimal").Decimal("0"),
+                __import__("decimal").Decimal("1.00000000000000000001"),
+            ]
+            * 40
+        ),
+        pl.Series(["0.2", "0.8"] * 40),
+    ],
+    ids=["decimal", "string"],
+)
+def test_the_report_checks_scores_before_converting_them(scores) -> None:
+    """Ревью `cdf9638`: `measure_against_baseline` приводил оценки к float64 раньше
+    проверки — Decimal выше 1 округлялся до 1, и Brier объявлял модель лучше."""
+    frame = pl.DataFrame(
+        {LABEL: [0, 1] * 40, "signal": [0.0] * 80, "risk": [0.0] * 80, "noise": [0.0] * 80}
+    )
+
+    with pytest.raises(ValueError, match="вещественн"):
+        measure_against_baseline(ledger_with(frame), "резерв", scores, CONSTANT)
+
+
+def test_log_loss_keeps_small_positive_losses() -> None:
+    """Ревью `cdf9638`: 1 − 1e-20 округлялось до 1, и потеря 1e-20 становилась −0.0."""
+    from decimal import Decimal, getcontext
+
+    getcontext().prec = 100
+    exact = float(-(Decimal(1) - Decimal("1e-20")).ln())
+
+    assert log_loss(np.array([1e-20]), np.array([0])) == exact
+    assert np.isinf(log_loss(np.array([1.0]), np.array([0])))
+    assert np.isinf(log_loss(np.array([0.0]), np.array([1])))

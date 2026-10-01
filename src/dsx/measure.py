@@ -147,31 +147,56 @@ REAL = frozenset("biuf")
 """Вид dtype, допустимый во входах метрик: булев, целый, беззнаковый, вещественный."""
 
 
-def _require_aligned(scores: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Входы метрики, приведённые к счёту: оценки `float64`, метки `int64`.
+EXACT_INTEGER = 2**53
+"""Целые по модулю до 2**53 переходят в float64 без потерь."""
 
-    Отказ, если массивы не одномерные, разной длины, не вещественного вида или
-    метка не 0 и не 1. Все метрики и `_compare` берут входы ТОЛЬКО отсюда —
-    одна точка вместо проверок по месту.
 
-    Ревью `75a6f1c`: NaN-метка становилась отрицательным исходом, и log loss
-    объявлял модель победителем; одна метка растягивалась на две оценки
-    (broadcasting), и чистая польза выходила 2.0. Ревью `e3c4788`: комплексные
-    оценки проходили, мнимая часть отбрасывалась при приведении, и Brier выходил
-    отрицательным победителем; булевы 0/1 роняли вычитание. Комплексное не
-    исправляется отбрасыванием части — отказ; булево — законное число.
+def _exact_real(what: str, value: object) -> np.ndarray:
+    """Массив `float64`, полученный из исходного БЕЗ ПОТЕРЬ, — или отказ.
+
+    Проверяется исходное значение, а не приведённое. Четыре круга ревью DS-008
+    находили одно и то же — значение молча менялось до проверки, как строка в
+    `preflight` (класс 20 журнала повторов): `np.asarray` снимал маску
+    (`cdf9638`), приведение к float64 склеивало 2**53 и 2**53 + 1 (`cdf9638`),
+    отбрасывало мнимую часть (`e3c4788`), Decimal выше 1 округлялся до 1
+    (`cdf9638`). Приведение здесь только такое, которое ничего не меняет.
     """
-    scores, labels = np.asarray(scores), np.asarray(labels)
+    if isinstance(value, np.ma.MaskedArray):
+        raise ValueError(f"{what}: маскированный массив — неизвестные значения скрыты маской")
+    array = np.asarray(value)
+    if array.dtype.kind not in REAL:
+        raise ValueError(f"{what} не вещественные: dtype {array.dtype}")
+    converted = array.astype(np.float64)
+    if array.dtype.kind in "iu" and array.size:
+        beyond = (array > EXACT_INTEGER) | (array < -EXACT_INTEGER)
+        if beyond.any() and any(
+            int(f) != int(v) for f, v in zip(converted[beyond], array[beyond], strict=True)
+        ):
+            raise ValueError(
+                f"{what}: целые вне ±2**53 теряют точность в float64 — порядок оценок изменился бы"
+            )
+    return converted
+
+
+def _require_aligned(scores: object, labels: object) -> tuple[np.ndarray, np.ndarray]:
+    """Входы метрики, приведённые к счёту без потерь: оценки и метки `float64`→`int64`.
+
+    Отказ, если массивы маскированы, не одномерные, разной длины, не
+    вещественного вида, теряют точность при приведении или метка не 0 и не 1.
+    Все метрики и `_compare` берут входы ТОЛЬКО отсюда.
+
+    Ревью `75a6f1c`: NaN-метка становилась отрицательным исходом; одна метка
+    растягивалась на две оценки (broadcasting). Ревью `e3c4788`: комплексные
+    оценки проходили с отброшенной мнимой частью; булевы 0/1 роняли вычитание.
+    """
+    scores, labels = _exact_real("оценки", scores), _exact_real("метки", labels)
     if scores.ndim != 1 or labels.ndim != 1:
         raise ValueError("оценки и метки обязаны быть одномерными")
     if scores.shape != labels.shape:
         raise ValueError(f"оценок {scores.size}, меток {labels.size}: не выровнены")
-    for what, array in (("оценки", scores), ("метки", labels)):
-        if array.dtype.kind not in REAL:
-            raise ValueError(f"{what} не вещественные: dtype {array.dtype}")
     if not np.all(np.isin(labels, (0, 1))):
         raise ValueError("метка не 0 и не 1: неизвестный исход не бывает отрицательным")
-    return scores.astype(np.float64), labels.astype(np.int64)
+    return scores, labels.astype(np.int64)
 
 
 def average_precision(scores: np.ndarray, labels: np.ndarray) -> float:
@@ -217,9 +242,12 @@ def log_loss(scores: np.ndarray, labels: np.ndarray) -> float:
     scores, labels = _require_aligned(scores, labels)
     if scores.size == 0 or not _probabilities(scores):
         return float("nan")
-    given = np.where(labels == 1, scores, 1.0 - scores)
+    # log1p(−p), а не log(1 − p): 1 − 1e-20 округлялось до 1, и потеря 1e-20
+    # становилась −0.0 (ревью `cdf9638`). При p = 1 log1p(−1) = −∞ — уверенная
+    # ошибка остаётся бесконечностью.
     with np.errstate(divide="ignore"):
-        return float(-np.mean(np.log(given)))
+        losses = np.where(labels == 1, -np.log(scores), -np.log1p(-scores))
+    return float(np.mean(losses))
 
 
 class Costs(BaseModel):
@@ -439,7 +467,9 @@ def measure_against_baseline(
             "не бывает отрицательным"
         )
     labels = raw.astype(np.int64)
-    model = scores.to_numpy().astype(np.float64)[observable]
+    # Оценки проверяются ДО приведения: прежнее `.astype(np.float64)` округляло
+    # Decimal выше 1 до 1 и принимало строки (ревью `cdf9638`).
+    model = _exact_real("оценки", scores.to_numpy())[observable]
     baseline = rule.score(frame).to_numpy().astype(np.float64)[observable]
 
     rank_model, rank_rule = discrimination(model, labels), discrimination(baseline, labels)
