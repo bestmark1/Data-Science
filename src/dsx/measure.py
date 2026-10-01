@@ -174,9 +174,11 @@ def _type_name(kind: type) -> str:
 
     `kind.__name__` вызывает `__getattribute__` метакласса, и в ревью `c53a247`
     он обнулял оценки, пока ядро печатало сообщение отказа. Дескриптор берётся у
-    самого `type`: он читает имя из структуры класса.
+    самого `type`: он читает имя из структуры класса. Имя можно подменить
+    подклассом `str` со своим `__format__` — `str.__str__` делает из него
+    обычную строку, не вызывая его методов (ревью `0c71a26`).
     """
-    return type.__dict__["__name__"].__get__(kind, type)
+    return str.__str__(type.__dict__["__name__"].__get__(kind, type))
 
 
 def _require_series(what: str, series: object) -> pl.Series:
@@ -191,6 +193,21 @@ def _require_series(what: str, series: object) -> pl.Series:
             "методы подкласса могли бы изменить значения до проверки"
         )
     return series
+
+
+def _require_frame(frame: object) -> pl.DataFrame:
+    """Ровно `pl.DataFrame` — сразу после выдачи журналом, до `height` и правила.
+
+    Ревью `0c71a26`: после `checkout` шли `isinstance` и `frame.height`, точная
+    проверка — только в `_observed`, после `rule.score`. Getter `height`
+    подкласса переписывал метки и сам класс: «правило лучше» становилось
+    «модель лучше», AUC в N7 — 0 → 1.
+    """
+    if type(frame) is not pl.DataFrame:
+        raise ValueError(
+            f"выборка: ожидается ровно pl.DataFrame, получено {_type_name(type(frame))}"
+        )
+    return frame
 
 
 def _exact_real(what: str, value: object) -> np.ndarray:
@@ -562,10 +579,7 @@ def _observed(frame: pl.DataFrame, *scores: pl.Series) -> tuple[np.ndarray, ...]
     наблюдаемого исхода отбрасываются ещё в polars — до перевода, который мог бы
     испортить их оценки (nullable Boolean → object).
     """
-    if type(frame) is not pl.DataFrame:
-        raise ValueError(
-            f"выборка: ожидается ровно pl.DataFrame, получено {_type_name(type(frame))}"
-        )
+    _require_frame(frame)
     for series in scores:
         _require_series("оценки", series)
     observable = frame[LABEL].is_not_null()
@@ -596,9 +610,8 @@ def measure_against_baseline(
     метрику, подкрутить порог и посмотреть снова здесь невозможно.
     """
     _require_series("оценки", scores)
-    frame = ledger.checkout(sample, Purpose.MEASUREMENT, decision)
+    frame = _require_frame(ledger.checkout(sample, Purpose.MEASUREMENT, decision))
     ledger.require_features()
-    assert isinstance(frame, pl.DataFrame)
 
     if scores.len() != frame.height:
         raise ValueError(
@@ -773,9 +786,8 @@ def measure_contrast(
     """
     _require_series(f"оценки {left_name!r}", left_scores)
     _require_series(f"оценки {right_name!r}", right_scores)
-    frame = ledger.checkout(sample, Purpose.MEASUREMENT, decision)
+    frame = _require_frame(ledger.checkout(sample, Purpose.MEASUREMENT, decision))
     ledger.require_features()
-    assert isinstance(frame, pl.DataFrame)
 
     for name, scores in ((left_name, left_scores), (right_name, right_scores)):
         if scores.len() != frame.height:
@@ -972,8 +984,7 @@ def stability_across_windows(
     for window, scores in scores_by_window.items():
         _require_series(f"оценки окна {window!r}", scores)
     for window, scores in scores_by_window.items():
-        frame = ledger.checkout(window, Purpose.SELECTION, decision)
-        assert isinstance(frame, pl.DataFrame)
+        frame = _require_frame(ledger.checkout(window, Purpose.SELECTION, decision))
         if scores.len() != frame.height:
             raise ValueError(
                 f"в окне {window!r} предсказаний {scores.len():,}, а строк "

@@ -1337,6 +1337,58 @@ def test_a_series_subclass_is_refused_at_the_numpy_boundary() -> None:
         _series_exact("оценки", _SeriesClipOnCast("risk", [-0.1, 1.1]))
 
 
+class _SpyFrame(pl.DataFrame):
+    """Подкласс выборки: getter `height` исполняется при первом же обращении."""
+
+    @property
+    def height(self):
+        _TOUCHED.append("height")
+        return pl.DataFrame.height.__get__(self, pl.DataFrame)
+
+
+@pytest.mark.parametrize("where", ["baseline", "contrast", "stability"])
+def test_a_frame_subclass_is_refused_right_after_checkout(where) -> None:
+    """Ревью `0c71a26`: после `checkout` шли `isinstance` и `frame.height`, а
+    точная проверка — только в `_observed`, после `rule.score`. Getter `height`
+    переписывал метки и сам класс — Brier 0.64 становился 0.04, «модель лучше»;
+    в N7 AUC 0 → 1. Выборка проверяется ровно `pl.DataFrame` сразу после выдачи."""
+    plain = _frame_with(pl.Series([0, 1] * 40), pl.Series("risk", [0.8, 0.2] * 40))
+    scores = pl.Series("risk", [0.8, 0.2] * 40)
+    name = "w0" if where == "stability" else "резерв"
+    ledger = _windows({name: plain}) if where == "stability" else ledger_with(plain)
+    ledger.register(name, frame=_SpyFrame(plain))
+    _TOUCHED.clear()
+
+    with pytest.raises(ValueError, match="pl.DataFrame"):
+        if where == "baseline":
+            measure_against_baseline(ledger, name, scores, CONSTANT)
+        elif where == "contrast":
+            measure_contrast(ledger, name, scores, plain["noise"], "a", "b")
+        else:
+            stability_across_windows(ledger, {name: scores}, CONSTANT)
+    assert _TOUCHED == []
+
+
+class _FormatsWithSideEffect(str):
+    def __format__(self, spec):
+        _TOUCHED.append("__format__")
+        return super().__format__(spec)
+
+
+def test_a_refused_class_name_is_printed_without_running_its_code() -> None:
+    """Подменённое имя класса — подкласс `str` со своим `__format__`: сообщение
+    отказа печатало его, исполняя код входного объекта до отказа."""
+
+    class Renamed(np.ndarray):
+        pass
+
+    Renamed.__name__ = _FormatsWithSideEffect("Renamed")
+    _TOUCHED.clear()
+    with pytest.raises(ValueError, match="Renamed"):
+        brier_score(np.array([0.8, 0.2]).view(Renamed), np.array([0, 1]))
+    assert _TOUCHED == []
+
+
 def test_a_plain_view_of_a_subclass_is_measured() -> None:
     """Отказ не отнимает данных: вызывающий получает обычный массив явно."""
     scores = np.array([0.0, 1.0]).view(np.memmap).view(np.ndarray)
