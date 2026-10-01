@@ -449,6 +449,24 @@ class Verdict:
         return "\n".join(lines)
 
 
+SERIES_TYPES = frozenset(
+    {
+        pl.Boolean,
+        pl.Int8, pl.Int16, pl.Int32, pl.Int64,
+        pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
+        pl.Float32, pl.Float64,
+        pl.Null,
+    }
+)  # fmt: skip
+"""Типы столбцов, которые переходят в numpy без потерь, — ПЕРЕЧНЕМ, а не признаком.
+
+Шестое ревью DS-008: проверка «целое или вещественное» пропускала Int128, а его
+`to_numpy()` в polars не реализован и падает паникой, которую не ловит даже
+`except Exception`. Перечень разрешённого не расширяется молча с новыми типами
+polars. `pl.Null` — столбец, где все значения пусты: законно, исход не наблюдался.
+"""
+
+
 def _series_exact(what: str, series: pl.Series) -> np.ndarray:
     """Столбец polars в `float64` без потерь; null — NaN, то есть неизвестное.
 
@@ -460,9 +478,11 @@ def _series_exact(what: str, series: pl.Series) -> np.ndarray:
     float64 уже ничего не меняет.
     """
     dtype = series.dtype
-    # pl.Null — столбец, где все значения пусты: законно, это «исход не наблюдался».
-    if not (dtype.is_integer() or dtype.is_float() or dtype in (pl.Boolean, pl.Null)):
-        raise ValueError(f"{what} не вещественные: тип {dtype}")
+    if dtype not in SERIES_TYPES:
+        raise ValueError(
+            f"{what} не вещественные в поддерживаемом виде: тип {dtype} не поддерживается — "
+            "допустимы Boolean, целые до 64 бит, Float32, Float64"
+        )
     _exact_real(what, series.drop_nulls().to_numpy())
     return series.cast(pl.Float64).to_numpy()
 

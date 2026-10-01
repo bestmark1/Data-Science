@@ -1073,3 +1073,18 @@ def test_a_label_column_of_the_wrong_type_is_refused(labels) -> None:
 
     with pytest.raises(ValueError, match="метки"):
         measure_against_baseline(ledger_with(frame), "резерв", frame["risk"], CONSTANT)
+
+
+@pytest.mark.parametrize("dtype", [pl.Int128, pl.UInt128, pl.Decimal(10, 2), pl.Date])
+@pytest.mark.parametrize("column", ["labels", "scores"])
+def test_a_type_outside_the_listed_ones_is_refused_before_to_numpy(dtype, column) -> None:
+    """Шестое ревью DS-008: Int128 проходил проверку «целое», а `to_numpy()` падал
+    паникой polars, которую не ловит даже `except Exception`. Допустимые типы
+    заданы перечнем, а не признаком: остальное — ValueError до перевода."""
+    values = pl.Series([0, 1] * 40).cast(dtype)
+    labels = values if column == "labels" else pl.Series([0, 1] * 40, dtype=pl.Int8)
+    scores = values if column == "scores" else pl.Series([0.0, 1.0] * 40)
+    frame = _frame_with(labels, scores)
+
+    with pytest.raises(ValueError, match="не поддерживается"):
+        measure_against_baseline(ledger_with(frame), "резерв", frame["risk"], CONSTANT)
