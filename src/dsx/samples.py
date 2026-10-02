@@ -106,6 +106,9 @@ def _aware(value: dt.datetime) -> bool:
     return value.utcoffset() is not None
 
 
+_UNIX_EPOCH = dt.datetime(1970, 1, 1)
+
+
 def _utc_microseconds(value: dt.datetime) -> int:
     """Положение момента в UTC целым числом микросекунд.
 
@@ -113,11 +116,12 @@ def _utc_microseconds(value: dt.datetime) -> int:
     календаря он выходит за годы 1..9999 — год 1 по Берлину (+00:53:28) уходил в
     год 0, конец 9999 года по Нью-Йорку — в 10000, и сравнение падало
     `OverflowError`, хотя polars такие моменты сравнивает. Здесь только
-    целочисленная арифметика: местное время от `datetime.min` минус смещение,
-    которое `utcoffset` берёт с учётом `fold`.
+    целочисленная арифметика: местное время от начала Unix-времени минус
+    смещение, которое `utcoffset` берёт с учётом `fold`. Отсчёт — тот же, что у
+    `dt.epoch("us")` в polars.
     """
     unit = dt.timedelta(microseconds=1)
-    local = (value.replace(tzinfo=None) - dt.datetime.min) // unit
+    local = (value.replace(tzinfo=None) - _UNIX_EPOCH) // unit
     offset = value.utcoffset()
     assert offset is not None
     return local - offset // unit

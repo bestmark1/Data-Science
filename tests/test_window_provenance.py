@@ -433,3 +433,76 @@ def test_the_time_condition_agrees_with_the_split(known, start) -> None:
 
     in_training = pl.DataFrame({"known": [known]}).select(pl.col("known") < start).item()
     assert _strictly_before(known, start) is in_training
+
+
+def _training_from_split(known: dt.datetime, cutoff: dt.datetime) -> Training | None:
+    """Обучающая часть, построенная штатным `training_of` из отбора polars."""
+    from dsx.evals.world import World, base_schema
+    from dsx.split import KNOWN_AT, Part, Window, training_of
+
+    frame = pl.DataFrame({"entity_id": ["a", "b"], LABEL: [0, 1], KNOWN_AT: [known, known]})
+    train = frame.filter(pl.col(KNOWN_AT) < cutoff)
+    part = Part(
+        Window("история", cutoff, cutoff + dt.timedelta(microseconds=1)), train, pl.DataFrame()
+    )
+    return training_of(part, World({"main": frame}, base_schema()))
+
+
+@pytest.mark.parametrize(
+    "known, cutoff, fold",
+    [
+        (
+            dt.datetime(9999, 12, 31, 23, 59, 59, tzinfo=NEW_YORK),
+            dt.datetime(9999, 12, 31, 23, 59, 59, 999998, tzinfo=NEW_YORK),
+            0,
+        ),
+        (dt.datetime(1, 1, 1, tzinfo=BERLIN), dt.datetime(1, 1, 1, 0, 0, 1, tzinfo=BERLIN), 0),
+        # Сложение с timedelta сбрасывает fold: граница переводится из UTC.
+        (
+            dt.datetime(2024, 10, 27, 2, 15, tzinfo=BERLIN, fold=1),
+            dt.datetime(2024, 10, 27, 1, 16, tzinfo=dt.UTC).astimezone(BERLIN),
+            1,
+        ),
+        (
+            dt.datetime(2024, 10, 27, 2, 15, tzinfo=BERLIN, fold=0),
+            dt.datetime(2024, 10, 27, 0, 16, tzinfo=dt.UTC).astimezone(BERLIN),
+            0,
+        ),
+        (dt.datetime(2024, 1, 1, 12), dt.datetime(2024, 1, 1, 12, 0, 1), 0),
+    ],
+)
+def test_training_of_keeps_the_moment_at_the_edges(known, cutoff, fold) -> None:
+    """Ревью `98ab50a`: `Series.max()` строил промежуточную дату в UTC и падал на
+    9999-12-31 по Нью-Йорку, хотя polars обе строки включал в обучение. Момент
+    восстанавливается из местных компонент с поясом и `fold`."""
+    from dsx.samples import _utc_microseconds
+
+    training = _training_from_split(known, cutoff)
+
+    assert training is not None and training.rows == 2
+    got = training.labels_known_until
+    assert got.replace(tzinfo=None) == known.replace(tzinfo=None) and got.fold == fold
+    if known.tzinfo is not None:
+        assert got.tzinfo == known.tzinfo
+        assert _utc_microseconds(got) == _utc_microseconds(known)
+
+
+def test_future_labels_at_the_end_of_the_calendar_are_refused_through_the_split() -> None:
+    """Обратный сценарий ревью целиком: обучение, отобранное polars до своего
+    окна, предъявлено окну, начавшемуся раньше его меток."""
+    known = dt.datetime(9999, 12, 31, 23, 59, 59, tzinfo=NEW_YORK)
+    training = _training_from_split(known, known.replace(microsecond=999998))
+    start = dt.datetime(9999, 12, 30, 12, tzinfo=NEW_YORK)
+
+    sl = SampleLedger()
+    units = frozenset({"о-0"})
+    sl.register_window(
+        "w0",
+        start=start,
+        extent=Extent(units=units, since=start, until=start),
+        evaluation=units,
+        frame=_frame(1),
+        training=training,
+    )
+    defects = sl.provenance_defects("w0", sl.training("w0", "обучение"))
+    assert len(defects) == 1 and "метки из будущего" in defects[0]
