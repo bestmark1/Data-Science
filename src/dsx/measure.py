@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from fractions import Fraction
 from typing import Annotated
@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sklearn.metrics import average_precision_score
 
 from dsx.label import LABEL
-from dsx.samples import Purpose, SampleLedger
+from dsx.samples import Fit, Purpose, SampleLedger
 
 BOOTSTRAP = 400
 """Число пересборок для интервала. Фиксировано: подбор числа пересборок под
@@ -931,10 +931,26 @@ def segment_section(segments: list[Segment], show: int = 10) -> str:
 
 
 @dataclass(frozen=True)
+class Prediction:
+    """Прогнозы окна вместе с записью обучения модели, которая их дала.
+
+    Запись выдаёт журнал выборок (`SampleLedger.training`); без неё измерение
+    по окнам прогнозы не принимает (DS-010). Связь прогнозов с самой моделью
+    ядро не видит — это названный предел: построитель, обучивший модель не на
+    выданном кадре, не обнаруживается.
+    """
+
+    fit: Fit
+    scores: pl.Series
+
+
+@dataclass(frozen=True)
 class Stability:
     """Знак превосходства по окнам: держится ли вывод во времени."""
 
     per_window: dict[str, Comparison | Unmeasured]
+    provenance: dict[str, str] = field(default_factory=dict)
+    """Окно → на чём обучена модель, давшая его прогнозы."""
 
     @property
     def signs(self) -> set[bool]:
@@ -968,13 +984,16 @@ class Stability:
     def report_section(self) -> str:
         lines = ["## Устойчивость по окнам", ""]
         lines += [f"- {name}: {c}" for name, c in sorted(self.per_window.items())]
+        if self.provenance:
+            lines += ["", "Происхождение прогнозов:"]
+            lines += [f"- {name}: {fit}" for name, fit in sorted(self.provenance.items())]
         lines += ["", self.statement()]
         return "\n".join(lines)
 
 
 def stability_across_windows(
     ledger: SampleLedger,
-    scores_by_window: dict[str, pl.Series],
+    predictions: dict[str, Prediction],
     rule: BaselineRule,
     decision: str = "оценка устойчивости по окнам",
 ) -> Stability:
@@ -985,22 +1004,59 @@ def stability_across_windows(
     требуется предъявить предсказания ПО ОКНАМ и измерить, держится ли знак:
     доказательство, а не оркестровка.
 
-    Расходует окна как выборки выбора: смотреть пооконные метрики и решать по
-    ним — это выбор, а не аудит.
+    Прогнозы окна принимаются только с записью обучения, выданной журналом, и
+    только если модель училась не на оценочных строках окна и не на метках,
+    известных после его начала (DS-010). Кейсы 3–5 мерили ранние окна моделью,
+    обученной на последнем, и N7 объявил знак устойчивым (класс 19 журнала
+    повторов). Проверяется состав и время, а не число моделей: одна модель,
+    обученная до самого раннего окна, проходит во всех.
+
+    Входы всех окон — происхождение, длина, значения, оценки правила, текст
+    происхождения, допустимость выбора (P7) — проверяются до расходования
+    первого: ошибка любого окна не тратит ни одной выборки (ревью `648a185`,
+    `ab5d402`: ошибка последнего окна тратила предыдущие).
+    Для проверки окна читаются как аудит — чтение ради проверок, которое их не
+    расходует. Затем окна расходуются как выборки выбора: смотреть пооконные
+    метрики и решать по ним — это выбор, а не аудит.
     """
-    per_window: dict[str, Comparison | Unmeasured] = {}
-    for window, scores in scores_by_window.items():
-        _require_series(f"оценки окна {window!r}", scores)
-    for window, scores in scores_by_window.items():
-        frame = _require_frame(ledger.checkout(window, Purpose.SELECTION, decision))
+    if type(decision) is not str or not decision:
+        # Ревью `da79e10`: пустое решение проходило первый проход и падало на
+        # записи выбора, после обращений аудита. Требование то же, что у `Access`.
+        raise ValueError("решение, ради которого расходуются окна, не названо")
+
+    for window, prediction in predictions.items():
+        if type(prediction) is not Prediction:
+            raise ValueError(
+                f"окно {window!r}: ожидается Prediction с записью обучения, получено "
+                f"{_type_name(type(prediction))} — происхождение прогнозов неизвестно"
+            )
+        _require_series(f"оценки окна {window!r}", prediction.scores)
+        defects = ledger.provenance_defects(window, prediction.fit)
+        if defects:
+            raise ValueError(f"окно {window!r}: прогнозы не принимаются — " + "; ".join(defects))
+
+    prepared: dict[str, tuple[np.ndarray, ...]] = {}
+    provenance: dict[str, str] = {}
+    for window, prediction in predictions.items():
+        scores = prediction.scores
+        frame = _require_frame(
+            ledger.checkout(window, Purpose.AUDIT, f"проверка входов: {decision}")
+        )
         if scores.len() != frame.height:
             raise ValueError(
                 f"в окне {window!r} предсказаний {scores.len():,}, а строк "
                 f"{frame.height:,}: оценки не выровнены"
             )
+        prepared[window] = _observed(frame, scores, rule.score(frame))
+        provenance[window] = str(prediction.fit)
+        # Отказ P7 известен заранее: проверяется до расходования любого окна
+        # (ревью `ab5d402`), обход действует как в `select`.
+        ledger.require_selectable(window)
 
-        labels, model, baseline = _observed(frame, scores, rule.score(frame))
+    per_window: dict[str, Comparison | Unmeasured] = {}
+    for window, (labels, model, baseline) in prepared.items():
+        ledger.select(window, decision)
         per_window[window] = _compare(
             "разрешающая способность", discrimination, model, baseline, labels
         )
-    return Stability(per_window=per_window)
+    return Stability(per_window=per_window, provenance=provenance)

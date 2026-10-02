@@ -122,9 +122,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # 4. МОДЕЛЬ. Ядро предсказаний не производит: оно принимает готовые оценки.
     result.uses(FEATURES)
+    # Обучающая часть выдаётся журналом вместе с записью обучения: без записи
+    # измерение по окнам прогнозы не примет (DS-010). Строки в ней размечены.
     last = result.split.parts[-1]
-    train = last.train.filter(pl.col(LABEL).is_not_null())
-    result.samples.fit(last.name, f"обучение на обучающей части окна {last.name}")
+    train = result.samples.training(
+        last.name, f"обучение на обучающей части окна {last.name}"
+    ).frame
 
     доля = float(train[LABEL].mean())
     categories = sorted(train["region"].unique().drop_nulls().to_list())

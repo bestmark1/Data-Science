@@ -23,7 +23,7 @@ from dsx.join import Cardinality, guarded_join
 from dsx.label import LABEL, REASON, OutcomeReason, compute, observable
 from dsx.outcome import ComparisonMode, OutcomeDefinition
 from dsx.roles import Role
-from dsx.samples import Extent
+from dsx.samples import Extent, Training
 
 KNOWN_AT = "__label_known_at"
 
@@ -71,7 +71,12 @@ class Part:
     """Одна часть сплита: чему учимся и на чём оцениваемся."""
 
     window: Window
-    train: pl.DataFrame
+    train: pl.DataFrame | None
+    """Обучающая часть. После прогона — `None`: она передана журналу выборок и
+    выдаётся только через `SampleLedger.training` вместе с записью обучения
+    (DS-010, класс 19 журнала повторов). Число строк остаётся в
+    `SplitResult.train_rows`."""
+
     evaluate: pl.DataFrame
 
     @property
@@ -123,6 +128,14 @@ class SplitResult:
     сплита исчезают: держать их публичным полем значит оставить обход учёта
     открытым. Здесь остаётся только число для отчёта.
     """
+
+    train_rows: dict[str, int] = field(default_factory=dict)
+    """Строк в обучающей части каждого окна — для отчёта, когда сами части уже
+    переданы журналу."""
+
+    shared_objects: dict[str, int] = field(default_factory=dict)
+    """Объекты по обе стороны сплита каждого окна, посчитанные до передачи
+    обучающих частей журналу."""
 
     reserved: pl.DataFrame | None = None
     """Измерительная выборка, отрезанная до начала работы и не входящая ни в
@@ -349,19 +362,60 @@ def extent_of(part: Part, world: World) -> Extent:
 
 
 def _extent_of_frame(frame: pl.DataFrame, world: World) -> Extent:
-    keys = world.schema.by_role(Role.ENTITY_ID)
-    if not keys:
-        raise ValueError("состав выборки требует объявленной единицы решения")
-    key = keys[0].name
     moment = world.schema.decision_time.name
-    # Идентификаторы приводятся к строке здесь и только здесь: целочисленные
-    # ключи встречаются чаще строковых, и падение на регистрации выборок
-    # означало бы, что ядро работает лишь на данных с текстовыми ключами.
     return Extent(
-        units=frozenset(str(value) for value in frame[key].to_list()),
+        units=units_of(frame, world),
         since=frame[moment].min(),
         until=frame[moment].max(),
     )
+
+
+def units_of(frame: pl.DataFrame, world: World) -> frozenset[str]:
+    """Единицы решения кадра — значения колонки с ролью `ENTITY_ID`."""
+    keys = world.schema.by_role(Role.ENTITY_ID)
+    if not keys:
+        raise ValueError("состав выборки требует объявленной единицы решения")
+    # Идентификаторы приводятся к строке здесь и только здесь: целочисленные
+    # ключи встречаются чаще строковых, и падение на регистрации выборок
+    # означало бы, что ядро работает лишь на данных с текстовыми ключами.
+    return frozenset(str(value) for value in frame[keys[0].name].to_list())
+
+
+def training_of(part: Part, world: World) -> Training | None:
+    """Обучающая часть окна в том виде, в каком её принимает журнал выборок.
+
+    Момент знания меток — максимум `KNOWN_AT` по строкам обучения: столько же
+    строго, сколько `split_by_windows` отбирает их по началу окна. `None` —
+    обучающая часть пуста.
+    """
+    if part.train is None:
+        raise ValueError(f"обучающая часть окна {part.name!r} уже передана журналу")
+    if part.train.height == 0:
+        return None
+    known, text = _latest_moment(part.train[KNOWN_AT])
+    return Training(
+        frame=part.train,
+        rows=part.train.height,
+        units=units_of(part.train, world),
+        labels_known_until=known,
+        labels_known_text=text,
+        zoned=part.train[KNOWN_AT].dtype.time_zone is not None,
+    )
+
+
+def _latest_moment(column: pl.Series) -> tuple[int, str]:
+    """Наибольший момент колонки: микросекунды Unix-времени и текст — оба из polars.
+
+    Ревью `98ab50a`: `Series.max()` у колонки с поясом строил Python-дату в UTC и
+    падал на 9999-12-31 по Нью-Йорку. Ревью `bae53e9`: восстановление даты с
+    поясом через `ZoneInfo` Python расходилось с правилами polars (Ванкувер после
+    ноября 2026 года). Поэтому момент остаётся числом, которое отбор сплита и
+    сравнивает, а текст для сообщений печатает сам polars.
+    """
+    micros = column.dt.epoch("us")
+    index = micros.arg_max()
+    shape = "%Y-%m-%d %H:%M%z" if column.dtype.time_zone is not None else "%Y-%m-%d %H:%M"
+    return micros[index], column.dt.to_string(shape)[index]
 
 
 def feature_window_overlap(parts: list[Part], world: World, lookback_days: float) -> dict[str, int]:
