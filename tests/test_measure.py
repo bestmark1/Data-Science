@@ -32,7 +32,7 @@ from dsx.measure import (
     stability_across_windows,
 )
 from dsx.policy import Blocked
-from dsx.samples import Extent, Purpose, SampleLedger, Training
+from dsx.samples import Extent, Purpose, SampleLedger, Training, _epoch_microseconds
 
 ROWS = 4000
 
@@ -292,7 +292,9 @@ def _register_window(
             frame=pl.DataFrame({LABEL: [0, 1]}),
             rows=2,
             units=frozenset({f"{name}-обучение-0", f"{name}-обучение-1"}),
-            labels_known_until=start - dt.timedelta(days=1),
+            labels_known_until=_epoch_microseconds(start - dt.timedelta(days=1)),
+            labels_known_text=f"{start - dt.timedelta(days=1):%Y-%m-%d %H:%M}",
+            zoned=False,
         ),
     )
 

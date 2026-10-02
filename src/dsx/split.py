@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass, field
-from zoneinfo import ZoneInfo
 
 import polars as pl
 
@@ -24,7 +23,7 @@ from dsx.join import Cardinality, guarded_join
 from dsx.label import LABEL, REASON, OutcomeReason, compute, observable
 from dsx.outcome import ComparisonMode, OutcomeDefinition
 from dsx.roles import Role
-from dsx.samples import Extent, Training, _utc_microseconds
+from dsx.samples import Extent, Training
 
 KNOWN_AT = "__label_known_at"
 
@@ -393,35 +392,30 @@ def training_of(part: Part, world: World) -> Training | None:
         raise ValueError(f"обучающая часть окна {part.name!r} уже передана журналу")
     if part.train.height == 0:
         return None
+    known, text = _latest_moment(part.train[KNOWN_AT])
     return Training(
         frame=part.train,
         rows=part.train.height,
         units=units_of(part.train, world),
-        labels_known_until=_latest_moment(part.train[KNOWN_AT]),
+        labels_known_until=known,
+        labels_known_text=text,
+        zoned=part.train[KNOWN_AT].dtype.time_zone is not None,
     )
 
 
-def _latest_moment(column: pl.Series) -> dt.datetime:
-    """Наибольший момент колонки — без промежуточной даты в UTC.
+def _latest_moment(column: pl.Series) -> tuple[int, str]:
+    """Наибольший момент колонки: микросекунды Unix-времени и текст — оба из polars.
 
-    Ревью `98ab50a`: `Series.max()` у колонки с поясом строит Python-дату в UTC и
-    падал на 9999-12-31 по Нью-Йорку (в UTC — год 10000), хотя polars такие
-    строки отбирает в обучение. Здесь максимум берётся по положению в UTC целым
-    числом, а момент восстанавливается из местных компонент с поясом и тем
-    `fold`, при котором положение совпадает.
+    Ревью `98ab50a`: `Series.max()` у колонки с поясом строил Python-дату в UTC и
+    падал на 9999-12-31 по Нью-Йорку. Ревью `bae53e9`: восстановление даты с
+    поясом через `ZoneInfo` Python расходилось с правилами polars (Ванкувер после
+    ноября 2026 года). Поэтому момент остаётся числом, которое отбор сплита и
+    сравнивает, а текст для сообщений печатает сам polars.
     """
-    zone = column.dtype.time_zone
-    if zone is None:
-        return column.max()
-    utc = column.dt.epoch("us")
-    index = utc.arg_max()
-    target = utc[index]
-    local = column.dt.replace_time_zone(None)[index]
-    for fold in (0, 1):
-        moment = local.replace(tzinfo=ZoneInfo(zone), fold=fold)
-        if _utc_microseconds(moment) == target:
-            return moment
-    raise ValueError(f"момент {local} в поясе {zone} не восстанавливается из местного времени")
+    micros = column.dt.epoch("us")
+    index = micros.arg_max()
+    shape = "%Y-%m-%d %H:%M%z" if column.dtype.time_zone is not None else "%Y-%m-%d %H:%M"
+    return micros[index], column.dt.to_string(shape)[index]
 
 
 def feature_window_overlap(parts: list[Part], world: World, lookback_days: float) -> dict[str, int]:

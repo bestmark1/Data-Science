@@ -16,7 +16,7 @@ import pytest
 from dsx.label import LABEL
 from dsx.measure import BaselineRule, Prediction, RuleKind, stability_across_windows
 from dsx.policy import Blocked
-from dsx.samples import Extent, Fit, SampleLedger, Training
+from dsx.samples import Extent, Fit, SampleLedger, Training, _epoch_microseconds
 
 CONSTANT = BaselineRule(kind=RuleKind.CONSTANT, constant=0.3)
 STARTS = {
@@ -44,7 +44,9 @@ def _training(units: frozenset[str], known_until: dt.datetime) -> Training:
         frame=pl.DataFrame({LABEL: [0, 1]}),
         rows=len(units),
         units=units,
-        labels_known_until=known_until,
+        labels_known_until=_epoch_microseconds(known_until),
+        labels_known_text=f"{known_until:%Y-%m-%d %H:%M%z}",
+        zoned=known_until.utcoffset() is not None,
     )
 
 
@@ -162,7 +164,9 @@ def test_a_fit_the_ledger_did_not_issue_is_refused() -> None:
         frame=pl.DataFrame(),
         rows=1,
         units=frozenset({"x"}),
-        labels_known_until=dt.datetime(2000, 1, 1),
+        labels_known_until=0,
+        labels_known_text="1970-01-01 00:00",
+        zoned=False,
     )
     foreign = _ledger().training("w0", "обучение в другом журнале")
 
@@ -199,6 +203,8 @@ def test_subclasses_of_prediction_and_fit_are_refused() -> None:
         rows=fit.rows,
         units=fit.units,
         labels_known_until=fit.labels_known_until,
+        labels_known_text=fit.labels_known_text,
+        zoned=fit.zoned,
     )
     with pytest.raises(ValueError, match="без записи обучения"):
         _measure(sl, {"w0": loud})
@@ -246,7 +252,9 @@ def test_a_forged_fit_with_odd_fields_is_refused_not_crashed(window) -> None:
         frame=pl.DataFrame(),
         rows=1,
         units=frozenset({"x"}),
-        labels_known_until=dt.datetime(2000, 1, 1),
+        labels_known_until=0,
+        labels_known_text="1970-01-01 00:00",
+        zoned=False,
     )
     with pytest.raises(ValueError, match="не этим журналом"):
         _measure(sl, {"w0": forged})
@@ -266,7 +274,9 @@ def test_a_forged_fit_is_refused_without_hashing_its_fields() -> None:
         frame=pl.DataFrame(),
         rows=1,
         units=frozenset({"x"}),
-        labels_known_until=dt.datetime(2000, 1, 1),
+        labels_known_until=0,
+        labels_known_text="1970-01-01 00:00",
+        zoned=False,
     )
     with pytest.raises(ValueError, match="не этим журналом"):
         _measure(sl, {"w0": forged})
@@ -283,7 +293,11 @@ def test_a_forged_fit_is_refused_without_hashing_its_fields() -> None:
         ("units", frozenset({1})),
         ("units", {"a"}),
         ("labels_known_until", "2024-01-01"),
-        ("labels_known_until", dt.datetime(2023, 1, 1, tzinfo=dt.UTC)),
+        ("labels_known_until", dt.datetime(2023, 1, 1)),
+        ("labels_known_until", True),
+        ("labels_known_text", ""),
+        ("zoned", 1),
+        ("zoned", True),
     ],
 )
 def test_training_metadata_is_checked_at_registration(field, value) -> None:
@@ -294,7 +308,9 @@ def test_training_metadata_is_checked_at_registration(field, value) -> None:
         "frame": pl.DataFrame({LABEL: [0, 1]}),
         "rows": 2,
         "units": frozenset({"a", "b"}),
-        "labels_known_until": dt.datetime(2023, 1, 1),
+        "labels_known_until": 0,
+        "labels_known_text": "1970-01-01 00:00",
+        "zoned": False,
     }
     fields[field] = value
     with pytest.raises(ValueError, match="обучающая часть окна"):
@@ -429,10 +445,9 @@ def test_moments_at_the_edges_of_the_calendar_are_compared(known, start, future)
 def test_the_time_condition_agrees_with_the_split(known, start) -> None:
     """Обучение окна — строки с `KNOWN_AT < start` в polars; проверка
     происхождения обязана говорить то же самое."""
-    from dsx.samples import _strictly_before
-
-    in_training = pl.DataFrame({"known": [known]}).select(pl.col("known") < start).item()
-    assert _strictly_before(known, start) is in_training
+    column = pl.Series("known", [known])
+    in_training = column.to_frame().select(pl.col("known") < start).item()
+    assert (column.dt.epoch("us")[0] < _epoch_microseconds(start)) is in_training
 
 
 def _training_from_split(known: dt.datetime, cutoff: dt.datetime) -> Training | None:
@@ -449,42 +464,51 @@ def _training_from_split(known: dt.datetime, cutoff: dt.datetime) -> Training | 
 
 
 @pytest.mark.parametrize(
-    "known, cutoff, fold",
+    "known, cutoff",
     [
         (
             dt.datetime(9999, 12, 31, 23, 59, 59, tzinfo=NEW_YORK),
             dt.datetime(9999, 12, 31, 23, 59, 59, 999998, tzinfo=NEW_YORK),
-            0,
         ),
-        (dt.datetime(1, 1, 1, tzinfo=BERLIN), dt.datetime(1, 1, 1, 0, 0, 1, tzinfo=BERLIN), 0),
+        (dt.datetime(1, 1, 1, tzinfo=BERLIN), dt.datetime(1, 1, 1, 0, 0, 1, tzinfo=BERLIN)),
         # Сложение с timedelta сбрасывает fold: граница переводится из UTC.
         (
             dt.datetime(2024, 10, 27, 2, 15, tzinfo=BERLIN, fold=1),
             dt.datetime(2024, 10, 27, 1, 16, tzinfo=dt.UTC).astimezone(BERLIN),
-            1,
         ),
         (
             dt.datetime(2024, 10, 27, 2, 15, tzinfo=BERLIN, fold=0),
             dt.datetime(2024, 10, 27, 0, 16, tzinfo=dt.UTC).astimezone(BERLIN),
-            0,
         ),
-        (dt.datetime(2024, 1, 1, 12), dt.datetime(2024, 1, 1, 12, 0, 1), 0),
+        (dt.datetime(2024, 1, 1, 12), dt.datetime(2024, 1, 1, 12, 0, 1)),
     ],
 )
-def test_training_of_keeps_the_moment_at_the_edges(known, cutoff, fold) -> None:
+def test_training_of_keeps_the_moment_at_the_edges(known, cutoff) -> None:
     """Ревью `98ab50a`: `Series.max()` строил промежуточную дату в UTC и падал на
     9999-12-31 по Нью-Йорку, хотя polars обе строки включал в обучение. Момент
-    восстанавливается из местных компонент с поясом и `fold`."""
-    from dsx.samples import _utc_microseconds
-
+    берётся числом из polars — тем, что сравнивает отбор сплита."""
     training = _training_from_split(known, cutoff)
 
     assert training is not None and training.rows == 2
-    got = training.labels_known_until
-    assert got.replace(tzinfo=None) == known.replace(tzinfo=None) and got.fold == fold
-    if known.tzinfo is not None:
-        assert got.tzinfo == known.tzinfo
-        assert _utc_microseconds(got) == _utc_microseconds(known)
+    assert training.labels_known_until == _epoch_microseconds(known)
+    assert training.zoned is (known.tzinfo is not None)
+
+
+def test_the_moment_comes_from_polars_not_from_python_zone_rules() -> None:
+    """Ревью `bae53e9`: дата восстанавливалась через `ZoneInfo` Python, а его база
+    правил поясов расходилась с polars — Ванкувер 2026-11-15 00:00 UTC: polars
+    печатает 16:00-08:00, системная база macOS давала 16:00 смещение −07:00, и
+    честное обучение отвергалось. Число и текст берутся из одного источника."""
+    from dsx.split import _latest_moment
+
+    utc = 1794700800000000
+    column = pl.Series("known", [utc - 1, utc], dtype=pl.Int64).cast(
+        pl.Datetime("us", "America/Vancouver")
+    )
+    known, text = _latest_moment(column)
+
+    assert known == utc
+    assert text == column.dt.to_string("%Y-%m-%d %H:%M%z")[1]
 
 
 def test_future_labels_at_the_end_of_the_calendar_are_refused_through_the_split() -> None:

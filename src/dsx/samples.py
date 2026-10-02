@@ -86,21 +86,6 @@ class Access(BaseModel):
         return f"{self.sample} / {self.purpose.value}: {self.decision}"
 
 
-def _strictly_before(earlier: dt.datetime, later: dt.datetime) -> bool:
-    """`earlier < later` как моменты, а не как показания часов.
-
-    Ревью `da79e10`: при ОДНОМ объекте пояса Python сравнивает местное время и
-    не учитывает `fold`. В час перевода часов 02:15+01:00 (второй проход) позже
-    02:30+02:00 на 45 минут, а сравнение говорило «раньше» — обучение на будущих
-    метках принималось. polars сравнивает в UTC, и так же — здесь. Наивное время
-    неоднозначности не имеет и сравнивается как есть; смешение наивного с
-    поясным отвергается при регистрации окна.
-    """
-    if not _aware(earlier):
-        return earlier < later
-    return _utc_microseconds(earlier) < _utc_microseconds(later)
-
-
 def _aware(value: dt.datetime) -> bool:
     """Привязан ли момент к поясу — по определению Python: смещение известно."""
     return value.utcoffset() is not None
@@ -109,22 +94,25 @@ def _aware(value: dt.datetime) -> bool:
 _UNIX_EPOCH = dt.datetime(1970, 1, 1)
 
 
-def _utc_microseconds(value: dt.datetime) -> int:
-    """Положение момента в UTC целым числом микросекунд.
+def _epoch_microseconds(value: dt.datetime) -> int:
+    """Микросекунды Unix-времени — то же число, что `dt.epoch("us")` в polars.
 
-    Ревью `69074aa`: `astimezone(UTC)` строит промежуточный `datetime`, и на краях
-    календаря он выходит за годы 1..9999 — год 1 по Берлину (+00:53:28) уходил в
-    год 0, конец 9999 года по Нью-Йорку — в 10000, и сравнение падало
-    `OverflowError`, хотя polars такие моменты сравнивает. Здесь только
-    целочисленная арифметика: местное время от начала Unix-времени минус
-    смещение, которое `utcoffset` берёт с учётом `fold`. Отсчёт — тот же, что у
-    `dt.epoch("us")` в polars.
+    Начало окна приходит из Python, и polars, отбирая обучение по
+    `KNOWN_AT < start`, переводит его в UTC по смещению самого объекта. Здесь —
+    тот же перевод, поэтому проверка происхождения повторяет отбор сплита:
+
+    * ревью `da79e10`: Python сравнивает два момента с ОДНИМ объектом пояса по
+      местному времени без `fold` — в час перевода часов будущие метки
+      принимались. Здесь сравниваются числа;
+    * ревью `69074aa`: `astimezone(UTC)` строил промежуточную дату за пределами
+      лет 1..9999. Здесь только целочисленная арифметика: местное время от
+      начала Unix-времени минус смещение (с учётом `fold`); наивное время —
+      без смещения, как его считает polars.
     """
     unit = dt.timedelta(microseconds=1)
     local = (value.replace(tzinfo=None) - _UNIX_EPOCH) // unit
     offset = value.utcoffset()
-    assert offset is not None
-    return local - offset // unit
+    return local if offset is None else local - offset // unit
 
 
 def _moment(value: dt.datetime) -> str:
@@ -143,8 +131,21 @@ class Training:
     frame: object
     rows: int
     units: frozenset[str]
-    labels_known_until: dt.datetime
-    """Момент, к которому известны ВСЕ метки обучающих строк."""
+    labels_known_until: int
+    """Момент, к которому известны ВСЕ метки обучающих строк, — микросекунды
+    Unix-времени, как `dt.epoch("us")` в polars: в UTC у колонки с поясом,
+    местные у наивной.
+
+    Числом, а не датой Python (ревью `bae53e9`): дата с поясом зависит от базы
+    правил поясов Python, а она расходится с polars — у Ванкувера после ноября
+    2026 года одна даёт −08:00, другая −07:00, и честное обучение отвергалось.
+    Значение колонки однозначно как число."""
+
+    labels_known_text: str
+    """Тот же момент для сообщений — как его печатает polars."""
+
+    zoned: bool
+    """Привязана ли колонка момента знания меток к поясу."""
 
 
 @dataclass(frozen=True, eq=False)
@@ -162,12 +163,14 @@ class Fit:
     frame: object
     rows: int
     units: frozenset[str]
-    labels_known_until: dt.datetime
+    labels_known_until: int
+    labels_known_text: str
+    zoned: bool
 
     def __str__(self) -> str:
         return (
             f"обучающая часть окна {self.window}: {self.rows:,} строк, "
-            f"метки известны до {_moment(self.labels_known_until)}"
+            f"метки известны до {self.labels_known_text}"
         )
 
 
@@ -202,10 +205,13 @@ def _require_window_metadata(
     units = training.units
     if type(units) is not frozenset or not units or any(type(u) is not str for u in units):
         raise ValueError(f"{where}: единицы решения — не непустой frozenset строк")
-    known = training.labels_known_until
-    if type(known) is not dt.datetime:
-        raise ValueError(f"{where}: момент знания меток — не datetime")
-    if _aware(known) != _aware(start):
+    if type(training.labels_known_until) is not int:
+        raise ValueError(f"{where}: момент знания меток — не целое число микросекунд")
+    if type(training.labels_known_text) is not str or not training.labels_known_text:
+        raise ValueError(f"{where}: момент знания меток не записан текстом")
+    if type(training.zoned) is not bool:
+        raise ValueError(f"{where}: привязка к поясу — не bool")
+    if training.zoned != _aware(start):
         raise ValueError(f"{where}: момент знания меток и начало окна по-разному привязаны к поясу")
 
 
@@ -276,6 +282,8 @@ class SampleLedger:
                 rows=training.rows,
                 units=training.units,
                 labels_known_until=training.labels_known_until,
+                labels_known_text=training.labels_known_text,
+                zoned=training.zoned,
             )
         )
         self._windows[name] = _Window(start=start, evaluation=evaluation, fit=fit)
@@ -327,9 +335,9 @@ class SampleLedger:
                 f"модель училась на {len(shared):,} из {len(target.evaluation):,} оценочных "
                 f"единиц решения окна ({fit})"
             )
-        if not _strictly_before(fit.labels_known_until, target.start):
+        if fit.labels_known_until >= _epoch_microseconds(target.start):
             defects.append(
-                f"модель училась на метках, известных до {_moment(fit.labels_known_until)}, "
+                f"модель училась на метках, известных до {fit.labels_known_text}, "
                 f"а окно начинается {_moment(target.start)}: метки из будущего окна"
             )
         return defects
