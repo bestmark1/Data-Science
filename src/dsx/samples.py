@@ -96,9 +96,31 @@ def _strictly_before(earlier: dt.datetime, later: dt.datetime) -> bool:
     неоднозначности не имеет и сравнивается как есть; смешение наивного с
     поясным отвергается при регистрации окна.
     """
-    if earlier.tzinfo is None:
+    if not _aware(earlier):
         return earlier < later
-    return earlier.astimezone(dt.UTC) < later.astimezone(dt.UTC)
+    return _utc_microseconds(earlier) < _utc_microseconds(later)
+
+
+def _aware(value: dt.datetime) -> bool:
+    """Привязан ли момент к поясу — по определению Python: смещение известно."""
+    return value.utcoffset() is not None
+
+
+def _utc_microseconds(value: dt.datetime) -> int:
+    """Положение момента в UTC целым числом микросекунд.
+
+    Ревью `69074aa`: `astimezone(UTC)` строит промежуточный `datetime`, и на краях
+    календаря он выходит за годы 1..9999 — год 1 по Берлину (+00:53:28) уходил в
+    год 0, конец 9999 года по Нью-Йорку — в 10000, и сравнение падало
+    `OverflowError`, хотя polars такие моменты сравнивает. Здесь только
+    целочисленная арифметика: местное время от `datetime.min` минус смещение,
+    которое `utcoffset` берёт с учётом `fold`.
+    """
+    unit = dt.timedelta(microseconds=1)
+    local = (value.replace(tzinfo=None) - dt.datetime.min) // unit
+    offset = value.utcoffset()
+    assert offset is not None
+    return local - offset // unit
 
 
 def _moment(value: dt.datetime) -> str:
@@ -179,7 +201,7 @@ def _require_window_metadata(
     known = training.labels_known_until
     if type(known) is not dt.datetime:
         raise ValueError(f"{where}: момент знания меток — не datetime")
-    if (known.tzinfo is None) != (start.tzinfo is None):
+    if _aware(known) != _aware(start):
         raise ValueError(f"{where}: момент знания меток и начало окна по-разному привязаны к поясу")
 
 

@@ -332,7 +332,7 @@ def _one_window(start: dt.datetime, known: dt.datetime) -> tuple[SampleLedger, F
     sl.register_window(
         "w0",
         start=start,
-        extent=Extent(units=units, since=start, until=start + dt.timedelta(days=1)),
+        extent=Extent(units=units, since=start, until=start),
         evaluation=units,
         frame=_frame(1),
         training=_training(frozenset({"у-0"}), known),
@@ -378,3 +378,58 @@ def test_an_empty_decision_is_refused_before_reading_windows() -> None:
             decision="",
         )
     assert len(sl.accesses) == before
+
+
+NEW_YORK = ZoneInfo("America/New_York")
+
+
+@pytest.mark.parametrize(
+    "known, start, future",
+    [
+        # Ревью `69074aa`: перевод в UTC уводил год 1 по Берлину (+00:53:28) в год 0.
+        (dt.datetime(1, 1, 1, tzinfo=BERLIN), dt.datetime(1, 1, 2, tzinfo=BERLIN), False),
+        # ...а начало окна в 9999 году по Нью-Йорку — в год 10000.
+        (
+            dt.datetime(9999, 12, 30, 12, tzinfo=NEW_YORK),
+            dt.datetime(9999, 12, 31, 23, 59, 59, tzinfo=NEW_YORK),
+            False,
+        ),
+        (
+            dt.datetime(9999, 12, 31, 23, 59, 59, tzinfo=NEW_YORK),
+            dt.datetime(9999, 12, 30, 12, tzinfo=NEW_YORK),
+            True,
+        ),
+    ],
+)
+def test_moments_at_the_edges_of_the_calendar_are_compared(known, start, future) -> None:
+    """Сравнение — целыми микросекундами в UTC, без промежуточного `datetime`
+    за пределами 1..9999: polars такие моменты сравнивает, и ядро обязано тоже."""
+    sl, fit = _one_window(start, known)
+    defects = sl.provenance_defects("w0", fit)
+    assert (len(defects) == 1 and "метки из будущего" in defects[0]) if future else defects == []
+
+
+@pytest.mark.parametrize(
+    "known, start",
+    [
+        (
+            dt.datetime(2024, 10, 27, 2, 15, tzinfo=BERLIN, fold=1),
+            dt.datetime(2024, 10, 27, 2, 30, tzinfo=BERLIN, fold=0),
+        ),
+        (
+            dt.datetime(2024, 10, 27, 2, 45, tzinfo=BERLIN, fold=0),
+            dt.datetime(2024, 10, 27, 2, 30, tzinfo=BERLIN, fold=1),
+        ),
+        (dt.datetime(1, 1, 1, tzinfo=BERLIN), dt.datetime(1, 1, 2, tzinfo=BERLIN)),
+        (dt.datetime(2024, 1, 1), dt.datetime(2024, 1, 1, 0, 0, 0, 1)),
+        (dt.datetime(2024, 1, 1, 0, 0, 0, 1), dt.datetime(2024, 1, 1)),
+        (dt.datetime(2024, 1, 1, tzinfo=dt.UTC), dt.datetime(2024, 1, 1, tzinfo=dt.UTC)),
+    ],
+)
+def test_the_time_condition_agrees_with_the_split(known, start) -> None:
+    """Обучение окна — строки с `KNOWN_AT < start` в polars; проверка
+    происхождения обязана говорить то же самое."""
+    from dsx.samples import _strictly_before
+
+    in_training = pl.DataFrame({"known": [known]}).select(pl.col("known") < start).item()
+    assert _strictly_before(known, start) is in_training
