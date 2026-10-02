@@ -447,6 +447,35 @@ class FeatureRelationStability:
                 )
         return signals
 
+    def silence(self, context: Context) -> str:
+        """Какую смену знака связи N4 не заметила бы на окнах этого прогона.
+
+        Смена знака засчитывается, только если связь в ОБОИХ окнах не слабее
+        порога своего окна — max(floor, 3σ), σ = 0.29/√(строк меньшего класса).
+        Значит, наименьшая заметная смена знака — второй по величине порог: пара
+        двух окон с самыми низкими порогами. Пороги не меняются; называется то,
+        чего они не пропускают.
+        """
+        windows = _windows_with_labels(context)
+        thresholds = {w: max(self.floor, SIGMA * _association_error(f[LABEL])) for w, f in windows}
+        shown = ", ".join(f"{w}: {t:.3f}" for w, t in sorted(thresholds.items()))
+        rule = (
+            f"порог окна — max({self.floor:g}, {SIGMA:g}σ), "
+            "σ = 0.29/√(строк меньшего класса в окне)"
+        )
+        finite = sorted(t for t in thresholds.values() if math.isfinite(t))
+        if len(finite) < 2:
+            return (
+                "молчит, но смену знака связи на этих окнах не заметила бы ни при какой "
+                f"силе: меньше двух окон с обоими классами ({rule}; {shown})"
+            )
+        return (
+            f"молчит, но смену знака связи слабее {finite[1]:.3f} на окнах этого прогона "
+            f"не заметила бы: знак засчитывается, только если связь в обоих окнах не "
+            f"слабее их порогов ({rule}; {shown}). Молчание не доказывает устойчивости "
+            "связей слабее этой силы"
+        )
+
 
 @dataclass(frozen=True)
 class DeclaredDirectionHolds:

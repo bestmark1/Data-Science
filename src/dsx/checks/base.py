@@ -104,6 +104,13 @@ class Report:
 
     signals: list[Signal] = field(default_factory=list)
     skipped: list[Skipped] = field(default_factory=list)
+    limits: list[str] = field(default_factory=list)
+    """Пределы молчания: чего промолчавшая проверка не заметила бы на этих данных.
+
+    DS-007: N4 видит смену знака связи лишь сильнее порога шума окна, и её
+    молчание на окнах в 300 строк не доказывало устойчивости (класс 18 журнала
+    повторов). Предел — не находка: с ожиданием кейса он не сверяется."""
+
     overrides: tuple = ()
 
     @property
@@ -146,6 +153,12 @@ def run_checks(
             if signal.blocking and ledger.is_overridden(check.requirement):
                 signal = Signal(signal.finding, signal.detail, blocking=False)
             report.signals.append(signal)
+
+        # Проверка, умеющая назвать предел своего молчания, называет его, только
+        # когда промолчала: сработавшей проверке он не нужен.
+        silence = getattr(check, "silence", None)
+        if not produced and silence is not None:
+            report.limits.append(f"{check.requirement}: {silence(context)}")
 
     report.overrides = ledger.entries
     return report
