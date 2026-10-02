@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from dsx.evals.registry import BY_ID
 from dsx.project import ProjectForm, load
 from dsx.runner import RESERVE, run
-from dsx.samples import _epoch_microseconds
+from dsx.samples import _as_polars_sees
 
 FORM = textwrap.dedent("""
     title: "Проверочный проект"
@@ -150,7 +150,7 @@ def test_training_parts_move_to_the_ledger() -> None:
     for part in result.split.parts:
         fit = result.samples.training(part.name, f"обучение на {part.name}")
         assert fit.rows == fit.frame.height == result.split.train_rows[part.name]
-        assert fit.labels_known_until < _epoch_microseconds(part.window.start)
+        assert fit.labels_known_until < _as_polars_sees(part.window.start)[0]
         assert result.samples.provenance_defects(part.name, fit) == []
     assert "обучение  2,068" in result.summary()
 

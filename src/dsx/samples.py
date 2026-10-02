@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated
 
+import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 
 from dsx.policy import Blocked, OverrideLedger
@@ -86,33 +87,28 @@ class Access(BaseModel):
         return f"{self.sample} / {self.purpose.value}: {self.decision}"
 
 
-def _aware(value: dt.datetime) -> bool:
-    """Привязан ли момент к поясу — по определению Python: смещение известно."""
-    return value.utcoffset() is not None
+def _as_polars_sees(value: dt.datetime) -> tuple[int, bool]:
+    """Момент так, как его видит отбор сплита: микросекунды Unix-времени и пояс.
 
-
-_UNIX_EPOCH = dt.datetime(1970, 1, 1)
-
-
-def _epoch_microseconds(value: dt.datetime) -> int:
-    """Микросекунды Unix-времени — то же число, что `dt.epoch("us")` в polars.
-
-    Начало окна приходит из Python, и polars, отбирая обучение по
-    `KNOWN_AT < start`, переводит его в UTC по смещению самого объекта. Здесь —
-    тот же перевод, поэтому проверка происхождения повторяет отбор сплита:
+    `split_by_windows` отбирает обучение окна условием `KNOWN_AT < start`, где
+    начало окна — Python-литерал, и polars переводит его сам. Здесь — ровно тот
+    же перевод, через литерал polars, поэтому проверка происхождения повторяет
+    отбор сплита число в число:
 
     * ревью `da79e10`: Python сравнивает два момента с ОДНИМ объектом пояса по
       местному времени без `fold` — в час перевода часов будущие метки
       принимались. Здесь сравниваются числа;
     * ревью `69074aa`: `astimezone(UTC)` строил промежуточную дату за пределами
-      лет 1..9999. Здесь только целочисленная арифметика: местное время от
-      начала Unix-времени минус смещение (с учётом `fold`); наивное время —
-      без смещения, как его считает polars.
+      лет 1..9999. Литерал polars переводит такие моменты без неё;
+    * ревью `db1214b`: перевод по `utcoffset()` Python расходился с polars —
+      для именованного пояса polars применяет СВОИ правила (Ванкувер после
+      ноября 2026 года), и честное обучение отвергалось.
+
+    Второе значение — привязан ли момент к поясу так, как это понимает polars:
+    наивное и поясное время polars не сравнивает вовсе.
     """
-    unit = dt.timedelta(microseconds=1)
-    local = (value.replace(tzinfo=None) - _UNIX_EPOCH) // unit
-    offset = value.utcoffset()
-    return local if offset is None else local - offset // unit
+    literal = pl.select(pl.lit(value)).to_series()
+    return literal.dt.epoch("us")[0], literal.dtype.time_zone is not None
 
 
 def _moment(value: dt.datetime) -> str:
@@ -177,6 +173,9 @@ class Fit:
 @dataclass(frozen=True)
 class _Window:
     start: dt.datetime
+    start_epoch: int
+    """Начало окна в микросекундах Unix-времени — как его переводит polars."""
+    start_zoned: bool
     evaluation: frozenset[str]
     fit: Fit | None
 
@@ -211,7 +210,7 @@ def _require_window_metadata(
         raise ValueError(f"{where}: момент знания меток не записан текстом")
     if type(training.zoned) is not bool:
         raise ValueError(f"{where}: привязка к поясу — не bool")
-    if training.zoned != _aware(start):
+    if training.zoned != _as_polars_sees(start)[1]:
         raise ValueError(f"{where}: момент знания меток и начало окна по-разному привязаны к поясу")
 
 
@@ -286,7 +285,14 @@ class SampleLedger:
                 zoned=training.zoned,
             )
         )
-        self._windows[name] = _Window(start=start, evaluation=evaluation, fit=fit)
+        start_epoch, start_zoned = _as_polars_sees(start)
+        self._windows[name] = _Window(
+            start=start,
+            start_epoch=start_epoch,
+            start_zoned=start_zoned,
+            evaluation=evaluation,
+            fit=fit,
+        )
 
     def training(self, window: str, decision: str) -> Fit:
         """Выдать обучающую часть окна, записав обучение тем же действием.
@@ -335,7 +341,15 @@ class SampleLedger:
                 f"модель училась на {len(shared):,} из {len(target.evaluation):,} оценочных "
                 f"единиц решения окна ({fit})"
             )
-        if fit.labels_known_until >= _epoch_microseconds(target.start):
+        if fit.zoned != target.start_zoned:
+            # Ревью `db1214b`: привязка к поясу сверялась только с СОБСТВЕННЫМ
+            # окном записи; предъявленная чужому окну, наивная запись проходила
+            # против поясного начала. polars такие моменты не сравнивает вовсе.
+            defects.append(
+                f"момент знания меток ({fit.labels_known_text}) и начало окна "
+                f"({_moment(target.start)}) несопоставимы: одно наивное, другое с поясом"
+            )
+        elif fit.labels_known_until >= target.start_epoch:
             defects.append(
                 f"модель училась на метках, известных до {fit.labels_known_text}, "
                 f"а окно начинается {_moment(target.start)}: метки из будущего окна"

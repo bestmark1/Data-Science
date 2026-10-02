@@ -16,7 +16,7 @@ import pytest
 from dsx.label import LABEL
 from dsx.measure import BaselineRule, Prediction, RuleKind, stability_across_windows
 from dsx.policy import Blocked
-from dsx.samples import Extent, Fit, SampleLedger, Training, _epoch_microseconds
+from dsx.samples import Extent, Fit, SampleLedger, Training, _as_polars_sees
 
 CONSTANT = BaselineRule(kind=RuleKind.CONSTANT, constant=0.3)
 STARTS = {
@@ -44,9 +44,9 @@ def _training(units: frozenset[str], known_until: dt.datetime) -> Training:
         frame=pl.DataFrame({LABEL: [0, 1]}),
         rows=len(units),
         units=units,
-        labels_known_until=_epoch_microseconds(known_until),
+        labels_known_until=_as_polars_sees(known_until)[0],
         labels_known_text=f"{known_until:%Y-%m-%d %H:%M%z}",
-        zoned=known_until.utcoffset() is not None,
+        zoned=_as_polars_sees(known_until)[1],
     )
 
 
@@ -447,7 +447,7 @@ def test_the_time_condition_agrees_with_the_split(known, start) -> None:
     происхождения обязана говорить то же самое."""
     column = pl.Series("known", [known])
     in_training = column.to_frame().select(pl.col("known") < start).item()
-    assert (column.dt.epoch("us")[0] < _epoch_microseconds(start)) is in_training
+    assert (column.dt.epoch("us")[0] < _as_polars_sees(start)[0]) is in_training
 
 
 def _training_from_split(known: dt.datetime, cutoff: dt.datetime) -> Training | None:
@@ -490,7 +490,7 @@ def test_training_of_keeps_the_moment_at_the_edges(known, cutoff) -> None:
     training = _training_from_split(known, cutoff)
 
     assert training is not None and training.rows == 2
-    assert training.labels_known_until == _epoch_microseconds(known)
+    assert training.labels_known_until == _as_polars_sees(known)[0]
     assert training.zoned is (known.tzinfo is not None)
 
 
@@ -530,3 +530,62 @@ def test_future_labels_at_the_end_of_the_calendar_are_refused_through_the_split(
     )
     defects = sl.provenance_defects("w0", sl.training("w0", "обучение"))
     assert len(defects) == 1 and "метки из будущего" in defects[0]
+
+
+@pytest.mark.parametrize("zone", ["America/Vancouver", "America/Edmonton", "Europe/Berlin", "UTC"])
+@pytest.mark.parametrize("shift", [-1, 0, 1])
+def test_the_provenance_decision_matches_the_split_filter(zone, shift) -> None:
+    """Ревью `db1214b`: начало окна переводилось по `utcoffset()` Python, а polars
+    для именованного пояса применяет свои правила — у Ванкувера после ноября 2026
+    года базы расходились на час, и метки, известные за 1 мкс до окна, считались
+    будущими. Решение проверки обязано совпадать с отбором `KNOWN_AT < start`."""
+    utc = 1794700800000000
+    known = pl.Series("known", [utc], dtype=pl.Int64).cast(pl.Datetime("us", zone))
+    start = known.dt.offset_by(f"{shift}us")[0]
+    in_training = known.to_frame().select(pl.col("known") < start).item()
+
+    sl = SampleLedger()
+    units = frozenset({"о-0"})
+    sl.register_window(
+        "w0",
+        start=start,
+        extent=Extent(units=units, since=start, until=start),
+        evaluation=units,
+        frame=_frame(1),
+        training=Training(
+            frame=pl.DataFrame({LABEL: [0, 1]}),
+            rows=1,
+            units=frozenset({"у-0"}),
+            labels_known_until=utc,
+            labels_known_text=known.dt.to_string("%Y-%m-%d %H:%M%z")[0],
+            zoned=True,
+        ),
+    )
+    defects = sl.provenance_defects("w0", sl.training("w0", "обучение"))
+    assert (defects == []) is in_training
+
+
+@pytest.mark.parametrize("own_zone, other_zone", [(None, dt.UTC), (dt.UTC, None)])
+def test_naive_and_zoned_moments_are_not_compared_across_windows(own_zone, other_zone) -> None:
+    """Ревью `db1214b`: привязка к поясу сверялась только с собственным окном
+    записи. Наивное обучение, предъявленное окну с поясом, проходило и
+    расходовало окно, хотя polars такие моменты не сравнивает вовсе."""
+    sl = SampleLedger()
+    for index, (name, zone) in enumerate((("своё", own_zone), ("чужое", other_zone))):
+        start = dt.datetime(2024, 1, 2 + index, tzinfo=zone)
+        units = frozenset({f"{name}-0"})
+        sl.register_window(
+            name,
+            start=start,
+            extent=Extent(units=units, since=start, until=start),
+            evaluation=units,
+            frame=_frame(index + 1),
+            training=_training(frozenset({f"{name}-у"}), dt.datetime(2024, 1, 1, tzinfo=zone)),
+        )
+    fit = sl.training("своё", "обучение")
+
+    defects = sl.provenance_defects("чужое", fit)
+    assert len(defects) == 1 and "несопоставимы" in defects[0]
+    with pytest.raises(ValueError, match="несопоставимы"):
+        _measure(sl, {"чужое": fit})
+    assert not sl.selections("чужое")
