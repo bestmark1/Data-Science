@@ -86,6 +86,26 @@ class Access(BaseModel):
         return f"{self.sample} / {self.purpose.value}: {self.decision}"
 
 
+def _strictly_before(earlier: dt.datetime, later: dt.datetime) -> bool:
+    """`earlier < later` как моменты, а не как показания часов.
+
+    Ревью `da79e10`: при ОДНОМ объекте пояса Python сравнивает местное время и
+    не учитывает `fold`. В час перевода часов 02:15+01:00 (второй проход) позже
+    02:30+02:00 на 45 минут, а сравнение говорило «раньше» — обучение на будущих
+    метках принималось. polars сравнивает в UTC, и так же — здесь. Наивное время
+    неоднозначности не имеет и сравнивается как есть; смешение наивного с
+    поясным отвергается при регистрации окна.
+    """
+    if earlier.tzinfo is None:
+        return earlier < later
+    return earlier.astimezone(dt.UTC) < later.astimezone(dt.UTC)
+
+
+def _moment(value: dt.datetime) -> str:
+    """Момент для сообщения: со смещением пояса, если оно есть."""
+    return f"{value:%Y-%m-%d %H:%M%z}"
+
+
 @dataclass(frozen=True)
 class Training:
     """Обучающая часть окна, как её передаёт журналу прогон.
@@ -121,7 +141,7 @@ class Fit:
     def __str__(self) -> str:
         return (
             f"обучающая часть окна {self.window}: {self.rows:,} строк, "
-            f"метки известны до {self.labels_known_until:%Y-%m-%d %H:%M}"
+            f"метки известны до {_moment(self.labels_known_until)}"
         )
 
 
@@ -281,10 +301,10 @@ class SampleLedger:
                 f"модель училась на {len(shared):,} из {len(target.evaluation):,} оценочных "
                 f"единиц решения окна ({fit})"
             )
-        if fit.labels_known_until >= target.start:
+        if not _strictly_before(fit.labels_known_until, target.start):
             defects.append(
-                f"модель училась на метках, известных до {fit.labels_known_until:%Y-%m-%d %H:%M}, "
-                f"а окно начинается {target.start:%Y-%m-%d %H:%M}: метки из будущего окна"
+                f"модель училась на метках, известных до {_moment(fit.labels_known_until)}, "
+                f"а окно начинается {_moment(target.start)}: метки из будущего окна"
             )
         return defects
 

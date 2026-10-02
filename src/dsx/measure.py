@@ -1019,6 +1019,11 @@ def stability_across_windows(
     расходует. Затем окна расходуются как выборки выбора: смотреть пооконные
     метрики и решать по ним — это выбор, а не аудит.
     """
+    if type(decision) is not str or not decision:
+        # Ревью `da79e10`: пустое решение проходило первый проход и падало на
+        # записи выбора, после обращений аудита. Требование то же, что у `Access`.
+        raise ValueError("решение, ради которого расходуются окна, не названо")
+
     for window, prediction in predictions.items():
         if type(prediction) is not Prediction:
             raise ValueError(

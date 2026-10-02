@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import polars as pl
@@ -320,3 +321,60 @@ def test_an_override_of_p7_still_lets_the_windows_be_spent() -> None:
 
     _measure(sl, fits)
     assert sl.selections("w0") and sl.selections("w1")
+
+
+BERLIN = ZoneInfo("Europe/Berlin")
+
+
+def _one_window(start: dt.datetime, known: dt.datetime) -> tuple[SampleLedger, Fit]:
+    sl = SampleLedger()
+    units = frozenset({"о-0"})
+    sl.register_window(
+        "w0",
+        start=start,
+        extent=Extent(units=units, since=start, until=start + dt.timedelta(days=1)),
+        evaluation=units,
+        frame=_frame(1),
+        training=_training(frozenset({"у-0"}), known),
+    )
+    return sl, sl.training("w0", "обучение")
+
+
+def test_future_labels_across_the_clock_change_are_refused() -> None:
+    """Ревью `da79e10`: при одном объекте пояса Python сравнивает местное время
+    без `fold`. 02:15+01:00 (второй проход часа) позже 02:30+02:00 на 45 минут,
+    а `>=` давал False — обучение на будущих метках принималось."""
+    start = dt.datetime(2024, 10, 27, 2, 30, tzinfo=BERLIN, fold=0)
+    known = dt.datetime(2024, 10, 27, 2, 15, tzinfo=BERLIN, fold=1)
+    sl, fit = _one_window(start, known)
+
+    defects = sl.provenance_defects("w0", fit)
+    assert len(defects) == 1 and "метки из будущего" in defects[0]
+    assert "+0100" in defects[0] and "+0200" in defects[0]
+
+
+def test_honest_labels_across_the_clock_change_pass() -> None:
+    """Обратное направление: 02:45+02:00 раньше 02:30+01:00 на 45 минут, и polars
+    по `KNOWN_AT < start` включает такую строку в обучение окна."""
+    start = dt.datetime(2024, 10, 27, 2, 30, tzinfo=BERLIN, fold=1)
+    known = dt.datetime(2024, 10, 27, 2, 45, tzinfo=BERLIN, fold=0)
+    sl, fit = _one_window(start, known)
+
+    assert sl.provenance_defects("w0", fit) == []
+
+
+def test_an_empty_decision_is_refused_before_reading_windows() -> None:
+    """Ревью `da79e10`: пустое `decision` проходило первый проход и падало на
+    записи выбора — после трёх обращений аудита."""
+    sl = _ledger()
+    fits = {w: sl.training(w, f"обучение на {w}") for w in STARTS}
+    before = len(sl.accesses)
+
+    with pytest.raises(ValueError, match="решение"):
+        stability_across_windows(
+            sl,
+            {w: Prediction(fit=f, scores=_scores(sl, w)) for w, f in fits.items()},
+            CONSTANT,
+            decision="",
+        )
+    assert len(sl.accesses) == before
