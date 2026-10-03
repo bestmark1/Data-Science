@@ -236,6 +236,7 @@ class Study:
         lines = ["## Находки", ""]
         if not self.checks.signals:
             lines.append("Проверки не нашли дефектов.")
+            self._add_limits(lines)
             return "\n".join(lines)
 
         blocking = self.checks.blocking
@@ -248,7 +249,17 @@ class Study:
         if other:
             lines += ["### Требуют внимания", ""]
             lines += [f"- {signal.detail}" for signal in other]
+        self._add_limits(lines)
         return "\n".join(lines)
+
+    def _add_limits(self, lines: list[str]) -> None:
+        """Пределы молчания: «не нашли» на этих данных значит лишь «не сильнее»."""
+        assert self.checks is not None
+        if not self.checks.limits:
+            return
+        if lines[-1]:
+            lines.append("")
+        lines += ["### Предел молчания", ""] + [f"- {item}" for item in self.checks.limits]
 
     def _skipped_section(self) -> str:
         assert self.checks is not None

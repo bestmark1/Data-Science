@@ -381,25 +381,50 @@ class FeatureRelationStability:
     и 0.07 в другом даёт кратность в семнадцать раз, будучи шумом в обоих.
     """
 
-    def run(self, context: Context) -> list[Signal]:
+    def _relations(
+        self, context: Context
+    ) -> tuple[list[tuple[str, pl.DataFrame]], dict[str, dict[str, float]], dict[str, str]]:
+        """Окна, связи признаков, которые N4 сравнивает, и почему остальные — нет.
+
+        Одно место для `run` и `silence`: предел молчания называется только для
+        того, что проверка действительно сравнивала (ревью `0c7b397`: предел
+        печатался и тогда, когда ни один признак не сравнивался).
+        """
         windows = _windows_with_labels(context)
         skip = set(incomparable(context, windows, ComparableSupport.floor))
 
-        signals = []
+        compared: dict[str, dict[str, float]] = {}
+        excluded: dict[str, str] = {}
         for name in _numeric_features(context):
             if name in skip:
-                continue  # об этом сказала N5, и вывод здесь был бы ложным
+                # об этом сказала N5, и вывод здесь был бы ложным
+                excluded[name] = "поддержка несопоставима между окнами (N5)"
+                continue
             values: dict[str, float] = {}
             for window, frame in windows:
-                if name not in frame.columns or not frame[name].dtype.is_numeric():
+                if name not in frame.columns:
+                    excluded[name] = f"нет в окне {window}"
+                    break
+                if not frame[name].dtype.is_numeric():
+                    excluded[name] = f"нечисловой в окне {window}"
                     break
                 value = association(frame[name], frame[LABEL])
                 if value is None:
+                    excluded[name] = (
+                        f"связь в окне {window} не вычисляется: меньше 50 строк, одно "
+                        "значение признака или один класс"
+                    )
                     break
                 values[window] = value
-            if len(values) != len(windows):
-                continue
+            if len(values) == len(windows):
+                compared[name] = values
+        return windows, compared, excluded
 
+    def run(self, context: Context) -> list[Signal]:
+        windows, compared, _ = self._relations(context)
+
+        signals = []
+        for name, values in compared.items():
             # Значимой считается связь, превосходящая шум выборки этого окна.
             noise = {w: SIGMA * _association_error(f[LABEL]) for w, f in windows}
             strong = {w: v for w, v in values.items() if abs(v) >= max(self.floor, noise[w])}
@@ -446,6 +471,61 @@ class FeatureRelationStability:
                     )
                 )
         return signals
+
+    def silence(self, context: Context) -> str:
+        """Какую смену знака связи N4 не заметила бы на окнах этого прогона.
+
+        Смена знака засчитывается, только если признак сравнивается во ВСЕХ
+        окнах и связь в двух из них не слабее порога своего окна — max(floor,
+        3σ), σ = 0.29/√(строк меньшего класса). Значит, наименьшая заметная
+        смена знака — второй по величине порог. Он называется только для
+        сравнённых признаков; порог выше 0.5 недостижим — связь не бывает
+        сильнее. Число округляется ВНИЗ: «слабее X не заметила бы» должно быть
+        верно, а 0.12969, напечатанное как 0.130, делало его неверным (ревью
+        `0c7b397`). Пороги не меняются; называется то, чего они не пропускают.
+        """
+        windows, compared, excluded = self._relations(context)
+        reasons = "; ".join(f"{name} — {why}" for name, why in sorted(excluded.items()))
+        left_out = sorted({p.name for p in _require_split(context).parts} - {w for w, _ in windows})
+        outside = (
+            f" Окна с меньше {MIN_ROWS} размеченных строк в N4 не входят: {', '.join(left_out)}."
+            if left_out
+            else ""
+        )
+        if not compared:
+            return (
+                "молчит, но не сравнила ни одного признака: "
+                f"{reasons or 'числовых признаков нет'}. О смене знака связи её молчание "
+                "не говорит ничего." + outside
+            )
+
+        thresholds = {w: max(self.floor, SIGMA * _association_error(f[LABEL])) for w, f in windows}
+        shown = ", ".join(f"{w}: {_down(t)}" for w, t in sorted(thresholds.items()))
+        rule = (
+            f"порог окна — max({self.floor:g}, {SIGMA:g}σ), "
+            "σ = 0.29/√(строк меньшего класса в окне), округлён вниз"
+        )
+        scope = f"сравнивались признаки: {', '.join(sorted(compared))}" + (
+            f"; не сравнивались: {reasons}" if reasons else ""
+        )
+        weakest = sorted(thresholds.values())[1]
+        if weakest > 0.5:
+            return (
+                "молчит, но смену знака связи на этих окнах не заметила бы ни при какой "
+                f"силе: порог недостижим — связь не бывает сильнее 0.5 ({rule}; {shown}; "
+                f"{scope})." + outside
+            )
+        return (
+            f"молчит, но смену знака связи слабее {_down(weakest)} на окнах этого прогона "
+            "не заметила бы: знак засчитывается, только если связь в обоих окнах не "
+            f"слабее их порогов ({rule}; {shown}; {scope}). Молчание не доказывает "
+            "устойчивости связей слабее этой силы." + outside
+        )
+
+
+def _down(value: float) -> str:
+    """Три знака, округлённые вниз: нижняя граница остаётся нижней границей."""
+    return f"{math.floor(value * 1000) / 1000:.3f}"
 
 
 @dataclass(frozen=True)
